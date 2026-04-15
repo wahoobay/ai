@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: wahoobay
+      POSTGRES_PASSWORD: wahoobay
+      POSTGRES_DB: wahoobay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wahoobay -d wahoobay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
+      EVENTS_LOG_DIR: /data/logs/events
+      FRAMES_DIR: /data/frames
+      VIDEO_SOURCE: file:///data/test_videos
+    volumes:
+      - ./data/test_videos:/data/test_videos:ro
+      - ./frames:/data/frames
+      - ./logs:/data/logs
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    expose:
+      - "8081"
+    # Expose to host only for debugging; dashboard proxies in prod.
+    ports:
+      - "127.0.0.1:8081:8081"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    depends_on:
+      - worker
+      - postgres
+    env_file: .env
+    environment:
+      WORKER_URL: http://worker:8081
+      DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
+    ports:
+      # bind to localhost only; reach from laptop via SSH tunnel
+      - "127.0.0.1:18080:8080"
+
+  sensestream-poller:
+    build:
+      context: .
+      dockerfile: services/sensestream_poller/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
+    expose:
+      - "8082"
+    ports:
+      - "127.0.0.1:8082:8082"
+
+volumes:
+  pgdata:

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wahoo Bay · Live Fish ID</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Wahoo Bay · Live Fish ID</h1>
+    <div id="stats" class="stats">
+      <span id="stat-source">source: —</span>
+      <span id="stat-frames">frames: —</span>
+      <span id="stat-fish">with fish: —</span>
+      <span id="stat-infer">inference: —</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="stream-col">
+      <div class="stream-wrap">
+        <img id="stream" src="/api/stream.mjpeg" alt="live stream">
+      </div>
+      <div class="current">
+        <h2>Current detections</h2>
+        <ul id="current-list"><li class="empty">waiting for frame…</li></ul>
+      </div>
+    </section>
+
+    <aside class="side-col">
+      <section class="water-quality">
+        <h2>Water quality
+          <span class="wq-meta" id="wq-meta">—</span>
+        </h2>
+        <div id="wq-grid" class="wq-grid"><div class="empty">loading…</div></div>
+      </section>
+      <section>
+        <h2>Species seen (last 24h)</h2>
+        <ol id="species-list"><li class="empty">loading…</li></ol>
+      </section>
+      <section>
+        <h2>Recent events</h2>
+        <ul id="events-list"><li class="empty">loading…</li></ul>
+      </section>
+      <section class="drift-panel">
+        <h2>Input drift
+          <span class="drift-meta" id="drift-meta">—</span>
+        </h2>
+        <div id="drift-grid" class="drift-grid"><div class="empty">collecting samples…</div></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
