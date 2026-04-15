@@ -17,6 +17,8 @@
     </div>
   </header>
 
+  <div id="alerts-banner" class="alerts-banner hidden"></div>
+
   <main>
     <section class="stream-col">
       <div class="stream-wrap">
@@ -40,8 +42,11 @@
         <ol id="species-list"><li class="empty">loading…</li></ol>
       </section>
       <section>
-        <h2>Recent events</h2>
+        <h2>Recent events
+          <span class="reviewer-line">reviewer: <input id="reviewer-input" type="text" placeholder="your email"></span>
+        </h2>
         <ul id="events-list"><li class="empty">loading…</li></ul>
+        <div class="corrections-stats" id="corrections-stats">corrections: —</div>
       </section>
       <section class="drift-panel">
         <h2>Input drift

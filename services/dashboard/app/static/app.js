@@ -70,13 +70,124 @@ function renderEvents(rows) {
   el.innerHTML = rows
     .map(
       (r) => `
-      <li>
+      <li class="event-item" data-event-id="${r.id}">
         <span class="species-name">${r.best_name ?? "unknown"}</span>
         <span class="acc">${fmtPct(r.best_accuracy)}</span>
         <div class="meta">${new Date(r.ts).toLocaleTimeString()} · ${short(r.source_name)} · frame ${r.frame_id}</div>
+        <button class="correct-btn" onclick="toggleCorrection(${r.id}, '${(r.best_name || '').replace(/'/g, "\\'")}')">correct</button>
+        <div class="correction-slot"></div>
       </li>`
     )
     .join("");
+}
+
+function correctionFormHtml(eventId, originalName) {
+  const reviewer = localStorage.getItem("wb_reviewer") || "";
+  return `
+    <div class="correction-form">
+      <div class="row">
+        <input type="text" placeholder="correct species name" id="cf-name-${eventId}" value="">
+      </div>
+      <div class="row">
+        <select id="cf-conf-${eventId}">
+          <option value="certain">certain</option>
+          <option value="probable" selected>probable</option>
+          <option value="uncertain">uncertain</option>
+        </select>
+        <label style="font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 4px;">
+          <input type="checkbox" id="cf-notfish-${eventId}"> not a fish
+        </label>
+      </div>
+      <div class="row">
+        <input type="text" placeholder="notes (optional)" id="cf-notes-${eventId}" style="flex:1">
+      </div>
+      <div class="row" style="justify-content: flex-end; gap: 6px;">
+        <button class="secondary" onclick="closeCorrection(${eventId})">cancel</button>
+        <button onclick="submitCorrection(${eventId})">save</button>
+      </div>
+    </div>
+  `;
+}
+
+function toggleCorrection(eventId, originalName) {
+  const li = document.querySelector(`li[data-event-id="${eventId}"]`);
+  if (!li) return;
+  const slot = li.querySelector(".correction-slot");
+  if (slot.innerHTML.trim()) {
+    slot.innerHTML = "";
+  } else {
+    slot.innerHTML = correctionFormHtml(eventId, originalName);
+    const nameInput = document.getElementById(`cf-name-${eventId}`);
+    if (nameInput) nameInput.focus();
+  }
+}
+
+function closeCorrection(eventId) {
+  const li = document.querySelector(`li[data-event-id="${eventId}"]`);
+  if (!li) return;
+  li.querySelector(".correction-slot").innerHTML = "";
+}
+
+async function submitCorrection(eventId) {
+  const reviewerInput = document.getElementById("reviewer-input");
+  const reviewer = reviewerInput.value.trim();
+  if (reviewer) localStorage.setItem("wb_reviewer", reviewer);
+
+  const name  = document.getElementById(`cf-name-${eventId}`).value.trim();
+  const conf  = document.getElementById(`cf-conf-${eventId}`).value;
+  const nf    = document.getElementById(`cf-notfish-${eventId}`).checked;
+  const notes = document.getElementById(`cf-notes-${eventId}`).value.trim();
+
+  if (!nf && !name) {
+    alert("provide a species name or tick 'not a fish'");
+    return;
+  }
+  const body = {
+    event_id: eventId,
+    corrected_name: name || null,
+    corrected_species_id: null,
+    not_a_fish: nf,
+    confidence: conf,
+    reviewer: reviewer || null,
+    notes: notes || null,
+  };
+  try {
+    const r = await fetch("/api/corrections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    const li = document.querySelector(`li[data-event-id="${eventId}"]`);
+    if (li) {
+      li.querySelector(".correction-slot").innerHTML = `<div class="correction-ok">✓ saved</div>`;
+    }
+    tickCorrectionStats();
+  } catch (e) {
+    alert(`save failed: ${e}`);
+  }
+}
+
+async function tickCorrectionStats() {
+  try {
+    const s = await poll("/api/corrections/stats");
+    const el = document.getElementById("corrections-stats");
+    if (!s || !s.total) {
+      el.textContent = "corrections: none yet";
+    } else {
+      el.textContent = `corrections: ${s.total} total · ${s.reviewers ?? 0} reviewer(s) · ${s.not_a_fish ?? 0} false positives`;
+    }
+  } catch {}
+}
+
+function initReviewer() {
+  const el = document.getElementById("reviewer-input");
+  if (!el) return;
+  const saved = localStorage.getItem("wb_reviewer");
+  if (saved) el.value = saved;
+  el.addEventListener("change", () => {
+    if (el.value.trim()) localStorage.setItem("wb_reviewer", el.value.trim());
+  });
 }
 
 async function tick() {
@@ -272,11 +383,60 @@ async function tickDrift() {
   } catch {}
 }
 
+// ---------- Alerts banner ----------
+
+const AGE_FMT = (isoStr) => {
+  const ms = Date.now() - new Date(isoStr).getTime();
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
+};
+
+function renderAlerts(rows) {
+  const banner = document.getElementById("alerts-banner");
+  if (!rows || rows.length === 0) {
+    banner.classList.add("hidden");
+    banner.innerHTML = "";
+    return;
+  }
+  banner.classList.remove("hidden");
+  banner.innerHTML = rows.map((a) => `
+    <div class="alert-row">
+      <span class="alert-sev ${a.severity}">${a.severity}</span>
+      <span class="alert-msg"><b>${a.name}</b>: ${a.message}</span>
+      <span class="alert-age">${AGE_FMT(a.first_seen)} old</span>
+      ${a.acknowledged_at
+        ? `<span class="alert-age">ack'd by ${a.acknowledged_by}</span>`
+        : `<button class="alert-ack" onclick="ackAlert(${a.id})">ack</button>`
+      }
+    </div>`).join("");
+}
+
+async function ackAlert(id) {
+  const reviewer = (document.getElementById("reviewer-input")?.value || "").trim() || "anonymous";
+  try {
+    await fetch(`/api/alerts/${id}/ack?reviewer=${encodeURIComponent(reviewer)}`, { method: "POST" });
+    tickAlerts();
+  } catch {}
+}
+
+async function tickAlerts() {
+  try {
+    const rows = await poll("/api/alerts/active");
+    renderAlerts(rows);
+  } catch {}
+}
+
+initReviewer();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
 setInterval(tickWaterQuality, 30000);
 setInterval(tickDrift, 30000);
+setInterval(tickAlerts, 15000);
+setInterval(tickCorrectionStats, 10000);
 tick();
 tickHistory();
 tickWaterQuality();
 tickDrift();
+tickAlerts();
+tickCorrectionStats();

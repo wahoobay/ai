@@ -21,6 +21,26 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from psycopg_pool import AsyncConnectionPool
 from psycopg.rows import dict_row
+from pydantic import BaseModel, Field
+
+from .alerts import SLOChecker, SLO_RULES
+from .stats import (
+    poisson_count_ci,
+    rate_ci,
+    mean_ci,
+    bootstrap_count_ci,
+    species_counts_with_ci,
+)
+
+
+class CorrectionIn(BaseModel):
+    event_id: int
+    corrected_name: Optional[str] = None
+    corrected_species_id: Optional[str] = None
+    not_a_fish: bool = False
+    confidence: str = Field("probable", pattern="^(certain|probable|uncertain)$")
+    reviewer: Optional[str] = None
+    notes: Optional[str] = None
 
 log = logging.getLogger("wahoobay.dashboard")
 
@@ -35,6 +55,7 @@ def _env(key: str, default: str) -> str:
 class DashboardCfg:
     def __init__(self) -> None:
         self.worker_url = _env("WORKER_URL", "http://localhost:8081").rstrip("/")
+        self.poller_url = _env("POLLER_URL", "http://localhost:8082").rstrip("/")
         self.database_url = _env(
             "DATABASE_URL",
             "postgresql://wahoobay:wahoobay@localhost:5432/wahoobay",
@@ -61,9 +82,28 @@ def build_app() -> FastAPI:
         except Exception as e:
             log.warning("dashboard: postgres unavailable (%s); history endpoints will 503", e)
             state["pool"] = None
+
+        # SLO checker runs as a background task and upserts rows into `alerts`.
+        slo_task: Optional[asyncio.Task] = None
+        if state.get("pool") is not None:
+            checker = SLOChecker(
+                pool=state["pool"],
+                worker_url=cfg.worker_url,
+                poller_url=cfg.poller_url,
+                http_client=client,
+            )
+            state["slo"] = checker
+            slo_task = asyncio.create_task(checker.run_forever(interval_s=30.0), name="slo-checker")
+
         try:
             yield
         finally:
+            if slo_task is not None:
+                slo_task.cancel()
+                try:
+                    await slo_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             await client.aclose()
             if state.get("pool") is not None:
                 await state["pool"].close()
@@ -323,6 +363,219 @@ def build_app() -> FastAPI:
         for r in rows:
             r["hour"] = r["hour"].isoformat() if r.get("hour") else None
         return JSONResponse(rows)
+
+    # ------------------------------------------------------------------
+    # Species counts with confidence intervals
+    # ------------------------------------------------------------------
+
+    @app.get("/api/species_counts_ci")
+    async def species_counts_ci(
+        hours: int = Query(24, ge=1, le=24 * 30),
+        method: str = Query("poisson", pattern="^(poisson|bootstrap)$"),
+        min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
+        max_species: int = Query(50, ge=1, le=500),
+    ) -> Response:
+        """Per-species counts over a time window, each with a 95% CI.
+
+        Use this for anything that ships outside the lab (reports, public
+        dashboards). The dashboard's regular /api/species_counts is a point
+        estimate; this endpoint is what belongs in a written claim.
+        """
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            SELECT best_species_id, best_name
+              FROM detection_events
+             WHERE ts >= NOW() - (%s::int || ' hours')::interval
+               AND best_species_id IS NOT NULL
+               AND best_accuracy  >= %s
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (hours, min_accuracy))
+                rows = await cur.fetchall()
+
+        species_ids = [r[0] for r in rows]
+        name_by_id: dict[str, str] = {}
+        for sid, name in rows:
+            if sid and name:
+                name_by_id.setdefault(sid, name)
+
+        enriched = species_counts_with_ci(species_ids, method=method)[:max_species]
+        for item in enriched:
+            item["name"] = name_by_id.get(item["species_id"])
+
+        return JSONResponse({
+            "window_hours": hours,
+            "method": method,
+            "min_accuracy": min_accuracy,
+            "n_events": len(species_ids),
+            "items": enriched,
+        })
+
+    @app.get("/api/frame_rate_ci")
+    async def frame_rate_ci(hours: int = Query(24, ge=1, le=24 * 30)) -> Response:
+        """Wilson CI for frame-with-fish rate from frame_stats."""
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            SELECT count(*) AS n,
+                   sum(CASE WHEN num_detections > 0 THEN 1 ELSE 0 END) AS k
+              FROM frame_stats
+             WHERE ts >= NOW() - (%s::int || ' hours')::interval
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (hours,))
+                row = await cur.fetchone() or (0, 0)
+        n, k = int(row[0] or 0), int(row[1] or 0)
+        ci = rate_ci(k, n)
+        return JSONResponse({"window_hours": hours, "trials": n, "successes": k, "ci": ci.as_dict()})
+
+    # ------------------------------------------------------------------
+    # Human corrections
+    # ------------------------------------------------------------------
+
+    @app.post("/api/corrections")
+    async def post_correction(body: CorrectionIn) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        if not body.not_a_fish and not (body.corrected_name or body.corrected_species_id):
+            return JSONResponse(
+                {"error": "provide corrected_name, corrected_species_id, or set not_a_fish"},
+                status_code=400,
+            )
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO detection_corrections
+                    (event_id, corrected_name, corrected_species_id,
+                     not_a_fish, confidence, reviewer, notes)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id, created_at
+                    """,
+                    (body.event_id, body.corrected_name, body.corrected_species_id,
+                     body.not_a_fish, body.confidence, body.reviewer, body.notes),
+                )
+                row = await cur.fetchone()
+        return JSONResponse({
+            "id": row["id"],
+            "event_id": body.event_id,
+            "created_at": row["created_at"].isoformat(),
+        })
+
+    @app.get("/api/corrections")
+    async def list_corrections(
+        limit: int = Query(50, ge=1, le=500),
+        reviewer: Optional[str] = None,
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        where = []
+        params: list = []
+        if reviewer:
+            where.append("reviewer = %s")
+            params.append(reviewer)
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        params.append(limit)
+        sql = f"""
+            SELECT c.id, c.event_id, c.corrected_name, c.corrected_species_id,
+                   c.not_a_fish, c.confidence, c.reviewer, c.notes, c.created_at,
+                   e.best_name AS original_name, e.best_accuracy, e.ts AS event_ts
+              FROM detection_corrections c
+              JOIN detection_events e ON e.id = c.event_id
+              {where_sql}
+             ORDER BY c.created_at DESC
+             LIMIT %s
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, params)
+                rows = await cur.fetchall()
+        for r in rows:
+            r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
+            r["event_ts"]   = r["event_ts"].isoformat()   if r.get("event_ts")   else None
+        return JSONResponse(rows)
+
+    @app.get("/api/corrections/stats")
+    async def correction_stats() -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            SELECT count(*)::int AS total,
+                   sum(CASE WHEN not_a_fish THEN 1 ELSE 0 END)::int AS not_a_fish,
+                   count(DISTINCT reviewer) AS reviewers,
+                   count(DISTINCT corrected_species_id) AS distinct_species
+              FROM detection_corrections
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql)
+                row = await cur.fetchone() or {}
+        return JSONResponse(row)
+
+    # ------------------------------------------------------------------
+    # Alerts
+    # ------------------------------------------------------------------
+
+    @app.get("/api/alerts/active")
+    async def alerts_active() -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            SELECT id, name, severity, message, details, first_seen, last_seen,
+                   acknowledged_by, acknowledged_at
+              FROM alerts
+             WHERE resolved_at IS NULL
+             ORDER BY CASE severity
+                        WHEN 'critical' THEN 0
+                        WHEN 'warning'  THEN 1
+                        WHEN 'info'     THEN 2
+                        ELSE 3 END,
+                      last_seen DESC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql)
+                rows = await cur.fetchall()
+        for r in rows:
+            for k in ("first_seen", "last_seen", "acknowledged_at"):
+                if r.get(k):
+                    r[k] = r[k].isoformat()
+        return JSONResponse(rows)
+
+    @app.post("/api/alerts/{alert_id}/ack")
+    async def ack_alert(alert_id: int, reviewer: Optional[str] = None) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE alerts
+                       SET acknowledged_by = COALESCE(%s, 'anonymous'),
+                           acknowledged_at = NOW()
+                     WHERE id = %s AND resolved_at IS NULL
+                    """,
+                    (reviewer, alert_id),
+                )
+                acked = cur.rowcount
+        return JSONResponse({"acknowledged": bool(acked)})
+
+    @app.get("/api/alerts/rules")
+    async def alerts_rules() -> Response:
+        return JSONResponse([
+            {"name": r.name, "severity": r.severity, "description": r.description}
+            for r in SLO_RULES
+        ])
 
     @app.get("/api/provenance/current")
     async def provenance_current() -> Response:

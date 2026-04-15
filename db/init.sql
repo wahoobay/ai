@@ -160,6 +160,40 @@ CREATE OR REPLACE VIEW frame_stats_drift AS
  LEFT JOIN ref_7d  r7  ON r.source_name = r7.source_name
  LEFT JOIN ref_28d r28 ON r.source_name = r28.source_name;
 
+-- Human corrections to detector/classifier output. The corrections UI writes
+-- here; the eval harness and fine-tuning pipeline read from it.
+CREATE TABLE IF NOT EXISTS detection_corrections (
+    id                    BIGSERIAL PRIMARY KEY,
+    event_id              BIGINT NOT NULL REFERENCES detection_events(id) ON DELETE CASCADE,
+    corrected_name        TEXT,                    -- NULL + not_a_fish=true  →  false positive
+    corrected_species_id  TEXT,
+    not_a_fish            BOOLEAN NOT NULL DEFAULT FALSE,
+    confidence            TEXT NOT NULL DEFAULT 'probable',  -- 'certain' | 'probable' | 'uncertain'
+    reviewer              TEXT,
+    notes                 TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS detection_corrections_event    ON detection_corrections (event_id);
+CREATE INDEX IF NOT EXISTS detection_corrections_reviewer ON detection_corrections (reviewer, created_at DESC);
+CREATE INDEX IF NOT EXISTS detection_corrections_ts_desc  ON detection_corrections (created_at DESC);
+
+-- SLO alerts. Rule evaluator upserts on (name); acknowledgement + resolution
+-- are in-band. Keeping it flat (one table, no history) to start.
+CREATE TABLE IF NOT EXISTS alerts (
+    id                BIGSERIAL PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    severity          TEXT NOT NULL,                      -- 'info' | 'warning' | 'critical'
+    message           TEXT NOT NULL,
+    details           JSONB NOT NULL DEFAULT '{}'::jsonb,
+    first_seen        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at       TIMESTAMPTZ,
+    acknowledged_by   TEXT,
+    acknowledged_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS alerts_active ON alerts (name) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS alerts_severity_ts ON alerts (severity, last_seen DESC);
+
 CREATE OR REPLACE VIEW species_counts_hourly AS
     SELECT
         date_trunc('hour', ts)   AS hour,
