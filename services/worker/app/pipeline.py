@@ -20,6 +20,7 @@ from .overlay import annotate
 from .persistence import EventLog, ImageSaver, PgWriter
 from .provenance import Provenance
 from .sources import VideoSource
+from .tracker import DetectionSmoother
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,20 @@ class PipelineRunner:
         self._thread: Optional[threading.Thread] = None
         self._frame_stats_buf: list[tuple] = []
         self._frame_stats_flush_threshold = 30
+        self.smoother: Optional[DetectionSmoother] = None
+        if cfg.tracker_enabled:
+            self.smoother = DetectionSmoother(
+                window=cfg.tracker_window,
+                iou_threshold=cfg.tracker_iou_threshold,
+                max_age=cfg.tracker_max_age,
+                min_hits=cfg.tracker_min_hits,
+                topk=cfg.classifier_topk,
+            )
+            log.info(
+                "detection smoother enabled (window=%d iou=%.2f max_age=%d min_hits=%d)",
+                cfg.tracker_window, cfg.tracker_iou_threshold,
+                cfg.tracker_max_age, cfg.tracker_min_hits,
+            )
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="pipeline", daemon=True)
@@ -139,15 +154,20 @@ class PipelineRunner:
                     self.stats.frames_with_fish += 1
                     self.stats.detections_total += len(detections)
 
-                # persist events
+                # persist raw events (tracker smoothing is display-only; we
+                # never smooth data that flows into training or evaluation)
                 self._persist_events(ts, frame_id, source_name, detections)
 
                 # frame-stats sampler for drift monitor (sub-sampled)
                 if frame_id % max(1, cfg.frame_stats_every_n_frames) == 0:
                     self._sample_frame_stats(ts, frame_id, source_name, frame, detections)
 
-                # tunable image save
-                annotated = annotate(frame, detections) if detections else frame
+                # Smooth detections for the dashboard overlay
+                display = self.smoother.update(frame_id, detections) if self.smoother else detections
+
+                # tunable image save (annotated render uses smoothed detections;
+                # the saved COCO annotations use raw)
+                annotated = annotate(frame, display) if display else frame
                 saved = self.saver.maybe_save(
                     frame_bgr=frame,
                     annotated_bgr=annotated,
@@ -167,9 +187,9 @@ class PipelineRunner:
                     except Exception:
                         log.exception("pg: saved_frame insert failed")
 
-                # publish to live buffer, rate-limited
+                # publish to live buffer, rate-limited (smoothed payload for display)
                 if (now_mono - last_publish) >= min_period:
-                    self._publish_live(frame_id, ts, source_name, annotated, detections, infer_ms)
+                    self._publish_live(frame_id, ts, source_name, annotated, display, infer_ms)
                     last_publish = now_mono
         except Exception:
             log.exception("pipeline crashed")

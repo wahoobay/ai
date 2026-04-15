@@ -65,6 +65,13 @@ class Config:
     # drift monitor cadence (frames between frame_stats samples; ~1 Hz at 30 fps = 30)
     frame_stats_every_n_frames: int
 
+    # sliding-window tracker for the live overlay (raw detections still flow to DB)
+    tracker_enabled: bool
+    tracker_window: int
+    tracker_iou_threshold: float
+    tracker_max_age: int
+    tracker_min_hits: int
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -104,4 +111,9 @@ class Config:
             jpeg_quality=_int("JPEG_QUALITY", 80),
             live_stream_max_fps=_int("LIVE_STREAM_MAX_FPS", 15),
             frame_stats_every_n_frames=_int("FRAME_STATS_EVERY_N_FRAMES", 30),
+            tracker_enabled=_bool("TRACKER_ENABLED", True),
+            tracker_window=_int("TRACKER_WINDOW_FRAMES", 5),
+            tracker_iou_threshold=_float("TRACKER_IOU_THRESHOLD", 0.3),
+            tracker_max_age=_int("TRACKER_MAX_AGE", 3),
+            tracker_min_hits=_int("TRACKER_MIN_HITS", 1),
         )
