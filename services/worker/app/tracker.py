@@ -1,37 +1,35 @@
 """Frame-to-frame smoothing for the live overlay.
 
-Raw per-frame detector output is *accurate* but visually noisy: the bbox
-jitters a few pixels each frame, and top-1 species can flip between two
-very-similar classes. For the dashboard we want something calmer.
+Raw per-frame detector output is accurate but visually noisy: bbox jitters a
+few pixels, top-1 species can flip between similar classes. We want a calmer
+display *without* the box lagging behind a fish that's actually swimming.
 
-Algorithm (deliberately simple):
+Previous version averaged the last N bboxes. That smooths static targets
+nicely but drags behind any moving fish — when the average catches up, the
+box appears to "jump". This version uses a **constant-velocity tracker**
+for the box centre and a short window for box size:
 
-  1. Assign each incoming detection to an existing track by greedy IoU match
-     (threshold ``iou_threshold``). Unmatched detections open new tracks.
-  2. A track holds a sliding window of its last N detections. The smoothed
-     bbox is the mean of the window; the smoothed top-K is obtained by
-     summing per-species accuracy scores across the window and taking the
-     highest-ranked names.
-  3. A track not matched in a frame "ages"; it's emitted for up to
-     ``max_age`` frames after its last real detection (so a one-frame detector
-     miss doesn't cause a flicker), then dropped.
-  4. Tracks must accumulate ``min_hits`` observations before they appear in
-     the output. Raises the bar for one-off false positives without adding
-     perceptible lag.
+  - Each track holds centre (cx, cy), velocity (vx, vy), and size (w, h).
+  - On a new measurement the velocity is EMA-updated, and the displayed
+    centre is a blend of (raw observation) and (predicted = last + velocity).
+    Tunable by ``center_alpha`` — higher = trust the raw detection more.
+  - Box size is averaged over the last N frames (fish size changes slowly;
+    smoothing here kills "breathing").
+  - On a missed frame we extrapolate along the velocity vector (for a few
+    frames; velocity decays so the box doesn't sail off after a real exit).
+  - Association is greedy IoU as before, so two nearby fish can't merge.
 
-Output detections reuse the same FishDetection dataclass used elsewhere, so
-the rest of the pipeline (overlay, publisher, persistence-of-raw) is
-untouched.
+Public API (class ``DetectionSmoother``, ``update(frame_id, detections)``)
+matches the previous module — no pipeline changes required.
 
-Note: this smoother is for display only. Raw detections continue to be
-written to ``detection_events`` and ``frame_stats``. Never smooth data that
-flows into training or evaluation.
+Smoothing is display-only. Raw detections continue to be written to
+``detection_events`` / ``frame_stats`` / the COCO saver.
 """
 from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Deque, Iterable, List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 import numpy as np
 
@@ -55,62 +53,122 @@ def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
 @dataclass
 class _Track:
     track_id: int
-    bbox_history:     Deque[Tuple[int, int, int, int]] = field(default_factory=deque)
-    conf_history:     Deque[float]                     = field(default_factory=deque)
-    # each element is a list[Prediction] from one frame
-    topk_history:     Deque[List[Prediction]]          = field(default_factory=deque)
-    last_seen_frame:  int = -1
-    age_since_hit:    int = 0
-    total_hits:       int = 0
+    # kinematic state
+    cx: float = 0.0
+    cy: float = 0.0
+    vx: float = 0.0
+    vy: float = 0.0
+    w:  float = 0.0
+    h:  float = 0.0
+    size_history: Deque[Tuple[float, float]] = field(default_factory=deque)
+    initialized:  bool = False
 
-    def push(
+    # classifier-output memory
+    conf_history: Deque[float] = field(default_factory=deque)
+    topk_history: Deque[List[Prediction]] = field(default_factory=deque)
+
+    # bookkeeping
+    last_seen_frame: int = -1
+    age_since_hit:   int = 0
+    total_hits:      int = 0
+
+    def update_with(
         self,
         frame_id: int,
         bbox: Tuple[int, int, int, int],
         det_conf: float,
         topk: List[Prediction],
+        *,
         window: int,
+        center_alpha: float,
+        velocity_alpha: float,
     ) -> None:
-        self.bbox_history.append(bbox);   _trim(self.bbox_history, window)
-        self.conf_history.append(det_conf); _trim(self.conf_history, window)
-        self.topk_history.append(topk);   _trim(self.topk_history, window)
+        x1, y1, x2, y2 = bbox
+        raw_cx = (x1 + x2) / 2.0
+        raw_cy = (y1 + y2) / 2.0
+        raw_w  = float(max(1, x2 - x1))
+        raw_h  = float(max(1, y2 - y1))
+
+        if not self.initialized:
+            self.cx, self.cy = raw_cx, raw_cy
+            self.w,  self.h  = raw_w,  raw_h
+            self.vx = self.vy = 0.0
+            self.initialized = True
+        else:
+            dt = max(1, frame_id - self.last_seen_frame)
+            # observed per-frame velocity
+            meas_vx = (raw_cx - self.cx) / dt
+            meas_vy = (raw_cy - self.cy) / dt
+            # EMA-update velocity so estimate is stable
+            self.vx = velocity_alpha * meas_vx + (1 - velocity_alpha) * self.vx
+            self.vy = velocity_alpha * meas_vy + (1 - velocity_alpha) * self.vy
+
+            # Predicted centre if the fish kept its previous velocity
+            pred_cx = self.cx + self.vx * dt
+            pred_cy = self.cy + self.vy * dt
+            # Blend prediction with raw observation. high center_alpha → lock
+            # onto the measurement (responsive, slightly jittery).
+            self.cx = center_alpha * raw_cx + (1 - center_alpha) * pred_cx
+            self.cy = center_alpha * raw_cy + (1 - center_alpha) * pred_cy
+
+        # size smoothing: window mean (fish grow/shrink slowly)
+        self.size_history.append((raw_w, raw_h))
+        _trim(self.size_history, window)
+        arr = np.asarray(self.size_history, dtype=np.float32)
+        self.w = float(arr[:, 0].mean())
+        self.h = float(arr[:, 1].mean())
+
+        # class-output memory
+        self.conf_history.append(det_conf)
+        _trim(self.conf_history, window)
+        self.topk_history.append(topk)
+        _trim(self.topk_history, window)
+
         self.last_seen_frame = frame_id
-        self.age_since_hit = 0
-        self.total_hits += 1
+        self.age_since_hit   = 0
+        self.total_hits     += 1
+
+    def coast(self, velocity_decay: float) -> None:
+        """Advance one frame along the velocity vector without a measurement.
+
+        Applies a decay so a track with no new detections doesn't sail off the
+        frame. Called once per smoother tick for each track that wasn't
+        matched this frame.
+        """
+        if not self.initialized:
+            return
+        self.cx += self.vx
+        self.cy += self.vy
+        self.vx *= velocity_decay
+        self.vy *= velocity_decay
+        self.age_since_hit += 1
 
     def smoothed_bbox(self) -> Tuple[int, int, int, int]:
-        arr = np.asarray(list(self.bbox_history), dtype=np.float32)
-        x1, y1, x2, y2 = arr.mean(axis=0)
-        return int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))
+        x1 = int(round(self.cx - self.w / 2))
+        y1 = int(round(self.cy - self.h / 2))
+        x2 = int(round(self.cx + self.w / 2))
+        y2 = int(round(self.cy + self.h / 2))
+        return x1, y1, x2, y2
 
     def smoothed_conf(self) -> float:
         return float(np.mean(list(self.conf_history))) if self.conf_history else 0.0
 
     def smoothed_topk(self, k: int) -> List[Prediction]:
-        """Per-species accuracy summed across the window → rank → take top k.
-
-        Normalises by window length so absent species don't get a free pass.
-        """
-        agg_sum:   dict[str, float]  = defaultdict(float)
-        agg_count: dict[str, int]    = defaultdict(int)
-        meta:      dict[str, Prediction] = {}
+        """Sum per-species accuracy across the window, take top-k. Normalised
+        by window length so absent species don't get a free ride."""
+        agg:  dict[str, float] = defaultdict(float)
+        meta: dict[str, Prediction] = {}
         for topk in self.topk_history:
-            seen_this_frame = set()
+            seen = set()
             for p in topk:
                 key = p.species_id or p.name
-                if key in seen_this_frame:
+                if key in seen:
                     continue
-                seen_this_frame.add(key)
-                agg_sum[key]   += p.accuracy
-                agg_count[key] += 1
+                seen.add(key)
+                agg[key]  += p.accuracy
                 meta[key] = p
-        # smoothed accuracy = (sum across window) / window_size
         window = max(1, len(self.topk_history))
-        ranked = sorted(
-            agg_sum.items(),
-            key=lambda kv: kv[1] / window,
-            reverse=True,
-        )
+        ranked = sorted(agg.items(), key=lambda kv: kv[1] / window, reverse=True)
         out: List[Prediction] = []
         for key, total in ranked[:k]:
             proto = meta[key]
@@ -132,15 +190,21 @@ class DetectionSmoother:
         self,
         window: int = 5,
         iou_threshold: float = 0.3,
-        max_age: int = 3,
+        max_age: int = 1,
         min_hits: int = 1,
         topk: int = 3,
+        center_alpha: float = 0.6,
+        velocity_alpha: float = 0.5,
+        velocity_decay: float = 0.8,
     ) -> None:
         self.window = max(1, window)
-        self.iou_threshold = iou_threshold
-        self.max_age = max_age
-        self.min_hits = max(1, min_hits)
-        self.topk = topk
+        self.iou_threshold  = iou_threshold
+        self.max_age        = max_age
+        self.min_hits       = max(1, min_hits)
+        self.topk           = topk
+        self.center_alpha   = center_alpha
+        self.velocity_alpha = velocity_alpha
+        self.velocity_decay = velocity_decay
         self._tracks: dict[int, _Track] = {}
         self._next_id = 1
 
@@ -151,18 +215,19 @@ class DetectionSmoother:
     def update(self, frame_id: int, detections: List[FishDetection]) -> List[FishDetection]:
         existing_ids = list(self._tracks.keys())
 
-        # Build IoU matrix between existing tracks' last bbox and new detections
+        # Greedy IoU matching on *predicted* current bboxes, not last-frame
+        # bboxes — so a moving fish's track stays associated after a one-frame
+        # miss.
         pairs: list[tuple[int, int]] = []
         if existing_ids and detections:
             M = np.full((len(existing_ids), len(detections)), -1.0, dtype=np.float32)
             for i, tid in enumerate(existing_ids):
                 t = self._tracks[tid]
-                if not t.bbox_history:
+                if not t.initialized:
                     continue
-                last_bbox = t.bbox_history[-1]
+                predicted = t.smoothed_bbox()
                 for j, d in enumerate(detections):
-                    M[i, j] = _iou(last_bbox, d.bbox)
-            # greedy matching
+                    M[i, j] = _iou(predicted, d.bbox)
             while True:
                 idx = int(np.argmax(M))
                 i, j = np.unravel_index(idx, M.shape)
@@ -173,45 +238,51 @@ class DetectionSmoother:
                 M[:, j] = -1
 
         matched_track_ids = {tid for tid, _j in pairs}
-        matched_det_idxs  = {j   for _t,  j in pairs}
+        matched_det_idxs  = {j   for _tid, j in pairs}
 
-        # Update matched tracks
+        # Matched: kinematic update
         for tid, j in pairs:
             d = detections[j]
-            self._tracks[tid].push(
+            self._tracks[tid].update_with(
                 frame_id=frame_id, bbox=tuple(d.bbox),
                 det_conf=d.det_conf, topk=list(d.topk),
                 window=self.window,
+                center_alpha=self.center_alpha,
+                velocity_alpha=self.velocity_alpha,
             )
 
-        # Age unmatched tracks; drop the ones past max_age
+        # Unmatched tracks: coast along velocity for up to max_age frames.
         to_drop: list[int] = []
         for tid in existing_ids:
             if tid in matched_track_ids:
                 continue
             t = self._tracks[tid]
-            t.age_since_hit += 1
+            t.coast(self.velocity_decay)
             if t.age_since_hit > self.max_age:
                 to_drop.append(tid)
         for tid in to_drop:
             del self._tracks[tid]
 
-        # Open new tracks for unmatched detections
+        # Unmatched detections: open new tracks
         for j, d in enumerate(detections):
             if j in matched_det_idxs:
                 continue
             new_id = self._next_id
             self._next_id += 1
             t = _Track(track_id=new_id)
-            t.push(frame_id=frame_id, bbox=tuple(d.bbox),
-                   det_conf=d.det_conf, topk=list(d.topk),
-                   window=self.window)
+            t.update_with(
+                frame_id=frame_id, bbox=tuple(d.bbox),
+                det_conf=d.det_conf, topk=list(d.topk),
+                window=self.window,
+                center_alpha=self.center_alpha,
+                velocity_alpha=self.velocity_alpha,
+            )
             self._tracks[new_id] = t
 
-        # Emit smoothed detections
+        # Emit current state for every track with enough hits
         out: List[FishDetection] = []
-        for tid, t in self._tracks.items():
-            if t.total_hits < self.min_hits:
+        for t in self._tracks.values():
+            if t.total_hits < self.min_hits or not t.initialized:
                 continue
             out.append(FishDetection(
                 bbox=t.smoothed_bbox(),
@@ -228,4 +299,6 @@ class DetectionSmoother:
             "iou_threshold": self.iou_threshold,
             "max_age": self.max_age,
             "min_hits": self.min_hits,
+            "center_alpha": self.center_alpha,
+            "velocity_alpha": self.velocity_alpha,
         }

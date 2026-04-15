@@ -71,6 +71,9 @@ class Config:
     tracker_iou_threshold: float
     tracker_max_age: int
     tracker_min_hits: int
+    tracker_center_alpha: float      # 0..1, higher = more responsive, less smooth
+    tracker_velocity_alpha: float    # 0..1, EMA weight on new velocity measurement
+    tracker_velocity_decay: float    # 0..1, per-frame velocity decay while coasting
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -114,6 +117,9 @@ class Config:
             tracker_enabled=_bool("TRACKER_ENABLED", True),
             tracker_window=_int("TRACKER_WINDOW_FRAMES", 5),
             tracker_iou_threshold=_float("TRACKER_IOU_THRESHOLD", 0.3),
-            tracker_max_age=_int("TRACKER_MAX_AGE", 3),
+            tracker_max_age=_int("TRACKER_MAX_AGE", 1),
             tracker_min_hits=_int("TRACKER_MIN_HITS", 1),
+            tracker_center_alpha=_float("TRACKER_CENTER_ALPHA", 0.6),
+            tracker_velocity_alpha=_float("TRACKER_VELOCITY_ALPHA", 0.5),
+            tracker_velocity_decay=_float("TRACKER_VELOCITY_DECAY", 0.8),
         )

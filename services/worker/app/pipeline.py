@@ -110,11 +110,15 @@ class PipelineRunner:
                 max_age=cfg.tracker_max_age,
                 min_hits=cfg.tracker_min_hits,
                 topk=cfg.classifier_topk,
+                center_alpha=cfg.tracker_center_alpha,
+                velocity_alpha=cfg.tracker_velocity_alpha,
+                velocity_decay=cfg.tracker_velocity_decay,
             )
             log.info(
-                "detection smoother enabled (window=%d iou=%.2f max_age=%d min_hits=%d)",
+                "detection smoother enabled: velocity model "
+                "(size_window=%d iou=%.2f max_age=%d center_alpha=%.2f velocity_alpha=%.2f)",
                 cfg.tracker_window, cfg.tracker_iou_threshold,
-                cfg.tracker_max_age, cfg.tracker_min_hits,
+                cfg.tracker_max_age, cfg.tracker_center_alpha, cfg.tracker_velocity_alpha,
             )
 
     def start(self) -> None:
