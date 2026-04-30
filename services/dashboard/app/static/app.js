@@ -8,6 +8,35 @@ async function poll(url) {
   return r.json();
 }
 
+function writeAuthHeaders() {
+  const tok = (localStorage.getItem("wb_write_token") || "").trim();
+  return tok ? { "Authorization": `Bearer ${tok}` } : {};
+}
+
+let WRITE_PROTECTED = false;
+async function refreshAuthMode() {
+  try {
+    const m = await poll("/api/auth/mode");
+    WRITE_PROTECTED = !!m.write_protected;
+    updateAuthBadge();
+  } catch {}
+}
+function updateAuthBadge() {
+  const badge = document.getElementById("auth-state");
+  if (!badge) return;
+  const tok = (localStorage.getItem("wb_write_token") || "").trim();
+  if (!WRITE_PROTECTED) {
+    badge.textContent = "open";
+    badge.className = "auth-badge reviewer";
+  } else if (tok) {
+    badge.textContent = "reviewer";
+    badge.className = "auth-badge reviewer";
+  } else {
+    badge.textContent = "view-only";
+    badge.className = "auth-badge";
+  }
+}
+
 function renderCurrent(live) {
   const el = document.getElementById("current-list");
   if (!live || !live.detections || !live.detections.length) {
@@ -154,9 +183,13 @@ async function submitCorrection(eventId) {
   try {
     const r = await fetch("/api/corrections", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...writeAuthHeaders() },
       body: JSON.stringify(body),
     });
+    if (r.status === 401) {
+      alert("write token required or invalid — paste it in the field next to 'reviewer'");
+      return;
+    }
     if (!r.ok) throw new Error(`${r.status}`);
     const li = document.querySelector(`li[data-event-id="${eventId}"]`);
     if (li) {
@@ -182,12 +215,24 @@ async function tickCorrectionStats() {
 
 function initReviewer() {
   const el = document.getElementById("reviewer-input");
-  if (!el) return;
-  const saved = localStorage.getItem("wb_reviewer");
-  if (saved) el.value = saved;
-  el.addEventListener("change", () => {
-    if (el.value.trim()) localStorage.setItem("wb_reviewer", el.value.trim());
-  });
+  if (el) {
+    const saved = localStorage.getItem("wb_reviewer");
+    if (saved) el.value = saved;
+    el.addEventListener("change", () => {
+      if (el.value.trim()) localStorage.setItem("wb_reviewer", el.value.trim());
+    });
+  }
+  const tk = document.getElementById("write-token-input");
+  if (tk) {
+    const saved = localStorage.getItem("wb_write_token");
+    if (saved) tk.value = saved;
+    tk.addEventListener("change", () => {
+      const v = tk.value.trim();
+      if (v) localStorage.setItem("wb_write_token", v);
+      else localStorage.removeItem("wb_write_token");
+      updateAuthBadge();
+    });
+  }
 }
 
 async function tick() {
@@ -415,7 +460,12 @@ function renderAlerts(rows) {
 async function ackAlert(id) {
   const reviewer = (document.getElementById("reviewer-input")?.value || "").trim() || "anonymous";
   try {
-    await fetch(`/api/alerts/${id}/ack?reviewer=${encodeURIComponent(reviewer)}`, { method: "POST" });
+    const r = await fetch(`/api/alerts/${id}/ack?reviewer=${encodeURIComponent(reviewer)}`,
+      { method: "POST", headers: writeAuthHeaders() });
+    if (r.status === 401) {
+      alert("write token required to acknowledge alerts");
+      return;
+    }
     tickAlerts();
   } catch {}
 }
@@ -427,7 +477,35 @@ async function tickAlerts() {
   } catch {}
 }
 
+// ---------- Downloads panel ----------
+
+function refreshDownloadLinks() {
+  const sel = document.getElementById("dl-window");
+  if (!sel) return;
+  const hours = sel.value;
+  for (const a of document.querySelectorAll(".dl-btn")) {
+    const resource = a.dataset.export;
+    const params = new URLSearchParams();
+    // alerts.csv uses include_resolved instead of hours
+    if (resource === "alerts") {
+      params.set("include_resolved", "true");
+    } else {
+      params.set("hours", hours);
+    }
+    a.href = `/api/export/${resource}.csv?${params.toString()}`;
+  }
+}
+
+function initDownloads() {
+  const sel = document.getElementById("dl-window");
+  if (!sel) return;
+  sel.addEventListener("change", refreshDownloadLinks);
+  refreshDownloadLinks();
+}
+
 initReviewer();
+initDownloads();
+refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
 setInterval(tickWaterQuality, 30000);

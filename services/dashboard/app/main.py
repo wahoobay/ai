@@ -10,12 +10,13 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -24,6 +25,15 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
 from .alerts import SLOChecker, SLO_RULES
+from .exports import (
+    export_events,
+    export_species_counts,
+    export_water_quality,
+    export_frame_stats,
+    export_saved_frames,
+    export_corrections,
+    export_alerts,
+)
 from .stats import (
     poisson_count_ci,
     rate_ci,
@@ -63,6 +73,11 @@ class DashboardCfg:
         self.host = _env("DASHBOARD_HOST", "0.0.0.0")
         self.port = int(_env("DASHBOARD_PORT", "8080"))
         self.log_level = _env("LOG_LEVEL", "INFO")
+        # If set, mutation endpoints require Authorization: Bearer <token>.
+        # Read endpoints stay open (so a public tunnel exposes view-only by
+        # default and you only hand the token to people who should be able
+        # to submit corrections / acknowledge alerts).
+        self.write_token = _env("DASHBOARD_WRITE_TOKEN", "").strip()
 
 
 def build_app() -> FastAPI:
@@ -110,6 +125,19 @@ def build_app() -> FastAPI:
 
     app = FastAPI(title="Wahoo Bay dashboard", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+    def require_write_token(authorization: Optional[str] = Header(None)) -> None:
+        """Gate mutation endpoints on a static bearer token if one is configured."""
+        if not cfg.write_token:
+            return  # open mode (no token configured)
+        expected = f"Bearer {cfg.write_token}"
+        if authorization != expected:
+            raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+
+    @app.get("/api/auth/mode")
+    async def auth_mode() -> dict:
+        """Tells the UI whether mutation endpoints require a token."""
+        return {"write_protected": bool(cfg.write_token)}
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -438,7 +466,7 @@ def build_app() -> FastAPI:
     # Human corrections
     # ------------------------------------------------------------------
 
-    @app.post("/api/corrections")
+    @app.post("/api/corrections", dependencies=[Depends(require_write_token)])
     async def post_correction(body: CorrectionIn) -> Response:
         pool: Optional[AsyncConnectionPool] = state.get("pool")
         if pool is None:
@@ -551,7 +579,7 @@ def build_app() -> FastAPI:
                     r[k] = r[k].isoformat()
         return JSONResponse(rows)
 
-    @app.post("/api/alerts/{alert_id}/ack")
+    @app.post("/api/alerts/{alert_id}/ack", dependencies=[Depends(require_write_token)])
     async def ack_alert(alert_id: int, reviewer: Optional[str] = None) -> Response:
         pool: Optional[AsyncConnectionPool] = state.get("pool")
         if pool is None:
@@ -576,6 +604,99 @@ def build_app() -> FastAPI:
             {"name": r.name, "severity": r.severity, "description": r.description}
             for r in SLO_RULES
         ])
+
+    # ------------------------------------------------------------------
+    # CSV exports
+    # ------------------------------------------------------------------
+
+    def _csv_response(generator, filename: str) -> StreamingResponse:
+        return StreamingResponse(
+            generator,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    def _csv_filename(stem: str, **bits) -> str:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        suffix = "_".join(f"{k}-{v}" for k, v in bits.items() if v not in (None, ""))
+        return f"wahoobay_{stem}{('_' + suffix) if suffix else ''}_{ts}.csv"
+
+    @app.get("/api/export/events.csv")
+    async def export_events_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+        species_id: Optional[str] = None,
+        min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_events(pool, hours, species_id, min_accuracy)
+        return _csv_response(gen, _csv_filename("events", hours=hours, species=species_id))
+
+    @app.get("/api/export/species_counts.csv")
+    async def export_species_counts_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_species_counts(pool, hours)
+        return _csv_response(gen, _csv_filename("species_counts", hours=hours))
+
+    @app.get("/api/export/water_quality.csv")
+    async def export_water_quality_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_water_quality(pool, hours, deployment)
+        return _csv_response(gen, _csv_filename("water_quality", hours=hours, deployment=deployment))
+
+    @app.get("/api/export/frame_stats.csv")
+    async def export_frame_stats_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_frame_stats(pool, hours)
+        return _csv_response(gen, _csv_filename("frame_stats", hours=hours))
+
+    @app.get("/api/export/saved_frames.csv")
+    async def export_saved_frames_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_saved_frames(pool, hours)
+        return _csv_response(gen, _csv_filename("saved_frames", hours=hours))
+
+    @app.get("/api/export/corrections.csv")
+    async def export_corrections_csv(
+        hours: Optional[int] = Query(None, ge=1, le=24 * 365),
+        reviewer: Optional[str] = None,
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_corrections(pool, hours, reviewer)
+        return _csv_response(gen, _csv_filename("corrections", hours=hours, reviewer=reviewer))
+
+    @app.get("/api/export/alerts.csv")
+    async def export_alerts_csv(
+        include_resolved: bool = Query(False),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_alerts(pool, include_resolved)
+        return _csv_response(gen, _csv_filename("alerts", scope="all" if include_resolved else "active"))
 
     @app.get("/api/provenance/current")
     async def provenance_current() -> Response:

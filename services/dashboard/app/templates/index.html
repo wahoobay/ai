@@ -43,7 +43,11 @@
       </section>
       <section>
         <h2>Recent events
-          <span class="reviewer-line">reviewer: <input id="reviewer-input" type="text" placeholder="your email"></span>
+          <span class="reviewer-line">
+            <span id="auth-state" class="auth-badge">view-only</span>
+            reviewer: <input id="reviewer-input" type="text" placeholder="your email">
+            <input id="write-token-input" type="password" placeholder="write token (optional)">
+          </span>
         </h2>
         <ul id="events-list"><li class="empty">loading…</li></ul>
         <div class="corrections-stats" id="corrections-stats">corrections: —</div>
@@ -53,6 +57,28 @@
           <span class="drift-meta" id="drift-meta">—</span>
         </h2>
         <div id="drift-grid" class="drift-grid"><div class="empty">collecting samples…</div></div>
+      </section>
+      <section class="downloads-panel">
+        <h2>Download data
+          <span class="dl-window-line">window:
+            <select id="dl-window">
+              <option value="1">1h</option>
+              <option value="24" selected>24h</option>
+              <option value="168">7d</option>
+              <option value="720">30d</option>
+              <option value="8760">1y</option>
+            </select>
+          </span>
+        </h2>
+        <div class="dl-grid">
+          <a class="dl-btn" data-export="events" href="#" download>detections.csv</a>
+          <a class="dl-btn" data-export="species_counts" href="#" download>species_counts.csv</a>
+          <a class="dl-btn" data-export="water_quality" href="#" download>water_quality.csv</a>
+          <a class="dl-btn" data-export="frame_stats" href="#" download>frame_stats.csv</a>
+          <a class="dl-btn" data-export="saved_frames" href="#" download>saved_frames.csv</a>
+          <a class="dl-btn" data-export="corrections" href="#" download>corrections.csv</a>
+          <a class="dl-btn" data-export="alerts" href="#" download>alerts.csv</a>
+        </div>
       </section>
     </aside>
   </main>
