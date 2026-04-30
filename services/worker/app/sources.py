@@ -145,10 +145,64 @@ class RTSPSource(VideoSource):
         self._stop.set()
 
 
+class HTTPSource(VideoSource):
+    """HTTP(S) video source — typically MJPEG (multipart/x-mixed-replace) or
+    HLS. Used for cameras where only the HTTP admin port is exposed and the
+    native RTSP port isn't reachable (common with NAT'd Axis cameras).
+
+    Self-signed certs are tolerated (camera HTTPS certs almost always are).
+    """
+
+    def __init__(self, url: str, source_name: str | None = None, reconnect_delay: float = 2.0):
+        self.url = url
+        self.source_name = source_name or urlparse(url).hostname or "http"
+        self.reconnect_delay = reconnect_delay
+        self._stop = threading.Event()
+        self._frame_id = 0
+
+    def frames(self) -> Iterator[Frame]:
+        # Tell ffmpeg not to verify the TLS cert (Axis cameras self-sign).
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "tls_verify;0"
+        while not self._stop.is_set():
+            cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+            if not cap.isOpened():
+                log.warning("HTTP source open failed, retry in %.1fs", self.reconnect_delay)
+                self._stop.wait(self.reconnect_delay)
+                continue
+            log.info("HTTPSource connected: %s", _strip_creds(self.url))
+            try:
+                while not self._stop.is_set():
+                    ok, frame = cap.read()
+                    if not ok:
+                        log.warning("HTTP read failed, reconnecting")
+                        break
+                    self._frame_id += 1
+                    yield (self._frame_id, frame, self.source_name)
+            finally:
+                cap.release()
+            self._stop.wait(self.reconnect_delay)
+
+    def close(self) -> None:
+        self._stop.set()
+
+
+def _strip_creds(url: str) -> str:
+    """Hide user:pass@ in logged URLs."""
+    p = urlparse(url)
+    if not p.username:
+        return url
+    netloc = p.hostname or ""
+    if p.port:
+        netloc += f":{p.port}"
+    return p._replace(netloc=netloc).geturl()
+
+
 def source_from_config(cfg) -> VideoSource:
     spec = cfg.video_source
     if spec.startswith("rtsp://"):
         return RTSPSource(spec)
+    if spec.startswith("http://") or spec.startswith("https://"):
+        return HTTPSource(spec)
     if spec.startswith("file://"):
         directory = spec[len("file://"):]
     else:
