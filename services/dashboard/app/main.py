@@ -147,10 +147,28 @@ def build_app() -> FastAPI:
         """Tells the UI whether mutation endpoints require a token."""
         return {"write_protected": bool(cfg.write_token)}
 
+    # Cache-bust static assets so a new dashboard build doesn't get hidden
+    # behind a stale browser cache. We hash the JS+CSS+template mtimes at
+    # request time and append it to <link>/<script> URLs.
+    def _asset_version() -> str:
+        from hashlib import md5
+        h = md5()
+        for p in (
+            BASE_DIR / "static" / "app.js",
+            BASE_DIR / "static" / "style.css",
+            BASE_DIR / "templates" / "index.html",
+        ):
+            try:
+                h.update(str(p.stat().st_mtime_ns).encode())
+            except Exception:
+                pass
+        return h.hexdigest()[:10]
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(
-            request, "index.html", {"worker_url": cfg.worker_url},
+            request, "index.html",
+            {"worker_url": cfg.worker_url, "asset_version": _asset_version()},
         )
 
     @app.get("/healthz")
