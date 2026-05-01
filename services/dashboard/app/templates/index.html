@@ -28,6 +28,31 @@
         <h2>Current detections</h2>
         <ul id="current-list"><li class="empty">waiting for frame…</li></ul>
       </div>
+
+      <div class="reef-explorer current" id="reef-explorer">
+        <h2>
+          <span>Reef explorer</span>
+          <button id="reef-toggle" class="reef-toggle">hide</button>
+        </h2>
+        <div id="reef-body" class="reef-body">
+          <div id="reef-totals" class="reef-totals"></div>
+          <div class="reef-grid">
+            <div class="reef-card">
+              <div class="reef-card-title">Most-spotted fish (last 24 h)</div>
+              <div id="reef-top-species" class="reef-top-species"></div>
+            </div>
+            <div class="reef-card">
+              <div class="reef-card-title">When are fish most active?</div>
+              <div id="reef-hourly" class="reef-hourly"></div>
+              <div class="reef-axis-label">hour of day (local)</div>
+            </div>
+            <div class="reef-card reef-card-conditions">
+              <div class="reef-card-title">Reef conditions right now</div>
+              <div id="reef-conditions" class="reef-conditions"></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <aside class="side-col">

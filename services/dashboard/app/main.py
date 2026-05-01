@@ -25,6 +25,7 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
 from .alerts import SLOChecker, SLO_RULES
+from .common_names import common as common_name
 from .exports import (
     export_events,
     export_species_counts,
@@ -860,6 +861,118 @@ def build_app() -> FastAPI:
                     headers={"Content-Disposition": 'attachment; filename="camera_metadata.json"'},
                 )
         return JSONResponse({"error": "camera_metadata.json not found"}, status_code=500)
+
+    # ------------------------------------------------------------------
+    # Visitor-friendly bundle: one call returns everything for the
+    # public/educational "Reef explorer" panel — top species, hourly
+    # activity, current reef conditions.
+    # ------------------------------------------------------------------
+
+    @app.get("/api/visitor_stats")
+    async def visitor_stats(
+        hours: int = Query(24, ge=1, le=24 * 30),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                # Top species by sighting count (uses the species_sightings view)
+                await cur.execute(
+                    """
+                    SELECT name AS latin, count(*)::int AS sightings
+                      FROM species_sightings
+                     WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
+                       AND frame_count >= 3
+                     GROUP BY 1
+                     ORDER BY sightings DESC
+                     LIMIT 8
+                    """,
+                    (hours,),
+                )
+                top_rows = await cur.fetchall()
+
+                # Activity by hour (sightings per hour bucket — kid-friendly)
+                await cur.execute(
+                    """
+                    SELECT date_trunc('hour', first_seen) AS hour,
+                           count(*)::int AS sightings
+                      FROM species_sightings
+                     WHERE first_seen >= NOW() - (%s::int || ' hours')::interval
+                       AND frame_count >= 3
+                     GROUP BY 1
+                     ORDER BY 1 ASC
+                    """,
+                    (hours,),
+                )
+                hour_rows = await cur.fetchall()
+
+                # Latest water-quality reading
+                await cur.execute(
+                    """
+                    SELECT ts, source,
+                           water_temp_c, ph, do_pct,
+                           turbidity_fnu, chlorophyll_rfu, spcond_ms_cm
+                      FROM sensor_readings
+                     WHERE deployment_uri = %s
+                     ORDER BY ts DESC
+                     LIMIT 1
+                    """,
+                    (deployment,),
+                )
+                latest_wq = await cur.fetchone()
+
+                # Totals
+                await cur.execute(
+                    """
+                    SELECT count(*)::int AS sightings,
+                           count(DISTINCT species_id) AS unique_species
+                      FROM species_sightings
+                     WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
+                       AND frame_count >= 3
+                    """,
+                    (hours,),
+                )
+                totals = await cur.fetchone() or {}
+
+        top_species = [
+            {
+                "latin": r["latin"],
+                "common": common_name(r["latin"]),
+                "sightings": r["sightings"],
+            }
+            for r in top_rows
+        ]
+
+        hourly = [
+            {"hour": r["hour"].isoformat() if r["hour"] else None,
+             "sightings": r["sightings"]}
+            for r in hour_rows
+        ]
+
+        wq = None
+        if latest_wq:
+            wq = {
+                "ts":            latest_wq["ts"].isoformat() if latest_wq["ts"] else None,
+                "source":        latest_wq["source"],
+                "water_temp_c":  latest_wq["water_temp_c"],
+                "ph":            latest_wq["ph"],
+                "do_pct":        latest_wq["do_pct"],
+                "turbidity_fnu": latest_wq["turbidity_fnu"],
+            }
+
+        return JSONResponse({
+            "window_hours": hours,
+            "totals": {
+                "sightings": (totals or {}).get("sightings") or 0,
+                "unique_species": (totals or {}).get("unique_species") or 0,
+            },
+            "top_species": top_species,
+            "hourly_activity": hourly,
+            "water_quality": wq,
+        })
 
     @app.get("/api/provenance/current")
     async def provenance_current() -> Response:

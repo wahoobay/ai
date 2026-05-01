@@ -526,8 +526,152 @@ function initDownloads() {
   refreshDownloadLinks();
 }
 
+// ---------- Reef explorer (visitor-friendly charts) ----------
+
+function f2c(c) { return c == null ? null : (c * 9 / 5 + 32); }
+
+function classifyTemp(c) {
+  if (c == null) return ["—", "muted"];
+  if (c < 18) return ["cool", "warn"];
+  if (c < 24) return ["mild", "good"];
+  if (c < 30) return ["warm", "good"];
+  return ["hot", "warn"];
+}
+function classifyDO(p) {
+  if (p == null) return ["—", "muted"];
+  if (p < 60) return ["low", "warn"];
+  if (p < 130) return ["healthy", "good"];
+  return ["very high", "warn"];
+}
+function classifyTurbidity(f) {
+  if (f == null) return ["—", "muted"];
+  if (f < 3) return ["clear", "good"];
+  if (f < 8) return ["slightly cloudy", "good"];
+  return ["cloudy", "warn"];
+}
+
+function renderTopSpecies(rows) {
+  const el = document.getElementById("reef-top-species");
+  if (!rows || rows.length === 0) {
+    el.innerHTML = `<div class="empty">no fish recorded yet today</div>`;
+    return;
+  }
+  const max = Math.max(...rows.map(r => r.sightings), 1);
+  el.innerHTML = rows.map(r => {
+    const pct = (100 * r.sightings / max).toFixed(1);
+    const display = r.common
+      ? `${r.common} <em>(${r.latin})</em>`
+      : `<em>${r.latin}</em>`;
+    return `
+      <div class="reef-top-row">
+        <div class="reef-bar-wrap">
+          <div class="reef-bar" style="width:${pct}%"></div>
+          <div class="reef-name">${display}</div>
+        </div>
+        <div class="reef-count">${r.sightings}</div>
+      </div>`;
+  }).join("");
+}
+
+function renderHourly(rows) {
+  const el = document.getElementById("reef-hourly");
+  if (!rows || rows.length === 0) {
+    el.innerHTML = `<div class="empty" style="font-size:12px">collecting data…</div>`;
+    return;
+  }
+  // Bucket by local hour-of-day (0-23) so a kid sees a daily rhythm rather
+  // than a 24-hour rolling timeline (which is harder to read).
+  const counts = new Array(24).fill(0);
+  for (const r of rows) {
+    if (!r.hour) continue;
+    const h = new Date(r.hour).getHours();
+    counts[h] += r.sightings;
+  }
+  const max = Math.max(...counts, 1);
+  const w = 100, h = 80, pad = 4;
+  const bw = (w - 2 * pad) / 24;
+  const bars = counts.map((c, i) => {
+    const bh = (h - 2 * pad) * (c / max);
+    const x = pad + i * bw;
+    const y = h - pad - bh;
+    return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${(bw - 0.6).toFixed(2)}" height="${bh.toFixed(2)}" fill="var(--accent)" opacity="${0.4 + 0.6 * c / max}" />`;
+  }).join("");
+  // tick labels at 0, 6, 12, 18
+  const ticks = [0, 6, 12, 18, 23].map(i => {
+    const x = pad + i * bw + bw / 2;
+    return `<text x="${x.toFixed(2)}" y="${(h - 1).toFixed(2)}" font-size="6" fill="var(--muted)" text-anchor="middle">${i}</text>`;
+  }).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${bars}${ticks}</svg>`;
+}
+
+function renderConditions(wq) {
+  const el = document.getElementById("reef-conditions");
+  if (!wq) {
+    el.innerHTML = `<div class="empty" style="font-size:12px">water-quality data offline</div>`;
+    return;
+  }
+  const tempC = wq.water_temp_c;
+  const tempF = f2c(tempC);
+  const [tStatus, tCls] = classifyTemp(tempC);
+  const [oStatus, oCls] = classifyDO(wq.do_pct);
+  const [trStatus, trCls] = classifyTurbidity(wq.turbidity_fnu);
+  const note = wq.source === "synthetic"
+    ? `<div class="reef-axis-label">synthetic placeholder data — live SenseStream feed pending credentials</div>`
+    : "";
+  el.innerHTML = `
+    <div class="reef-cond-tile">
+      <div class="reef-cond-label">Water temp</div>
+      <div class="reef-cond-value">${tempC == null ? "—" : tempF.toFixed(1) + "°F"}</div>
+      <div class="reef-cond-status ${tCls}">${tStatus}</div>
+    </div>
+    <div class="reef-cond-tile">
+      <div class="reef-cond-label">Oxygen</div>
+      <div class="reef-cond-value">${wq.do_pct == null ? "—" : wq.do_pct.toFixed(0) + "%"}</div>
+      <div class="reef-cond-status ${oCls}">${oStatus}</div>
+    </div>
+    <div class="reef-cond-tile">
+      <div class="reef-cond-label">Water clarity</div>
+      <div class="reef-cond-value">${wq.turbidity_fnu == null ? "—" : wq.turbidity_fnu.toFixed(1) + " FNU"}</div>
+      <div class="reef-cond-status ${trCls}">${trStatus}</div>
+    </div>
+  ` + note;
+}
+
+function renderTotals(t) {
+  const el = document.getElementById("reef-totals");
+  if (!t) { el.innerHTML = ""; return; }
+  el.innerHTML = `
+    <div><span class="reef-num">${t.sightings ?? 0}</span> <span class="reef-cap">fish spotted today</span></div>
+    <div><span class="reef-num">${t.unique_species ?? 0}</span> <span class="reef-cap">species identified</span></div>
+  `;
+}
+
+async function tickReef() {
+  try {
+    const d = await poll("/api/visitor_stats?hours=24");
+    renderTotals(d.totals);
+    renderTopSpecies(d.top_species);
+    renderHourly(d.hourly_activity);
+    renderConditions(d.water_quality);
+  } catch {}
+}
+
+function initReefToggle() {
+  const btn = document.getElementById("reef-toggle");
+  const body = document.getElementById("reef-body");
+  if (!btn || !body) return;
+  const saved = localStorage.getItem("wb_reef_hidden") === "1";
+  if (saved) { body.classList.add("collapsed"); btn.textContent = "show"; }
+  btn.addEventListener("click", () => {
+    const collapsed = body.classList.toggle("collapsed");
+    btn.textContent = collapsed ? "show" : "hide";
+    localStorage.setItem("wb_reef_hidden", collapsed ? "1" : "0");
+  });
+}
+
 initReviewer();
 initDownloads();
+initReefToggle();
 refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
@@ -535,9 +679,11 @@ setInterval(tickWaterQuality, 30000);
 setInterval(tickDrift, 30000);
 setInterval(tickAlerts, 15000);
 setInterval(tickCorrectionStats, 10000);
+setInterval(tickReef, 30000);
 tick();
 tickHistory();
 tickWaterQuality();
 tickDrift();
 tickAlerts();
 tickCorrectionStats();
+tickReef();
