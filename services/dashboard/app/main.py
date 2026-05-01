@@ -214,30 +214,60 @@ def build_app() -> FastAPI:
         return JSONResponse(rows)
 
     @app.get("/api/species_counts")
-    async def species_counts(hours: int = Query(24, ge=1, le=24 * 14)) -> Response:
+    async def species_counts(
+        hours: int = Query(24, ge=1, le=24 * 14),
+        mode: str = Query("sightings", pattern="^(sightings|events)$"),
+        min_frames: int = Query(3, ge=1, le=1000),
+    ) -> Response:
+        """
+        mode=sightings (default): one row per persistent track, weighted-vote
+            species over the track's lifetime. ``min_frames`` filters out
+            tracks that only existed for a brief flicker (default 3 frames).
+            This is the count you actually want for "how many fish did we see".
+        mode=events: every detection counts independently — the old behaviour.
+            Useful for low-level debugging / event-rate monitoring.
+        """
         pool: Optional[AsyncConnectionPool] = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        sql = """
-            SELECT best_species_id AS species_id,
-                   best_name       AS name,
-                   count(*)        AS n,
-                   avg(best_accuracy)::real AS mean_acc,
-                   max(ts)         AS last_seen
-              FROM detection_events
-             WHERE ts >= NOW() - (%s::int || ' hours')::interval
-               AND best_species_id IS NOT NULL
-             GROUP BY 1, 2
-             ORDER BY n DESC
-             LIMIT 50
-        """
+        if mode == "sightings":
+            sql = """
+                SELECT species_id, name,
+                       count(*)::int                AS n,
+                       avg(mean_accuracy)::real     AS mean_acc,
+                       max(last_seen)               AS last_seen,
+                       sum(frame_count)::int        AS total_frames,
+                       avg(frame_count)::real       AS mean_frames_per_track
+                  FROM species_sightings
+                 WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
+                   AND frame_count >= %s
+                 GROUP BY 1, 2
+                 ORDER BY n DESC
+                 LIMIT 50
+            """
+            params = (hours, min_frames)
+        else:
+            sql = """
+                SELECT best_species_id AS species_id,
+                       best_name       AS name,
+                       count(*)::int   AS n,
+                       avg(best_accuracy)::real AS mean_acc,
+                       max(ts)         AS last_seen
+                  FROM detection_events
+                 WHERE ts >= NOW() - (%s::int || ' hours')::interval
+                   AND best_species_id IS NOT NULL
+                 GROUP BY 1, 2
+                 ORDER BY n DESC
+                 LIMIT 50
+            """
+            params = (hours,)
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, (hours,))
+                await cur.execute(sql, params)
                 rows = await cur.fetchall()
         for r in rows:
             r["last_seen"] = r["last_seen"].isoformat() if r["last_seen"] else None
-        return JSONResponse(rows)
+        return JSONResponse({"mode": mode, "items": rows})
 
     # ------------------------------------------------------------------
     # Water quality (sensor_readings table; fed by synthetic generator now,

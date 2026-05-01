@@ -31,6 +31,14 @@ ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS model_version      TEXT;
 ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS config_hash        TEXT;
 ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS pipeline_git_sha   TEXT;
 
+-- Track id from the smoother — lets us treat a single fish across many frames
+-- as one "sighting" instead of N independent events. NULL when the smoother
+-- is disabled or the event predates this column.
+ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS track_id BIGINT;
+CREATE INDEX IF NOT EXISTS detection_events_track_ts
+    ON detection_events (track_id, ts)
+    WHERE track_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS saved_frames (
     id          BIGSERIAL PRIMARY KEY,
     ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -193,6 +201,41 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS alerts_active ON alerts (name) WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS alerts_severity_ts ON alerts (severity, last_seen DESC);
+
+-- One row per (track, species) — used to fold the fact that the classifier may
+-- flip between species across frames into a single "sighting" of the dominant
+-- one. The dominant species is the one whose summed accuracy across the
+-- track's lifetime is highest (i.e. weighted vote).
+CREATE OR REPLACE VIEW species_sightings AS
+WITH track_votes AS (
+    SELECT track_id,
+           source_name,
+           best_species_id,
+           best_name,
+           SUM(best_accuracy) AS score,
+           COUNT(*)           AS frame_count,
+           MIN(ts)            AS first_seen,
+           MAX(ts)            AS last_seen,
+           AVG(best_accuracy)::real AS mean_accuracy,
+           MAX(best_accuracy)::real AS peak_accuracy
+      FROM detection_events
+     WHERE track_id IS NOT NULL
+       AND best_species_id IS NOT NULL
+     GROUP BY 1, 2, 3, 4
+),
+ranked AS (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY track_id ORDER BY score DESC) AS rn
+      FROM track_votes
+)
+SELECT track_id, source_name,
+       best_species_id AS species_id,
+       best_name       AS name,
+       frame_count,
+       first_seen, last_seen,
+       mean_accuracy, peak_accuracy
+  FROM ranked
+ WHERE rn = 1;
 
 CREATE OR REPLACE VIEW species_counts_hourly AS
     SELECT

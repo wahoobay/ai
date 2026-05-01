@@ -72,19 +72,26 @@ function renderStats(live, stats) {
   document.getElementById("stat-infer").textContent = `inference: ${fmtMs(live.infer_ms)}`;
 }
 
-function renderSpecies(rows) {
+function renderSpecies(payload) {
   const el = document.getElementById("species-list");
-  if (!rows || !rows.length) {
+  // Endpoint now returns {mode, items}; tolerate the old flat-array shape too.
+  const rows = Array.isArray(payload) ? payload : (payload?.items || []);
+  if (!rows.length) {
     el.innerHTML = `<li class="empty">no species recorded yet</li>`;
     return;
   }
+  const isSightings = !Array.isArray(payload) && payload?.mode === "sightings";
   el.innerHTML = rows
     .map(
       (r) => `
       <li>
         <span class="species-name">${r.name ?? r.species_id}</span>
-        <span class="acc">×${r.n}</span>
-        <span class="meta">mean ${fmtPct(r.mean_acc)} · last ${new Date(r.last_seen).toLocaleTimeString()}</span>
+        <span class="acc">×${r.n}${isSightings ? " fish" : ""}</span>
+        <span class="meta">${
+          isSightings
+            ? `mean acc ${fmtPct(r.mean_acc)} · ${r.total_frames} frames total`
+            : `mean ${fmtPct(r.mean_acc)}`
+        } · last ${new Date(r.last_seen).toLocaleTimeString()}</span>
       </li>`
     )
     .join("");

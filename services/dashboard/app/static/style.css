@@ -61,6 +61,7 @@ main {
 h2 { margin: 0 0 10px 0; font-size: 13px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
 
 ul, ol { list-style: none; padding: 0; margin: 0; max-height: 420px; overflow-y: auto; }
+ul.half-height, ol.half-height { max-height: 210px; }
 
 li { padding: 6px 0; border-bottom: 1px solid #1f3b4f; font-size: 13px; }
 li:last-child { border-bottom: none; }

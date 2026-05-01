@@ -75,11 +75,15 @@ class PgWriter:
         frame_id: int,
         source_name: str,
         detections: Iterable,
+        track_ids: Optional[list] = None,
         image_path: Optional[str] = None,
     ) -> None:
         mv, dsha, csha, cfghash, gitsha = self._prov_tuple()
+        detections = list(detections)
+        if track_ids is None:
+            track_ids = [None] * len(detections)
         rows = []
-        for d in detections:
+        for d, tid in zip(detections, track_ids):
             best = d.best
             rows.append((
                 ts, frame_id, source_name,
@@ -93,6 +97,7 @@ class PgWriter:
                 best.accuracy if best else None,
                 image_path,
                 mv, dsha, csha, cfghash, gitsha,
+                tid,
             ))
         if not rows:
             return
@@ -103,8 +108,9 @@ class PgWriter:
                 (ts, frame_id, source_name, det_conf, bbox, topk,
                  best_name, best_species_id, best_accuracy, image_path,
                  model_version, detector_sha256, classifier_sha256,
-                 config_hash, pipeline_git_sha)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s)
+                 config_hash, pipeline_git_sha,
+                 track_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s, %s)
                 """,
                 rows,
             )

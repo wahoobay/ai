@@ -158,16 +158,25 @@ class PipelineRunner:
                     self.stats.frames_with_fish += 1
                     self.stats.detections_total += len(detections)
 
-                # persist raw events (tracker smoothing is display-only; we
-                # never smooth data that flows into training or evaluation)
-                self._persist_events(ts, frame_id, source_name, detections)
+                # Run smoother first so we know which raw detection belongs
+                # to which persistent track. We still write the raw (per-frame)
+                # detections to the DB — but tagged with a track_id, so a
+                # single fish that flickers across species becomes one
+                # "sighting" rather than N independent events.
+                if self.smoother:
+                    upd = self.smoother.update(frame_id, detections)
+                    display = upd.display
+                    track_ids = upd.raw_track_ids
+                else:
+                    display = detections
+                    track_ids = [None] * len(detections)
+
+                # persist raw events with their track ids
+                self._persist_events(ts, frame_id, source_name, detections, track_ids)
 
                 # frame-stats sampler for drift monitor (sub-sampled)
                 if frame_id % max(1, cfg.frame_stats_every_n_frames) == 0:
                     self._sample_frame_stats(ts, frame_id, source_name, frame, detections)
-
-                # Smooth detections for the dashboard overlay
-                display = self.smoother.update(frame_id, detections) if self.smoother else detections
 
                 # tunable image save (annotated render uses smoothed detections;
                 # the saved COCO annotations use raw)
@@ -204,16 +213,18 @@ class PipelineRunner:
         frame_id: int,
         source_name: str,
         detections: List[FishDetection],
+        track_ids: List[Optional[int]],
     ) -> None:
         if not detections:
             return
         prov_dict = self.provenance.as_dict() if self.provenance else {}
         # jsonl line per detection
-        for d in detections:
+        for d, tid in zip(detections, track_ids):
             rec = {
                 "ts": ts.isoformat(),
                 "frame_id": frame_id,
                 "source": source_name,
+                "track_id": tid,
                 "det_conf": d.det_conf,
                 "bbox": list(d.bbox),
                 "topk": [
@@ -226,7 +237,7 @@ class PipelineRunner:
 
         if self.pg:
             try:
-                self.pg.record_detections(ts, frame_id, source_name, detections)
+                self.pg.record_detections(ts, frame_id, source_name, detections, track_ids)
             except Exception:
                 log.exception("pg: detection insert failed (will retry on next frame)")
 

@@ -37,27 +37,6 @@
         </h2>
         <div id="wq-grid" class="wq-grid"><div class="empty">loading…</div></div>
       </section>
-      <section>
-        <h2>Species seen (last 24h)</h2>
-        <ol id="species-list"><li class="empty">loading…</li></ol>
-      </section>
-      <section>
-        <h2>Recent events
-          <span class="reviewer-line">
-            <span id="auth-state" class="auth-badge">view-only</span>
-            reviewer: <input id="reviewer-input" type="text" placeholder="your email">
-            <input id="write-token-input" type="password" placeholder="write token (optional)">
-          </span>
-        </h2>
-        <ul id="events-list"><li class="empty">loading…</li></ul>
-        <div class="corrections-stats" id="corrections-stats">corrections: —</div>
-      </section>
-      <section class="drift-panel">
-        <h2>Input drift
-          <span class="drift-meta" id="drift-meta">—</span>
-        </h2>
-        <div id="drift-grid" class="drift-grid"><div class="empty">collecting samples…</div></div>
-      </section>
       <section class="downloads-panel">
         <h2>Download data
           <span class="dl-window-line">window:
@@ -79,6 +58,27 @@
           <a class="dl-btn" data-export="corrections" href="#" download>corrections.csv</a>
           <a class="dl-btn" data-export="alerts" href="#" download>alerts.csv</a>
         </div>
+      </section>
+      <section>
+        <h2>Species seen <span class="reviewer-line">(unique fish, last 24h)</span></h2>
+        <ol id="species-list" class="half-height"><li class="empty">loading…</li></ol>
+      </section>
+      <section>
+        <h2>Recent events
+          <span class="reviewer-line">
+            <span id="auth-state" class="auth-badge">view-only</span>
+            reviewer: <input id="reviewer-input" type="text" placeholder="your email">
+            <input id="write-token-input" type="password" placeholder="write token (optional)">
+          </span>
+        </h2>
+        <ul id="events-list" class="half-height"><li class="empty">loading…</li></ul>
+        <div class="corrections-stats" id="corrections-stats">corrections: —</div>
+      </section>
+      <section class="drift-panel">
+        <h2>Input drift
+          <span class="drift-meta" id="drift-meta">—</span>
+        </h2>
+        <div id="drift-grid" class="drift-grid"><div class="empty">collecting samples…</div></div>
       </section>
     </aside>
   </main>

@@ -36,6 +36,19 @@ import numpy as np
 from .fishial import FishDetection, Prediction
 
 
+@dataclass
+class SmootherUpdate:
+    """Output of one tracker tick.
+
+    ``display`` is the smoothed list to draw on the live overlay.
+    ``raw_track_ids`` is parallel to the *input* `detections` list; it tells
+    the rest of the pipeline which persistent track each raw detection
+    belongs to so we can deduplicate counts across frames.
+    """
+    display: List[FishDetection]
+    raw_track_ids: List[Optional[int]]
+
+
 def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -212,8 +225,9 @@ class DetectionSmoother:
         self._tracks.clear()
         self._next_id = 1
 
-    def update(self, frame_id: int, detections: List[FishDetection]) -> List[FishDetection]:
+    def update(self, frame_id: int, detections: List[FishDetection]) -> SmootherUpdate:
         existing_ids = list(self._tracks.keys())
+        raw_track_ids: List[Optional[int]] = [None] * len(detections)
 
         # Greedy IoU matching on *predicted* current bboxes, not last-frame
         # bboxes — so a moving fish's track stays associated after a one-frame
@@ -250,6 +264,7 @@ class DetectionSmoother:
                 center_alpha=self.center_alpha,
                 velocity_alpha=self.velocity_alpha,
             )
+            raw_track_ids[j] = tid
 
         # Unmatched tracks: coast along velocity for up to max_age frames.
         to_drop: list[int] = []
@@ -278,6 +293,7 @@ class DetectionSmoother:
                 velocity_alpha=self.velocity_alpha,
             )
             self._tracks[new_id] = t
+            raw_track_ids[j] = new_id
 
         # Emit current state for every track with enough hits
         out: List[FishDetection] = []
@@ -289,7 +305,7 @@ class DetectionSmoother:
                 det_conf=t.smoothed_conf(),
                 topk=t.smoothed_topk(self.topk),
             ))
-        return out
+        return SmootherUpdate(display=out, raw_track_ids=raw_track_ids)
 
     def stats(self) -> dict:
         return {
