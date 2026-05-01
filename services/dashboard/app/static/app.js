@@ -588,20 +588,36 @@ function renderHourly(rows) {
     counts[h] += r.sightings;
   }
   const max = Math.max(...counts, 1);
-  const w = 100, h = 80, pad = 4;
-  const bw = (w - 2 * pad) / 24;
+
+  // ViewBox roughly matches the rendered card aspect (24 hours × ~10 units
+  // wide each → 240×100). preserveAspectRatio kept default so bars don't
+  // stretch; we let height scale naturally from CSS width:100% / height:auto.
+  const W = 240, H = 100;
+  const padX = 6, padTop = 6, padBottom = 22;
+  const plotH = H - padTop - padBottom;
+  const bw = (W - 2 * padX) / 24;
+  const baselineY = padTop + plotH;
+
   const bars = counts.map((c, i) => {
-    const bh = (h - 2 * pad) * (c / max);
-    const x = pad + i * bw;
-    const y = h - pad - bh;
-    return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${(bw - 0.6).toFixed(2)}" height="${bh.toFixed(2)}" fill="var(--accent)" opacity="${0.4 + 0.6 * c / max}" />`;
+    if (c === 0) return "";
+    const bh = Math.max(1.2, plotH * (c / max));
+    const x = padX + i * bw + 0.6;
+    const y = baselineY - bh;
+    const op = (0.5 + 0.5 * c / max).toFixed(2);
+    return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${(bw - 1.2).toFixed(2)}" height="${bh.toFixed(2)}" fill="var(--accent)" opacity="${op}" rx="0.8"/>`;
   }).join("");
-  // tick labels at 0, 6, 12, 18
+
+  const baseline = `<line x1="${padX}" x2="${W - padX}" y1="${baselineY}" y2="${baselineY}" stroke="var(--muted)" stroke-width="0.5" opacity="0.4"/>`;
+
   const ticks = [0, 6, 12, 18, 23].map(i => {
-    const x = pad + i * bw + bw / 2;
-    return `<text x="${x.toFixed(2)}" y="${(h - 1).toFixed(2)}" font-size="6" fill="var(--muted)" text-anchor="middle">${i}</text>`;
+    const x = padX + i * bw + bw / 2;
+    return `<text x="${x.toFixed(2)}" y="${(baselineY + 11).toFixed(2)}" font-size="8" fill="var(--muted)" text-anchor="middle">${i}</text>`;
   }).join("");
-  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${bars}${ticks}</svg>`;
+
+  // Tiny "max" tick at the top so a viewer can read the y-scale at a glance.
+  const peakLabel = `<text x="${(W - padX - 1).toFixed(2)}" y="${(padTop + 6).toFixed(2)}" font-size="7" fill="var(--muted)" text-anchor="end">peak ${max}</text>`;
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}">${baseline}${bars}${ticks}${peakLabel}</svg>`;
 }
 
 function renderConditions(wq) {
