@@ -47,16 +47,35 @@
               <option value="720">30d</option>
               <option value="8760">1y</option>
             </select>
+            format:
+            <select id="dl-format">
+              <option value="csv" selected>CSV</option>
+              <option value="parquet">Parquet</option>
+            </select>
           </span>
         </h2>
+        <div class="dl-section-label">analysis-friendly</div>
         <div class="dl-grid">
-          <a class="dl-btn" data-export="events" href="#" download>detections.csv</a>
-          <a class="dl-btn" data-export="species_counts" href="#" download>species_counts.csv</a>
-          <a class="dl-btn" data-export="water_quality" href="#" download>water_quality.csv</a>
-          <a class="dl-btn" data-export="frame_stats" href="#" download>frame_stats.csv</a>
-          <a class="dl-btn" data-export="saved_frames" href="#" download>saved_frames.csv</a>
-          <a class="dl-btn" data-export="corrections" href="#" download>corrections.csv</a>
-          <a class="dl-btn" data-export="alerts" href="#" download>alerts.csv</a>
+          <a class="dl-btn" data-export="sightings" download>sightings</a>
+          <a class="dl-btn" data-export="hourly_summary" data-default-window="168" download>hourly_summary</a>
+          <a class="dl-btn" data-export="tracks_timeline" data-parquet="ok" download>tracks_timeline</a>
+          <a class="dl-btn" data-export="topk_long" data-parquet="ok" download>topk_long</a>
+          <a class="dl-btn" data-export="labeled_corrections" download>labeled_corrections</a>
+        </div>
+        <div class="dl-section-label">raw</div>
+        <div class="dl-grid">
+          <a class="dl-btn" data-export="events" data-parquet="ok" download>detections</a>
+          <a class="dl-btn" data-export="species_counts" download>species_counts</a>
+          <a class="dl-btn" data-export="water_quality" download>water_quality</a>
+          <a class="dl-btn" data-export="frame_stats" download>frame_stats</a>
+          <a class="dl-btn" data-export="saved_frames" download>saved_frames</a>
+          <a class="dl-btn" data-export="corrections" download>corrections</a>
+          <a class="dl-btn" data-export="alerts" download>alerts</a>
+        </div>
+        <div class="dl-section-label">documentation</div>
+        <div class="dl-grid">
+          <a class="dl-btn" data-export="README" data-static="md" download>README.md</a>
+          <a class="dl-btn" data-export="camera_metadata" data-static="json" download>camera_metadata.json</a>
         </div>
       </section>
       <section>

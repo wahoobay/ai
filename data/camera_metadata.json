@@ -1,0 +1,67 @@
+{
+  "_about": "Static-ish metadata for each video source. Filled in by a human; updated when the install changes. Served at /api/export/camera_metadata.json and shipped alongside any CSV downloads.",
+  "_units": {
+    "lat": "degrees, WGS84",
+    "lng": "degrees, WGS84",
+    "depth_m": "meters below the waterline at mean tide",
+    "heading_deg": "compass heading (0=N, 90=E, 180=S, 270=W) the camera is pointed when pan_deg=0",
+    "pan_offset_deg": "added to ptz_states.pan_deg to convert camera-frame heading to absolute compass heading",
+    "fov_deg_horizontal": "horizontal field of view at current zoom; for PTZ cameras this varies with zoom",
+    "max_optical_zoom": "max optical zoom factor (×)"
+  },
+  "sources": {
+    "wahoo_2": {
+      "display_name": "SEAHIVECAM",
+      "owner": "Wahoo Bay (FAU partnership)",
+      "system": "View Into The Blue Octopus (Fathom)",
+      "system_spec_url": "https://www.viewintotheblue.com/s/VITB_Octopus_2021.pdf",
+      "imaging_module": "AXIS PTZ (M5525-E or compatible) inside the Octopus housing",
+      "lat": 26.260345,
+      "lng": -80.083399,
+      "lat_lng_source": "SenseStream wahoo_2 deployment metadata; sonde co-located with camera",
+      "depth_m": 2,
+      "depth_m_source": "Wahoo Bay staff (Rob Wyre / Dan Zimmerman, 2026-05-01)",
+      "heading_deg": null,
+      "pan_offset_deg": null,
+      "fov_deg_horizontal": null,
+      "max_optical_zoom": null,
+      "image_rotation_deg": 180,
+      "resolution": "1920x1080",
+      "fps_native": 30,
+      "codecs": ["H.264", "MJPEG"],
+      "streaming_protocols": ["RTSP", "RTMP", "RTMPS", "HLS"],
+      "onvif_compliant": true,
+      "self_cleaning": "VITB CleanSweep mechanical wiper",
+      "audio": "AAC-LC + LPCM 32kHz (optional hydrophone)",
+      "depth_rating_m": 50,
+      "timezone": "America/New_York",
+      "_todo": [
+        "Measure compass heading when PTZ pan=0 (point camera at known landmark, sight with compass).",
+        "Confirm whether the on-camera Geolocation group can be filled in via VAPIX (currently empty).",
+        "Confirm whether the optional hydrophone is installed."
+      ]
+    },
+    "pier_cam": {
+      "display_name": "Pompano pier underwater cam",
+      "owner": "City of Pompano Beach",
+      "system": "AXIS M5525-E (bare camera, no underwater system)",
+      "imaging_module": "AXIS M5525-E PTZ Dome Network Camera",
+      "lat": null,
+      "lng": null,
+      "lat_lng_source": null,
+      "depth_m": null,
+      "heading_deg": null,
+      "pan_offset_deg": null,
+      "fov_deg_horizontal": null,
+      "max_optical_zoom": null,
+      "image_rotation_deg": 180,
+      "resolution": "1920x1080",
+      "fps_native": 15,
+      "codecs": ["H.264", "MJPEG"],
+      "streaming_protocols": ["RTSP", "MJPEG-over-HTTP"],
+      "onvif_compliant": true,
+      "timezone": "America/New_York",
+      "_note": "Used in the live demo as a stand-in until SEAHIVECAM is publicly reachable. Owned by City of Pompano Beach; partnership covers internal/stakeholder use."
+    }
+  }
+}

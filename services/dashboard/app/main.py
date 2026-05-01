@@ -33,6 +33,13 @@ from .exports import (
     export_saved_frames,
     export_corrections,
     export_alerts,
+    export_sightings,
+    export_hourly_summary,
+    export_tracks_timeline,
+    export_topk_long,
+    export_labeled_corrections,
+    fetch_parquet_bytes,
+    query_for,
 )
 from .stats import (
     poisson_count_ci,
@@ -727,6 +734,132 @@ def build_app() -> FastAPI:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_alerts(pool, include_resolved)
         return _csv_response(gen, _csv_filename("alerts", scope="all" if include_resolved else "active"))
+
+    # ----- biology-friendly + ML-friendly bonus exports ----------------------
+
+    @app.get("/api/export/sightings.csv")
+    async def export_sightings_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+        min_frames: int = Query(3, ge=1, le=1000),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_sightings(pool, hours, min_frames)
+        return _csv_response(gen, _csv_filename("sightings", hours=hours))
+
+    @app.get("/api/export/hourly_summary.csv")
+    async def export_hourly_summary_csv(
+        hours: int = Query(168, ge=1, le=24 * 365),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_hourly_summary(pool, hours, deployment)
+        return _csv_response(gen, _csv_filename("hourly_summary", hours=hours, deployment=deployment))
+
+    @app.get("/api/export/tracks_timeline.csv")
+    async def export_tracks_timeline_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+        min_frames: int = Query(3, ge=1, le=1000),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_tracks_timeline(pool, hours, min_frames)
+        return _csv_response(gen, _csv_filename("tracks_timeline", hours=hours))
+
+    @app.get("/api/export/topk_long.csv")
+    async def export_topk_long_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+        min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_topk_long(pool, hours, min_accuracy)
+        return _csv_response(gen, _csv_filename("topk_long", hours=hours))
+
+    @app.get("/api/export/labeled_corrections.csv")
+    async def export_labeled_corrections_csv() -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_labeled_corrections(pool)
+        return _csv_response(gen, _csv_filename("labeled_corrections"))
+
+    # ----- Parquet variants for the heaviest endpoints -----------------------
+
+    PARQUET_RESOURCES = {"events", "tracks_timeline", "topk_long", "hourly_summary"}
+
+    @app.get("/api/export/{resource}.parquet")
+    async def export_parquet(
+        resource: str,
+        hours: int = Query(24, ge=1, le=24 * 365),
+        species_id: Optional[str] = None,
+        min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
+        min_frames: int = Query(3, ge=1, le=1000),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        if resource not in PARQUET_RESOURCES:
+            return JSONResponse(
+                {"error": f"parquet only available for: {sorted(PARQUET_RESOURCES)}"},
+                status_code=400,
+            )
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        try:
+            sql, params, cols = query_for(
+                resource,
+                hours=hours,
+                species_id=species_id,
+                min_accuracy=min_accuracy,
+                min_frames=min_frames,
+                deployment=deployment,
+            )
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        blob = await fetch_parquet_bytes(pool, sql, params, cols)
+        filename = _csv_filename(resource, hours=hours).replace(".csv", ".parquet")
+        return Response(
+            content=blob,
+            media_type="application/vnd.apache.parquet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    # ----- Static-ish sidecars: README + camera metadata ---------------------
+
+    @app.get("/api/export/README.md")
+    async def export_readme() -> Response:
+        path = BASE_DIR / "data" / "README.md"
+        if not path.exists():
+            return JSONResponse({"error": "README missing"}, status_code=500)
+        text = path.read_text()
+        return Response(
+            content=text,
+            media_type="text/markdown",
+            headers={"Content-Disposition": 'attachment; filename="README.md"'},
+        )
+
+    @app.get("/api/export/camera_metadata.json")
+    async def export_camera_metadata() -> Response:
+        # Try the repo-root location first (where humans edit it).
+        for candidate in (
+            Path("/raid/scratch/dzimmerman2021/wahoobay/data/camera_metadata.json"),
+            BASE_DIR / "data" / "camera_metadata.json",
+        ):
+            if candidate.exists():
+                return Response(
+                    content=candidate.read_text(),
+                    media_type="application/json",
+                    headers={"Content-Disposition": 'attachment; filename="camera_metadata.json"'},
+                )
+        return JSONResponse({"error": "camera_metadata.json not found"}, status_code=500)
 
     @app.get("/api/provenance/current")
     async def provenance_current() -> Response:

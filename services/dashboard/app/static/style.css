@@ -246,6 +246,14 @@ li.empty { color: var(--muted); font-style: italic; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 6px;
+  margin-bottom: 6px;
+}
+.dl-section-label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 6px 0 4px;
 }
 .dl-btn {
   display: block;

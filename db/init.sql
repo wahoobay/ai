@@ -39,6 +39,24 @@ CREATE INDEX IF NOT EXISTS detection_events_track_ts
     ON detection_events (track_id, ts)
     WHERE track_id IS NOT NULL;
 
+-- PTZ pose snapshots, polled from the camera at PTZ_POLL_INTERVAL_S (default
+-- 1 Hz). Joined to detection_events on (source_name, nearest ts) at query
+-- time to give every detection a "look direction". Off by default; the
+-- poller stays idle until PTZ_POLL_URL is provided.
+CREATE TABLE IF NOT EXISTS ptz_states (
+    id           BIGSERIAL PRIMARY KEY,
+    ts           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    source_name  TEXT NOT NULL,
+    pan_deg      REAL,
+    tilt_deg     REAL,
+    zoom         REAL,
+    raw          JSONB,            -- full response, in case the camera reports extras
+    poll_method  TEXT,             -- 'vapix' | 'onvif' | other
+    config_hash  TEXT
+);
+CREATE INDEX IF NOT EXISTS ptz_states_ts_desc      ON ptz_states (ts DESC);
+CREATE INDEX IF NOT EXISTS ptz_states_src_ts_desc  ON ptz_states (source_name, ts DESC);
+
 CREATE TABLE IF NOT EXISTS saved_frames (
     id          BIGSERIAL PRIMARY KEY,
     ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),

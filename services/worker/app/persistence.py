@@ -138,6 +138,28 @@ class PgWriter:
                  mv, cfghash, gitsha),
             )
 
+    def record_ptz_state(
+        self,
+        ts: datetime,
+        source_name: str,
+        pan_deg: Optional[float],
+        tilt_deg: Optional[float],
+        zoom: Optional[float],
+        raw: Optional[dict],
+        poll_method: str,
+    ) -> None:
+        _mv, _dsha, _csha, cfghash, _gitsha = self._prov_tuple()
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ptz_states
+                (ts, source_name, pan_deg, tilt_deg, zoom, raw, poll_method, config_hash)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (ts, source_name, pan_deg, tilt_deg, zoom,
+                 Jsonb(raw or {}), poll_method, cfghash),
+            )
+
     def record_frame_stats(self, rows: list[tuple]) -> None:
         if not rows:
             return

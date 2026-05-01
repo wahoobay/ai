@@ -7,3 +7,5 @@ python-multipart
 numpy<2
 scipy>=1.11
 pydantic>=2
+pyarrow>=14
+pandas>=2

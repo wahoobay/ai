@@ -75,6 +75,14 @@ class Config:
     tracker_velocity_alpha: float    # 0..1, EMA weight on new velocity measurement
     tracker_velocity_decay: float    # 0..1, per-frame velocity decay while coasting
 
+    # PTZ poller (off by default; when on, writes pan/tilt/zoom to ptz_states)
+    ptz_poll_enabled: bool
+    ptz_poll_url: str                # full URL incl. userinfo; empty = idle
+    ptz_poll_backend: str            # 'vapix' | 'onvif'
+    ptz_source_name: str             # label written to ptz_states.source_name
+    ptz_poll_interval_s: float
+    ptz_poll_timeout_s: float
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -122,4 +130,10 @@ class Config:
             tracker_center_alpha=_float("TRACKER_CENTER_ALPHA", 0.6),
             tracker_velocity_alpha=_float("TRACKER_VELOCITY_ALPHA", 0.5),
             tracker_velocity_decay=_float("TRACKER_VELOCITY_DECAY", 0.8),
+            ptz_poll_enabled=_bool("PTZ_POLL_ENABLED", False),
+            ptz_poll_url=_str("PTZ_POLL_URL", ""),
+            ptz_poll_backend=_str("PTZ_POLL_BACKEND", "vapix"),
+            ptz_source_name=_str("PTZ_SOURCE_NAME", "camera"),
+            ptz_poll_interval_s=_float("PTZ_POLL_INTERVAL_S", 1.0),
+            ptz_poll_timeout_s=_float("PTZ_POLL_TIMEOUT_S", 4.0),
         )

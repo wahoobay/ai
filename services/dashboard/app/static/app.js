@@ -488,25 +488,41 @@ async function tickAlerts() {
 
 function refreshDownloadLinks() {
   const sel = document.getElementById("dl-window");
+  const fmt = document.getElementById("dl-format");
   if (!sel) return;
   const hours = sel.value;
+  const wantParquet = fmt && fmt.value === "parquet";
   for (const a of document.querySelectorAll(".dl-btn")) {
     const resource = a.dataset.export;
+    // Static sidecars are unaffected by window / format
+    if (a.dataset.static === "md") {
+      a.href = `/api/export/${resource}.md`;
+      continue;
+    }
+    if (a.dataset.static === "json") {
+      a.href = `/api/export/${resource}.json`;
+      continue;
+    }
     const params = new URLSearchParams();
-    // alerts.csv uses include_resolved instead of hours
     if (resource === "alerts") {
       params.set("include_resolved", "true");
+    } else if (resource === "labeled_corrections") {
+      // no params — corrections export is unbounded
     } else {
-      params.set("hours", hours);
+      const w = a.dataset.defaultWindow || hours;
+      params.set("hours", w);
     }
-    a.href = `/api/export/${resource}.csv?${params.toString()}`;
+    const ext = (wantParquet && a.dataset.parquet === "ok") ? "parquet" : "csv";
+    a.href = `/api/export/${resource}.${ext}?${params.toString()}`;
   }
 }
 
 function initDownloads() {
   const sel = document.getElementById("dl-window");
+  const fmt = document.getElementById("dl-format");
   if (!sel) return;
   sel.addEventListener("change", refreshDownloadLinks);
+  if (fmt) fmt.addEventListener("change", refreshDownloadLinks);
   refreshDownloadLinks();
 }
 

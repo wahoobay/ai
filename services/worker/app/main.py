@@ -28,6 +28,7 @@ from .fishial import FishialPipeline
 from .persistence import EventLog, ImageSaver, PgWriter
 from .pipeline import LiveBuffer, PipelineRunner
 from .provenance import compute as compute_provenance
+from .ptz import PTZPoller
 from .sources import source_from_config
 
 log = logging.getLogger("wahoobay.worker")
@@ -45,6 +46,7 @@ class WorkerApp:
         self.cfg = cfg
         self.live = LiveBuffer()
         self.runner: PipelineRunner | None = None
+        self.ptz: PTZPoller | None = None
 
     def start(self) -> None:
         cfg = self.cfg
@@ -77,7 +79,13 @@ class WorkerApp:
         )
         self.runner.start()
 
+        if pg is not None:
+            self.ptz = PTZPoller(cfg, pg)
+            self.ptz.start()
+
     def stop(self) -> None:
+        if self.ptz:
+            self.ptz.stop()
         if self.runner:
             self.runner.stop()
 
@@ -130,6 +138,19 @@ def build_app(cfg: Config | None = None) -> FastAPI:
         s = worker.runner.stats if worker.runner else None
         if s is None:
             return {"running": False}
+        ptz = None
+        if worker.ptz is not None:
+            ps = worker.ptz.stats
+            ptz = {
+                "enabled": ps.enabled,
+                "polls": ps.poll_count,
+                "successes": ps.success_count,
+                "last_success_at": ps.last_success_at.isoformat() if ps.last_success_at else None,
+                "last_pan_deg": ps.last_pan_deg,
+                "last_tilt_deg": ps.last_tilt_deg,
+                "last_zoom": ps.last_zoom,
+                "last_error": ps.last_error,
+            }
         return {
             "running": True,
             "frames_seen": s.frames_seen,
@@ -139,6 +160,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
             "started_at": s.started_at.isoformat(),
             "last_frame_at": s.last_frame_at.isoformat() if s.last_frame_at else None,
             "current_source": s.current_source,
+            "ptz": ptz,
         }
 
     BOUNDARY = b"wahoobay-mjpeg-boundary"
