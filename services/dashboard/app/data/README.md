@@ -186,10 +186,11 @@ or `hourly_summary.csv`** for any analysis.
 
 ## Citation / contact
 
-If you use this data in a publication, please cite:
+If you use this data in a publication, please cite (IEEE style):
 
-> Zimmerman, D. and the Wahoo Bay AI partnership (2026). Real-time fish
-> identification at the Wahoo Bay SEAHIVE artificial reef. Internal
-> dataset. Florida Atlantic University.
+> [1] D. Zimmerman, "Real-time fish identification at the Wahoo Bay
+> SEAHIVE artificial reef," dataset, Shipwreck Park, Pompano Beach, FL,
+> USA; FAU Center for Connected Autonomy & AI, Florida Atlantic
+> University, Boca Raton, FL, USA, 2026.
 
 Updates and corrections: contact dzimmerman2021@fau.edu.
