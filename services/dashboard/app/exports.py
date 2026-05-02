@@ -421,14 +421,14 @@ def export_labeled_corrections(pool: AsyncConnectionPool):
                e.best_species_id AS original_species_id,
                e.best_accuracy   AS original_accuracy,
                e.topk            AS original_topk,
-               e.image_path      AS frame_image_path,
+               COALESCE(sf.image_path, e.image_path) AS frame_image_path,
                sf.coco_path      AS frame_coco_path,
                e.model_version, e.detector_sha256, e.classifier_sha256,
                e.config_hash, e.pipeline_git_sha
           FROM detection_corrections c
           JOIN detection_events e ON e.id = c.event_id
           LEFT JOIN LATERAL (
-              SELECT coco_path FROM saved_frames
+              SELECT image_path, coco_path FROM saved_frames
                WHERE source_name = e.source_name AND frame_id = e.frame_id
                LIMIT 1
           ) sf ON true
