@@ -193,12 +193,11 @@ def build_app() -> FastAPI:
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
 
-    @app.get("/api/stream.mjpeg")
-    async def stream() -> Response:
+    def _proxy_mjpeg(worker_path: str) -> StreamingResponse:
         client: httpx.AsyncClient = state["client"]
 
         async def gen() -> AsyncIterator[bytes]:
-            async with client.stream("GET", f"{cfg.worker_url}/stream.mjpeg") as r:
+            async with client.stream("GET", f"{cfg.worker_url}{worker_path}") as r:
                 async for chunk in r.aiter_raw():
                     yield chunk
 
@@ -207,6 +206,14 @@ def build_app() -> FastAPI:
             media_type="multipart/x-mixed-replace; boundary=wahoobay-mjpeg-boundary",
             headers={"Cache-Control": "no-cache, no-store, must-revalidate, private"},
         )
+
+    @app.get("/api/stream.mjpeg")
+    async def stream() -> Response:
+        return _proxy_mjpeg("/stream.mjpeg")
+
+    @app.get("/api/stream_raw.mjpeg")
+    async def stream_raw() -> Response:
+        return _proxy_mjpeg("/stream_raw.mjpeg")
 
     @app.get("/api/events")
     async def events(

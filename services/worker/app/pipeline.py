@@ -27,8 +27,15 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class LiveFrame:
-    """Latest annotated frame + its detections, served to dashboard clients."""
-    jpeg: bytes
+    """Latest annotated + raw frames + detections, served to dashboard clients.
+
+    Both encodings live on each LiveFrame so a viewer can choose to see the
+    pipeline's bounding-box overlay (`jpeg`) or the unannotated source frame
+    (`jpeg_raw`) — the dashboard's bbox-visibility toggle just swaps the
+    `<img src>` between /api/stream.mjpeg and /api/stream_raw.mjpeg.
+    """
+    jpeg: bytes              # annotated (with bboxes + labels)
+    jpeg_raw: bytes          # source-pixel frame, no overlay
     frame_id: int
     ts: datetime
     source_name: str
@@ -38,7 +45,8 @@ class LiveFrame:
     @classmethod
     def empty(cls) -> "LiveFrame":
         return cls(
-            jpeg=b"", frame_id=0, ts=datetime.now(timezone.utc),
+            jpeg=b"", jpeg_raw=b"", frame_id=0,
+            ts=datetime.now(timezone.utc),
             source_name="", detections_summary=[],
         )
 
@@ -202,7 +210,7 @@ class PipelineRunner:
 
                 # publish to live buffer, rate-limited (smoothed payload for display)
                 if (now_mono - last_publish) >= min_period:
-                    self._publish_live(frame_id, ts, source_name, annotated, display, infer_ms)
+                    self._publish_live(frame_id, ts, source_name, annotated, frame, display, infer_ms)
                     last_publish = now_mono
         except Exception:
             log.exception("pipeline crashed")
@@ -284,14 +292,14 @@ class PipelineRunner:
         ts: datetime,
         source_name: str,
         annotated: np.ndarray,
+        raw: np.ndarray,
         detections: List[FishDetection],
         infer_ms: float,
     ) -> None:
-        ok, buf = cv2.imencode(
-            ".jpg", annotated,
-            [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality],
-        )
-        if not ok:
+        jpeg_q = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality]
+        ok_a, buf_a = cv2.imencode(".jpg", annotated, jpeg_q)
+        ok_r, buf_r = cv2.imencode(".jpg", raw, jpeg_q)
+        if not ok_a or not ok_r:
             return
 
         summary = [
@@ -309,7 +317,8 @@ class PipelineRunner:
             for d in detections
         ]
         self.live.publish(LiveFrame(
-            jpeg=buf.tobytes(),
+            jpeg=buf_a.tobytes(),
+            jpeg_raw=buf_r.tobytes(),
             frame_id=frame_id,
             ts=ts,
             source_name=source_name,

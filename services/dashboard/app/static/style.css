@@ -52,9 +52,27 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .stream-wrap img { width: 100%; height: 100%; object-fit: contain; }
+
+.stream-overlay-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  backdrop-filter: blur(4px);
+}
+.stream-overlay-btn:hover { background: rgba(0, 0, 0, 0.75); }
+.stream-overlay-btn.off { color: var(--muted); }
 
 .current, .side-col section {
   background: var(--panel);

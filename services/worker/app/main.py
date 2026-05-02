@@ -122,6 +122,13 @@ def build_app(cfg: Config | None = None) -> FastAPI:
             return Response(status_code=503)
         return Response(content=live.jpeg, media_type="image/jpeg")
 
+    @app.get("/snapshot_raw.jpg")
+    async def snapshot_raw() -> Response:
+        live = worker.live.snapshot()
+        if not live.jpeg_raw:
+            return Response(status_code=503)
+        return Response(content=live.jpeg_raw, media_type="image/jpeg")
+
     @app.get("/live.json")
     async def live_json() -> dict:
         live = worker.live.snapshot()
@@ -138,6 +145,21 @@ def build_app(cfg: Config | None = None) -> FastAPI:
         s = worker.runner.stats if worker.runner else None
         if s is None:
             return {"running": False}
+        # autoswitch state (if AutoswitchSource is active)
+        autoswitch = None
+        runner = worker.runner
+        if runner is not None:
+            src = runner.source
+            if hasattr(src, "is_dark"):
+                autoswitch = {
+                    "active": True,
+                    "is_dark": getattr(src, "is_dark", False),
+                    "last_luma": getattr(src, "last_luma", None),
+                    "last_avg_luma": getattr(src, "last_avg_luma", None),
+                    "switches": getattr(src, "switches", 0),
+                    "dark_threshold": getattr(src, "dark_threshold", None),
+                    "light_threshold": getattr(src, "light_threshold", None),
+                }
         ptz = None
         if worker.ptz is not None:
             ps = worker.ptz.stats
@@ -160,21 +182,24 @@ def build_app(cfg: Config | None = None) -> FastAPI:
             "started_at": s.started_at.isoformat(),
             "last_frame_at": s.last_frame_at.isoformat() if s.last_frame_at else None,
             "current_source": s.current_source,
+            "autoswitch": autoswitch,
             "ptz": ptz,
         }
 
     BOUNDARY = b"wahoobay-mjpeg-boundary"
 
-    @app.get("/stream.mjpeg")
-    async def stream() -> StreamingResponse:
+    def _mjpeg_streaming_response(pick_jpeg) -> StreamingResponse:
+        """Shared MJPEG generator parameterised on which JPEG byte-payload to
+        send (annotated vs raw). `pick_jpeg(LiveFrame) -> bytes`."""
         async def gen() -> AsyncIterator[bytes]:
             last = -1
             loop = asyncio.get_running_loop()
-            # Emit an initial frame (if any) immediately so the browser shows something.
             current = worker.live.snapshot()
             if current.frame_id > 0:
                 last = current.frame_id
-                yield _mjpeg_chunk(current.jpeg, BOUNDARY)
+                payload = pick_jpeg(current)
+                if payload:
+                    yield _mjpeg_chunk(payload, BOUNDARY)
             while True:
                 current = await loop.run_in_executor(
                     None, worker.live.wait_for_next, last, 10.0,
@@ -182,17 +207,25 @@ def build_app(cfg: Config | None = None) -> FastAPI:
                 if current is None:
                     continue
                 last = current.frame_id
-                yield _mjpeg_chunk(current.jpeg, BOUNDARY)
-
-        headers = {
-            "Cache-Control": "no-cache, no-store, must-revalidate, private",
-            "Pragma": "no-cache",
-        }
+                payload = pick_jpeg(current)
+                if payload:
+                    yield _mjpeg_chunk(payload, BOUNDARY)
         return StreamingResponse(
             gen(),
             media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY.decode()}",
-            headers=headers,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, private",
+                "Pragma": "no-cache",
+            },
         )
+
+    @app.get("/stream.mjpeg")
+    async def stream() -> StreamingResponse:
+        return _mjpeg_streaming_response(lambda f: f.jpeg)
+
+    @app.get("/stream_raw.mjpeg")
+    async def stream_raw() -> StreamingResponse:
+        return _mjpeg_streaming_response(lambda f: f.jpeg_raw)
 
     return app
 

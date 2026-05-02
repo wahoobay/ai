@@ -75,6 +75,13 @@ class Config:
     tracker_velocity_alpha: float    # 0..1, EMA weight on new velocity measurement
     tracker_velocity_decay: float    # 0..1, per-frame velocity decay while coasting
 
+    # Auto-switch to a fallback source when primary goes dark (sunset/camera off)
+    fallback_video_source: str
+    autoswitch_dark_threshold: float
+    autoswitch_light_threshold: float
+    autoswitch_sample_every_n_frames: int
+    autoswitch_window_samples: int
+
     # PTZ poller (off by default; when on, writes pan/tilt/zoom to ptz_states)
     ptz_poll_enabled: bool
     ptz_poll_url: str                # full URL incl. userinfo; empty = idle
@@ -130,6 +137,11 @@ class Config:
             tracker_center_alpha=_float("TRACKER_CENTER_ALPHA", 0.6),
             tracker_velocity_alpha=_float("TRACKER_VELOCITY_ALPHA", 0.5),
             tracker_velocity_decay=_float("TRACKER_VELOCITY_DECAY", 0.8),
+            fallback_video_source=_str("FALLBACK_VIDEO_SOURCE", ""),
+            autoswitch_dark_threshold=_float("AUTOSWITCH_DARK_THRESHOLD", 25.0),
+            autoswitch_light_threshold=_float("AUTOSWITCH_LIGHT_THRESHOLD", 50.0),
+            autoswitch_sample_every_n_frames=_int("AUTOSWITCH_SAMPLE_EVERY_N_FRAMES", 15),
+            autoswitch_window_samples=_int("AUTOSWITCH_WINDOW_SAMPLES", 60),
             ptz_poll_enabled=_bool("PTZ_POLL_ENABLED", False),
             ptz_poll_url=_str("PTZ_POLL_URL", ""),
             ptz_poll_backend=_str("PTZ_POLL_BACKEND", "vapix"),

@@ -674,6 +674,27 @@ async function tickReef() {
   } catch {}
 }
 
+function initBboxToggle() {
+  const btn = document.getElementById("bbox-toggle");
+  const img = document.getElementById("stream");
+  if (!btn || !img) return;
+
+  function apply(showing) {
+    img.src = showing ? "/api/stream.mjpeg" : "/api/stream_raw.mjpeg";
+    btn.textContent = showing ? "🟦 boxes: on" : "🟦 boxes: off";
+    btn.classList.toggle("off", !showing);
+    localStorage.setItem("wb_bboxes_off", showing ? "0" : "1");
+  }
+
+  // restore previous state
+  apply(localStorage.getItem("wb_bboxes_off") !== "1");
+
+  btn.addEventListener("click", () => {
+    const showing = !btn.classList.contains("off") ? false : true;
+    apply(showing);
+  });
+}
+
 function initReefToggle() {
   const btn = document.getElementById("reef-toggle");
   const body = document.getElementById("reef-body");
@@ -690,6 +711,7 @@ function initReefToggle() {
 initReviewer();
 initDownloads();
 initReefToggle();
+initBboxToggle();
 refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
