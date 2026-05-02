@@ -10,8 +10,15 @@
 
 * { box-sizing: border-box; }
 
-body {
+html, body {
   margin: 0;
+  /* Prevent any rogue child from forcing a horizontal scroll on mobile —
+     individual containers will still scroll internally where appropriate. */
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+body {
   background: var(--bg);
   color: var(--ink);
   font-family: system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
@@ -27,7 +34,7 @@ header {
 
 header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
 
-.stats { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+.stats { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; min-width: 0; }
 .stats span { white-space: nowrap; }
 
 main {
@@ -344,5 +351,11 @@ li.empty { color: var(--muted); font-style: italic; }
 .reef-cond-tile .reef-cond-status.muted { color: var(--muted); }
 
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; }
+  main { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
+  header { padding: 10px 12px; flex-wrap: wrap; gap: 6px; }
+  header h1 { font-size: 16px; }
+  .stats { font-size: 11px; gap: 10px; }
+  .current, .side-col section { padding: 10px 12px; }
+  /* Long bbox / detail text was forcing widths > viewport */
+  .meta { word-break: break-word; }
 }

@@ -69,7 +69,6 @@ function renderCurrent(live) {
 }
 
 function renderStats(live, stats) {
-  document.getElementById("stat-source").textContent = `source: ${stats.current_source || "—"}`;
   document.getElementById("stat-frames").textContent = `frames: ${stats.frames_seen ?? "—"}`;
   document.getElementById("stat-fish").textContent = `with fish: ${stats.frames_with_fish ?? "—"}`;
   document.getElementById("stat-infer").textContent = `inference: ${fmtMs(live.infer_ms)}`;
