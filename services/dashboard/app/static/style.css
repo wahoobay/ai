@@ -74,6 +74,23 @@ main {
 .stream-overlay-btn:hover { background: rgba(0, 0, 0, 0.75); }
 .stream-overlay-btn.off { color: var(--muted); }
 
+.fallback-banner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(to top, rgba(15, 25, 50, 0.94), rgba(15, 25, 50, 0.78));
+  color: var(--ink);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(2px);
+}
+.fallback-banner.hidden { display: none; }
+.fallback-banner-detail { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
 .current, .side-col section {
   background: var(--panel);
   border-radius: 8px;

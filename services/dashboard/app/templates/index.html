@@ -23,6 +23,10 @@
       <div class="stream-wrap">
         <img id="stream" src="/api/stream.mjpeg" alt="live stream">
         <button id="bbox-toggle" class="stream-overlay-btn" title="Toggle bounding boxes">🟦 boxes: on</button>
+        <div id="fallback-banner" class="fallback-banner hidden">
+          🌙 <strong>Camera is dark</strong> — showing previously-recorded clips for visual continuity.
+          <span class="fallback-banner-detail">No new species, sightings, or detection data are being collected during this period.</span>
+        </div>
       </div>
       <div class="current">
         <h2>Current detections <span class="reviewer-line" id="current-count"></span></h2>

@@ -83,6 +83,9 @@ class PipelineStats:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_frame_at: Optional[datetime] = None
     current_source: str = ""
+    # frames consumed during autoswitch fallback (no video data is collected
+    # from these — they're a visual placeholder only)
+    fallback_frames: int = 0
 
 
 class PipelineRunner:
@@ -147,6 +150,7 @@ class PipelineRunner:
         cfg = self.cfg
         min_period = 1.0 / max(1, cfg.live_stream_max_fps)
         last_publish = 0.0
+        was_fallback = False
 
         try:
             for frame_id, frame, source_name in self.source.frames():
@@ -158,6 +162,40 @@ class PipelineRunner:
                 self.stats.last_frame_at = ts
                 self.stats.current_source = source_name
 
+                # Is the autoswitch source currently serving fallback frames?
+                # If so, this frame is from the fallback playlist (or other
+                # backup source), NOT from the real camera. We must not
+                # collect any video-derived data: no detections, no
+                # frame_stats, no saved frames, no tracker updates. Water
+                # quality + other independent collectors keep running.
+                in_fallback = bool(getattr(self.source, "is_dark", False))
+
+                # On fallback transitions, reset the smoother so its tracks
+                # don't bridge real-camera fish and playlist fish.
+                if in_fallback != was_fallback:
+                    if self.smoother is not None:
+                        self.smoother.reset()
+                    was_fallback = in_fallback
+                    log.info(
+                        "autoswitch transition: in_fallback=%s — %s video-data collection",
+                        in_fallback,
+                        "PAUSING" if in_fallback else "RESUMING",
+                    )
+
+                if in_fallback:
+                    self.stats.fallback_frames += 1
+                    # Publish the fallback frame as visual placeholder. No
+                    # inference, no overlay, no DB writes.
+                    if (now_mono - last_publish) >= min_period:
+                        self._publish_live(
+                            frame_id, ts, source_name,
+                            annotated=frame, raw=frame,
+                            detections=[], infer_ms=0.0,
+                        )
+                        last_publish = now_mono
+                    continue
+
+                # ----- live-camera path: collect everything ---------------
                 t0 = time.time()
                 detections = self.fishial.process_frame(frame)
                 infer_ms = (time.time() - t0) * 1000

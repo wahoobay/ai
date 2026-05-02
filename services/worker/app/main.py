@@ -182,6 +182,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
             "started_at": s.started_at.isoformat(),
             "last_frame_at": s.last_frame_at.isoformat() if s.last_frame_at else None,
             "current_source": s.current_source,
+            "fallback_frames": s.fallback_frames,
             "autoswitch": autoswitch,
             "ptz": ptz,
         }
