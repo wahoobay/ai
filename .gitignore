@@ -28,3 +28,9 @@ __pycache__/
 .vscode/
 .idea/
 .claude/
+
+# Ad-hoc screenshots / scratch images dropped into the repo root
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
