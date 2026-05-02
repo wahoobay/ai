@@ -39,11 +39,14 @@ function updateAuthBadge() {
 
 function renderCurrent(live) {
   const el = document.getElementById("current-list");
-  if (!live || !live.detections || !live.detections.length) {
+  const countEl = document.getElementById("current-count");
+  const dets = live?.detections || [];
+  if (countEl) countEl.textContent = dets.length ? `(${dets.length} on-screen)` : "";
+  if (!dets.length) {
     el.innerHTML = `<li class="empty">no fish in current frame</li>`;
     return;
   }
-  el.innerHTML = live.detections
+  el.innerHTML = dets
     .slice()
     .sort((a, b) => (b.best_accuracy ?? 0) - (a.best_accuracy ?? 0))
     .map((d) => {
