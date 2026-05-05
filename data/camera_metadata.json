@@ -62,7 +62,7 @@
       "streaming_protocols": ["RTSP", "MJPEG-over-HTTP"],
       "onvif_compliant": true,
       "timezone": "America/New_York",
-      "_note": "Used in the live demo as a stand-in until SEAHIVECAM is publicly reachable. Owned by City of Pompano Beach; partnership covers internal/stakeholder use."
+      "_note": "Was the live demo stand-in 2026-04 → 2026-05-04; now wired as the autoswitch fallback when SEAHIVECAM goes dark. Owned by City of Pompano Beach; RTSP access provisioned by Nigel Cardwell; partnership covers internal/stakeholder use."
     }
   }
 }

@@ -12,6 +12,13 @@ if ! command -v python >/dev/null 2>&1 || ! python -c "import app" 2>/dev/null; 
   fi
 fi
 
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 export DATABASE_URL="${DATABASE_URL:-postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay}"
 export SENSESTREAM_BASE_URL="${SENSESTREAM_BASE_URL:-https://api.sensestream.org}"
 export SENSESTREAM_DEPLOYMENT_URI="${SENSESTREAM_DEPLOYMENT_URI:-wahoo_2}"

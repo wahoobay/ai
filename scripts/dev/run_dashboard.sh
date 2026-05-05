@@ -11,6 +11,13 @@ if ! command -v python >/dev/null 2>&1; then
   fi
 fi
 
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 export WORKER_URL="${WORKER_URL:-http://127.0.0.1:8081}"
 export DATABASE_URL="${DATABASE_URL:-postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay}"
 export DASHBOARD_PORT="${DASHBOARD_PORT:-18080}"

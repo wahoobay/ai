@@ -29,7 +29,7 @@ from .persistence import EventLog, ImageSaver, PgWriter
 from .pipeline import LiveBuffer, PipelineRunner
 from .provenance import compute as compute_provenance
 from .ptz import PTZPoller
-from .sources import source_from_config
+from .sources import _strip_creds, source_from_config
 
 log = logging.getLogger("wahoobay.worker")
 
@@ -50,7 +50,7 @@ class WorkerApp:
 
     def start(self) -> None:
         cfg = self.cfg
-        log.info("starting worker: source=%s device=%s", cfg.video_source, cfg.device)
+        log.info("starting worker: source=%s device=%s", _strip_creds(cfg.video_source), cfg.device)
 
         provenance = compute_provenance(cfg)
 

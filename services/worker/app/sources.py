@@ -128,7 +128,7 @@ class RTSPSource(VideoSource):
                 log.warning("RTSP open failed, retry in %.1fs", self.reconnect_delay)
                 self._stop.wait(self.reconnect_delay)
                 continue
-            log.info("RTSPSource connected: %s", self.url)
+            log.info("RTSPSource connected: %s", _strip_creds(self.url))
             try:
                 while not self._stop.is_set():
                     ok, frame = cap.read()
@@ -292,12 +292,15 @@ class AutoswitchSource(VideoSource):
         except Exception: pass
 
 
-def _build_one(cfg, spec: str) -> VideoSource:
-    """Construct a single VideoSource from a URL/path string."""
+def _build_one(cfg, spec: str, label: str | None = None) -> VideoSource:
+    """Construct a single VideoSource from a URL/path string. If `label` is
+    given, it's used as the public source_name (instead of the URL hostname)
+    — keeps camera IPs out of /stats and detection_events.source_name."""
+    label = (label or "").strip() or None
     if spec.startswith("rtsp://"):
-        return RTSPSource(spec)
+        return RTSPSource(spec, source_name=label)
     if spec.startswith("http://") or spec.startswith("https://"):
-        return HTTPSource(spec)
+        return HTTPSource(spec, source_name=label)
     if spec.startswith("file://"):
         directory = spec[len("file://"):]
     else:
@@ -311,11 +314,11 @@ def _build_one(cfg, spec: str) -> VideoSource:
 
 
 def source_from_config(cfg) -> VideoSource:
-    primary = _build_one(cfg, cfg.video_source)
+    primary = _build_one(cfg, cfg.video_source, label=cfg.source_label_primary)
     fallback_spec = (cfg.fallback_video_source or "").strip()
     if not fallback_spec:
         return primary
-    fallback = _build_one(cfg, fallback_spec)
+    fallback = _build_one(cfg, fallback_spec, label=cfg.source_label_fallback)
     log.info(
         "AutoswitchSource: primary=%s, fallback=%s, dark<%.1f light>%.1f",
         _strip_creds(cfg.video_source),

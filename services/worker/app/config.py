@@ -82,6 +82,12 @@ class Config:
     autoswitch_sample_every_n_frames: int
     autoswitch_window_samples: int
 
+    # Friendly source labels (kept out of public surfaces for IP privacy):
+    # detection_events.source_name and /stats.current_source use these instead
+    # of the URL hostname. Empty falls back to the URL's hostname.
+    source_label_primary: str
+    source_label_fallback: str
+
     # PTZ poller (off by default; when on, writes pan/tilt/zoom to ptz_states)
     ptz_poll_enabled: bool
     ptz_poll_url: str                # full URL incl. userinfo; empty = idle
@@ -142,6 +148,8 @@ class Config:
             autoswitch_light_threshold=_float("AUTOSWITCH_LIGHT_THRESHOLD", 50.0),
             autoswitch_sample_every_n_frames=_int("AUTOSWITCH_SAMPLE_EVERY_N_FRAMES", 15),
             autoswitch_window_samples=_int("AUTOSWITCH_WINDOW_SAMPLES", 60),
+            source_label_primary=_str("SOURCE_LABEL_PRIMARY", ""),
+            source_label_fallback=_str("SOURCE_LABEL_FALLBACK", ""),
             ptz_poll_enabled=_bool("PTZ_POLL_ENABLED", False),
             ptz_poll_url=_str("PTZ_POLL_URL", ""),
             ptz_poll_backend=_str("PTZ_POLL_BACKEND", "vapix"),

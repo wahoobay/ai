@@ -12,6 +12,13 @@ if ! command -v python >/dev/null 2>&1; then
   fi
 fi
 
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 export VIDEO_SOURCE="${VIDEO_SOURCE:-file://$(pwd)/data/test_videos}"
 export DETECTOR_PATH="${DETECTOR_PATH:-$(pwd)/data/models/detector_v26/model.pt}"
 export CLASSIFIER_PATH="${CLASSIFIER_PATH:-$(pwd)/data/models/classifier_v0_10_2/model.pt}"
