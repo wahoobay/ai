@@ -802,10 +802,274 @@ function initReefToggle() {
   });
 }
 
+// ====================================================================
+// Trends view — charts. All read from materialised hourly views, so
+// each fetch is sub-100 ms regardless of detection_events size.
+// ====================================================================
+
+// Wong (2011) colour-blind-safe palette + extras for top-species lines.
+const TRENDS_PALETTE = [
+  "#56b4e9", "#e69f00", "#009e73", "#f0e442",
+  "#0072b2", "#d55e00", "#cc79a7", "#ad59c6",
+  "#5fb35f", "#9b9b9b",
+];
+
+function _timeAxisTicks(minX, maxX, xS, yBaseline, hours) {
+  const stepHrs =
+    hours <= 12 ? 2 :
+    hours <= 48 ? 6 :
+    hours <= 168 ? 24 :
+    72;
+  const stepMs = stepHrs * 3600 * 1000;
+  let t = Math.ceil(minX / stepMs) * stepMs;
+  const out = [];
+  while (t <= maxX) { out.push(t); t += stepMs; }
+  return out.map(t => {
+    const x = xS(t);
+    const d = new Date(t);
+    const lbl = hours <= 48
+      ? `${d.getHours().toString().padStart(2,"0")}:00`
+      : `${d.getMonth()+1}/${d.getDate()}`;
+    return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${yBaseline}" y2="${yBaseline+3}" stroke="var(--muted)" stroke-width="0.5"/>
+            <text x="${x.toFixed(1)}" y="${yBaseline+12}" font-size="9" fill="var(--muted)" text-anchor="middle">${lbl}</text>`;
+  }).join("");
+}
+
+function _yAxisTicks(values, yS, padL, W, padR) {
+  const max = Math.max(...values.filter(v => v != null), 1);
+  return [0, Math.round(max/2), max].map(v => {
+    const y = yS(v);
+    return `<line x1="${padL}" x2="${W-padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--muted)" stroke-width="0.3" opacity="0.4"/>
+            <text x="${(padL-4).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">${v}</text>`;
+  }).join("");
+}
+
+function renderDetectionRate(data) {
+  const svg  = document.getElementById("chart-detection-rate");
+  const meta = document.getElementById("chart-detection-rate-meta");
+  if (!svg) return;
+  const series = (data && data.series) || [];
+  if (series.length === 0) {
+    svg.innerHTML = `<text x="240" y="90" font-size="11" fill="var(--muted)" text-anchor="middle">no sightings yet in this window</text>`;
+    if (meta) meta.textContent = "";
+    return;
+  }
+  const W=480, H=180, padL=32, padR=10, padT=8, padB=20;
+  const xs = series.map(p => new Date(p.hour).getTime());
+  const ys = series.map(p => p.sightings);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const xrange = (maxX - minX) || 1;
+  const maxY = Math.max(...ys, 1);
+  const xS = v => padL + ((v - minX)/xrange) * (W - padL - padR);
+  const yS = v => H - padB - (v/maxY) * (H - padT - padB);
+
+  const pts = xs.map((x,i) => `${xS(x).toFixed(1)},${yS(ys[i]).toFixed(1)}`);
+  const linePath = `M ${pts.join(" L ")}`;
+  const areaPath = `M ${xS(xs[0]).toFixed(1)},${(H-padB).toFixed(1)} L ${pts.join(" L ")} L ${xS(xs[xs.length-1]).toFixed(1)},${(H-padB).toFixed(1)} Z`;
+
+  svg.innerHTML = `${_yAxisTicks(ys, yS, padL, W, padR)}
+    ${_timeAxisTicks(minX, maxX, xS, H-padB, data.hours || 24)}
+    <path d="${areaPath}" fill="var(--accent)" opacity="0.18"/>
+    <path d="${linePath}" stroke="var(--accent)" stroke-width="1.4" fill="none"/>`;
+
+  if (meta) {
+    const total = ys.reduce((a,b) => a+b, 0);
+    meta.textContent = `${total} sightings · last ${data.hours}h`;
+  }
+}
+
+function renderTopSpeciesTimeseries(data) {
+  const svg    = document.getElementById("chart-top-species");
+  const legend = document.getElementById("chart-top-species-legend");
+  const meta   = document.getElementById("chart-top-species-meta");
+  if (!svg) return;
+  const species = (data && data.species) || [];
+  if (species.length === 0) {
+    svg.innerHTML = `<text x="240" y="100" font-size="11" fill="var(--muted)" text-anchor="middle">no sightings yet in this window</text>`;
+    if (legend) legend.innerHTML = "";
+    if (meta) meta.textContent = "";
+    return;
+  }
+  const W=480, H=200, padL=32, padR=10, padT=8, padB=20;
+  const allXs = [], allYs = [];
+  species.forEach(sp => sp.points.forEach(p => {
+    allXs.push(new Date(p.hour).getTime());
+    allYs.push(p.sightings);
+  }));
+  const minX = Math.min(...allXs), maxX = Math.max(...allXs);
+  const xrange = (maxX - minX) || 1;
+  const maxY = Math.max(...allYs, 1);
+  const xS = v => padL + ((v - minX)/xrange) * (W - padL - padR);
+  const yS = v => H - padB - (v/maxY) * (H - padT - padB);
+
+  const lines = species.map((sp, i) => {
+    const color = TRENDS_PALETTE[i % TRENDS_PALETTE.length];
+    const pts = sp.points.map(p => `${xS(new Date(p.hour).getTime()).toFixed(1)},${yS(p.sightings).toFixed(1)}`).join(" L ");
+    return pts ? `<path d="M ${pts}" stroke="${color}" stroke-width="1.4" fill="none"/>` : "";
+  }).join("");
+
+  svg.innerHTML = `${_yAxisTicks(allYs, yS, padL, W, padR)}
+    ${_timeAxisTicks(minX, maxX, xS, H-padB, data.hours || 24)}
+    ${lines}`;
+
+  if (legend) {
+    legend.innerHTML = species.map((sp, i) => {
+      const color = TRENDS_PALETTE[i % TRENDS_PALETTE.length];
+      return `<span><span class="legend-swatch" style="background:${color}"></span>${sp.name} <span style="opacity:.65">(${sp.total})</span></span>`;
+    }).join("");
+  }
+  if (meta) meta.textContent = `top ${species.length} · last ${data.hours}h`;
+}
+
+function renderSightingsXWater(data, paramKey) {
+  const svg = document.getElementById("chart-sxw");
+  if (!svg) return;
+  const series = (data && data.series) || [];
+  if (series.length === 0) {
+    svg.innerHTML = `<text x="240" y="100" font-size="11" fill="var(--muted)" text-anchor="middle">no data yet</text>`;
+    return;
+  }
+  const W=480, H=200, padL=32, padR=42, padT=8, padB=20;
+
+  const xs = series.map(p => new Date(p.hour).getTime());
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const xrange = (maxX - minX) || 1;
+  const xS = v => padL + ((v - minX)/xrange) * (W - padL - padR);
+
+  const sightings = series.map(p => p.sightings ?? 0);
+  const maxL = Math.max(...sightings, 1);
+  const yL = v => H - padB - (v/maxL) * (H - padT - padB);
+
+  const wq = series.map(p => p[paramKey]);
+  const wqDef = wq.filter(v => v != null);
+  const minR = wqDef.length ? Math.min(...wqDef) : 0;
+  const maxR = wqDef.length ? Math.max(...wqDef) : 1;
+  const Rrange = (maxR - minR) || 1;
+  const yR = v => H - padB - ((v - minR)/Rrange) * (H - padT - padB);
+
+  const barW = Math.max(1, ((W - padL - padR) / Math.max(1, series.length)) * 0.8);
+  const bars = series.map((p, i) => {
+    const v = sightings[i];
+    if (v <= 0) return "";
+    const x = xS(xs[i]) - barW/2;
+    const yTop = yL(v);
+    const h = (H - padB) - yTop;
+    return h >= 0.5 ? `<rect x="${x.toFixed(1)}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="var(--accent)" opacity="0.5"/>` : "";
+  }).join("");
+
+  let linePath = "";
+  if (wqDef.length >= 2) {
+    const pts = series
+      .map((p, i) => p[paramKey] != null ? `${xS(xs[i]).toFixed(1)},${yR(p[paramKey]).toFixed(1)}` : null)
+      .filter(Boolean)
+      .join(" L ");
+    linePath = `<path d="M ${pts}" stroke="var(--warn)" stroke-width="1.4" fill="none"/>`;
+  }
+
+  const yLeftTicks  = [0, Math.round(maxL/2), maxL].map(v => {
+    const y = yL(v);
+    return `<text x="${(padL-4).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="9" fill="var(--accent)" text-anchor="end">${v}</text>`;
+  }).join("");
+  const yRightTicks = wqDef.length ? [minR, (minR+maxR)/2, maxR].map(v => {
+    const y = yR(v);
+    return `<text x="${(W-padR+4).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="9" fill="var(--warn)" text-anchor="start">${v.toFixed(1)}</text>`;
+  }).join("") : "";
+
+  svg.innerHTML = `${yLeftTicks}${yRightTicks}
+    ${_timeAxisTicks(minX, maxX, xS, H-padB, data.hours || 24)}
+    ${bars}${linePath}`;
+}
+
+function renderWqHistoryGrid(latest, history) {
+  const grid = document.getElementById("chart-wq-grid");
+  if (!grid) return;
+  const series = (history && history.series) || [];
+  if (!series.length && !latest) {
+    grid.innerHTML = `<div class="empty" style="font-size:12px">no readings</div>`;
+    return;
+  }
+  const cells = WQ_PARAMS.map(p => {
+    const vals = series.map(r => r[p.key]);
+    const last = (latest && latest[p.key] != null)
+      ? latest[p.key]
+      : vals.filter(v => v != null).slice(-1)[0];
+    const txt = last != null ? p.fmt(last) : "—";
+    return `<div class="chart-wq-cell">
+      <div class="wq-cell-name">${p.label}</div>
+      <div class="wq-cell-value">${txt}<span class="wq-cell-unit">${p.unit}</span></div>
+      ${sparkline(vals, p.normal)}
+    </div>`;
+  }).join("");
+  grid.innerHTML = cells;
+}
+
+let _lastSxwData = null;
+function tickSxwParamOnly() {
+  if (!_lastSxwData) return;
+  const param = document.getElementById("chart-sxw-param")?.value || "water_temp_c";
+  renderSightingsXWater(_lastSxwData, param);
+}
+
+function trendsActive() {
+  const t = document.getElementById("view-trends");
+  return t && !t.classList.contains("hidden");
+}
+
+async function tickTrends() {
+  // Skip work entirely when the user is on the Live view.
+  if (!trendsActive()) return;
+  const hours = parseInt(document.getElementById("trends-window")?.value || "24", 10);
+  const param = document.getElementById("chart-sxw-param")?.value || "water_temp_c";
+
+  // Snapshot first (returning visitors)
+  const cdr  = readCached(`/api/charts/detection_rate?hours=${hours}`);
+  const cts  = readCached(`/api/charts/top_species_timeseries?hours=${hours}&top_n=8`);
+  const csxw = readCached(`/api/charts/sightings_x_water?hours=${hours}`);
+  const cwql = readCached("/api/water_quality/latest");
+  const cwqh = readCached(`/api/water_quality/history?hours=${hours}&max_points=300`);
+  if (cdr)  renderDetectionRate(cdr.data);
+  if (cts)  renderTopSpeciesTimeseries(cts.data);
+  if (csxw) { _lastSxwData = csxw.data; renderSightingsXWater(csxw.data, param); }
+  if (cwql || cwqh) renderWqHistoryGrid(cwql?.data || null, cwqh?.data || null);
+
+  try {
+    const [dr, ts, sxw, wql, wqh] = await Promise.all([
+      pollWithCache(`/api/charts/detection_rate?hours=${hours}`).catch(() => null),
+      pollWithCache(`/api/charts/top_species_timeseries?hours=${hours}&top_n=8`).catch(() => null),
+      pollWithCache(`/api/charts/sightings_x_water?hours=${hours}`).catch(() => null),
+      pollWithCache("/api/water_quality/latest").catch(() => null),
+      pollWithCache(`/api/water_quality/history?hours=${hours}&max_points=300`).catch(() => null),
+    ]);
+    if (dr)  renderDetectionRate(dr);
+    if (ts)  renderTopSpeciesTimeseries(ts);
+    if (sxw) { _lastSxwData = sxw; renderSightingsXWater(sxw, param); }
+    if (wql || wqh) renderWqHistoryGrid(wql, wqh);
+  } catch {}
+}
+
+function initViewToggle() {
+  const btn    = document.getElementById("view-toggle");
+  const live   = document.getElementById("view-live");
+  const trends = document.getElementById("view-trends");
+  if (!btn || !live || !trends) return;
+  function apply(showTrends) {
+    live.classList.toggle("hidden", showTrends);
+    trends.classList.toggle("hidden", !showTrends);
+    btn.textContent = showTrends ? "🐠 Live" : "📊 Trends";
+    localStorage.setItem("wb_view", showTrends ? "trends" : "live");
+    if (showTrends) tickTrends();
+  }
+  apply(localStorage.getItem("wb_view") === "trends");
+  btn.addEventListener("click", () => apply(trends.classList.contains("hidden")));
+  document.getElementById("trends-window")?.addEventListener("change", tickTrends);
+  document.getElementById("chart-sxw-param")?.addEventListener("change", tickSxwParamOnly);
+}
+
 initReviewer();
 initDownloads();
 initReefToggle();
 initBboxToggle();
+initViewToggle();
 refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
@@ -814,6 +1078,7 @@ setInterval(tickDrift, 30000);
 setInterval(tickAlerts, 15000);
 setInterval(tickCorrectionStats, 10000);
 setInterval(tickReef, 30000);
+setInterval(tickTrends, 60000);
 tick();
 tickHistory();
 tickWaterQuality();
@@ -821,3 +1086,4 @@ tickDrift();
 tickAlerts();
 tickCorrectionStats();
 tickReef();
+tickTrends();

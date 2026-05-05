@@ -304,6 +304,33 @@ CREATE INDEX IF NOT EXISTS species_sightings_mat_species
 CREATE INDEX IF NOT EXISTS species_sightings_mat_first_seen
   ON species_sightings_mat (first_seen DESC);
 
+-- Hourly rollup of sightings, used by the dashboard "Trends" view.
+-- Rolled up from species_sightings_mat (not raw detection_events) so the
+-- y-axis is "fish counted" rather than "bbox events" — that matches what
+-- biologists actually want. Filtered to frame_count >= 3 to drop track
+-- flickers that were already filtered out of species_sightings_mat for
+-- the same reason. 60-day window keeps the matview small and refresh
+-- cheap; the Trends view never asks for more than 30 days.
+CREATE MATERIALIZED VIEW IF NOT EXISTS species_sightings_hourly_mat AS
+SELECT
+    date_trunc('hour', first_seen) AS hour,
+    species_id,
+    MIN(name)                       AS name,
+    SUM(frame_count)::int           AS frames,
+    COUNT(*)::int                   AS sightings
+  FROM species_sightings_mat
+ WHERE first_seen >= NOW() - INTERVAL '60 days'
+   AND frame_count >= 3
+ GROUP BY 1, 2;
+
+-- Unique index for REFRESH MATERIALIZED VIEW CONCURRENTLY (the
+-- dashboard's matview refresher uses CONCURRENTLY so reads aren't
+-- blocked). species_id can repeat across hours but is unique per hour.
+CREATE UNIQUE INDEX IF NOT EXISTS species_sightings_hourly_mat_pk
+  ON species_sightings_hourly_mat (hour, species_id);
+CREATE INDEX IF NOT EXISTS species_sightings_hourly_mat_hour
+  ON species_sightings_hourly_mat (hour DESC);
+
 CREATE OR REPLACE VIEW species_counts_hourly AS
     SELECT
         date_trunc('hour', ts)   AS hour,

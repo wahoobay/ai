@@ -127,7 +127,12 @@ def build_app() -> FastAPI:
             # don't seq-scan detection_events on every request.
             refresher = MatviewRefresher(
                 pool=state["pool"],
-                names=("species_sightings_mat",),
+                # Order matters: species_sightings_hourly_mat reads from
+                # species_sightings_mat, so the parent must refresh first.
+                names=(
+                    "species_sightings_mat",
+                    "species_sightings_hourly_mat",
+                ),
                 interval_s=cfg.matview_refresh_interval_s,
             )
             state["matviews"] = refresher
@@ -683,6 +688,150 @@ def build_app() -> FastAPI:
             {"name": r.name, "severity": r.severity, "description": r.description}
             for r in SLO_RULES
         ])
+
+    # ------------------------------------------------------------------
+    # Chart endpoints (Trends view)
+    # ------------------------------------------------------------------
+    # All read from species_sightings_hourly_mat (refreshed every ~60s)
+    # so they're always sub-100ms regardless of detection_events size.
+
+    @app.get("/api/charts/detection_rate")
+    async def chart_detection_rate(
+        hours: int = Query(24, ge=1, le=24 * 30),
+    ) -> Response:
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            SELECT hour, sum(sightings)::int AS sightings
+              FROM species_sightings_hourly_mat
+             WHERE hour >= NOW() - (%s::int || ' hours')::interval
+             GROUP BY 1
+             ORDER BY 1 ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours,))
+                rows = await cur.fetchall()
+        return JSONResponse({
+            "hours": hours,
+            "series": [
+                {"hour": r["hour"].isoformat(), "sightings": r["sightings"]}
+                for r in rows
+            ],
+        })
+
+    @app.get("/api/charts/top_species_timeseries")
+    async def chart_top_species_timeseries(
+        hours: int = Query(24, ge=1, le=24 * 30),
+        top_n: int = Query(8, ge=1, le=20),
+    ) -> Response:
+        """Top-N species by total sightings in window, with per-hour series
+        for each. Returns one row per (hour, species) for charting; the
+        client builds the multi-line chart."""
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            WITH top AS (
+              SELECT species_id, MIN(name) AS name,
+                     SUM(sightings)::int AS total
+                FROM species_sightings_hourly_mat
+               WHERE hour >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+               ORDER BY total DESC
+               LIMIT %s
+            )
+            SELECT m.hour, m.species_id, t.name,
+                   m.sightings::int AS sightings,
+                   t.total::int     AS total
+              FROM species_sightings_hourly_mat m
+              JOIN top t USING (species_id)
+             WHERE m.hour >= NOW() - (%s::int || ' hours')::interval
+             ORDER BY t.total DESC, m.hour ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours, top_n, hours))
+                rows = await cur.fetchall()
+        # group into per-species series for the client
+        series: dict = {}
+        for r in rows:
+            sid = r["species_id"]
+            if sid not in series:
+                series[sid] = {
+                    "species_id": sid,
+                    "name": r["name"],
+                    "total": r["total"],
+                    "points": [],
+                }
+            series[sid]["points"].append({
+                "hour": r["hour"].isoformat(),
+                "sightings": r["sightings"],
+            })
+        # preserve "top" ordering by total desc
+        ordered = sorted(series.values(), key=lambda s: s["total"], reverse=True)
+        return JSONResponse({"hours": hours, "top_n": top_n, "species": ordered})
+
+    @app.get("/api/charts/sightings_x_water")
+    async def chart_sightings_x_water(
+        hours: int = Query(24, ge=1, le=24 * 30),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        """Hourly sightings joined with hourly avg water-quality. Lets
+        the client overlay fish activity against any water parameter."""
+        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            WITH s AS (
+              SELECT hour, SUM(sightings)::int AS sightings
+                FROM species_sightings_hourly_mat
+               WHERE hour >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+            ),
+            w AS (
+              SELECT date_trunc('hour', ts)              AS hour,
+                     avg(water_temp_c)::real             AS water_temp_c,
+                     avg(ph)::real                       AS ph,
+                     avg(do_pct)::real                   AS do_pct,
+                     avg(turbidity_fnu)::real            AS turbidity_fnu,
+                     avg(chlorophyll_rfu)::real          AS chlorophyll_rfu,
+                     avg(spcond_ms_cm)::real             AS spcond_ms_cm
+                FROM sensor_readings
+               WHERE deployment_uri = %s
+                 AND ts >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+            )
+            SELECT COALESCE(s.hour, w.hour) AS hour,
+                   s.sightings,
+                   w.water_temp_c, w.ph, w.do_pct,
+                   w.turbidity_fnu, w.chlorophyll_rfu, w.spcond_ms_cm
+              FROM s
+              FULL OUTER JOIN w ON s.hour = w.hour
+             ORDER BY hour ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours, deployment, hours))
+                rows = await cur.fetchall()
+        return JSONResponse({
+            "hours": hours,
+            "deployment": deployment,
+            "series": [
+                {
+                    "hour": r["hour"].isoformat(),
+                    "sightings": r["sightings"],
+                    "water_temp_c": r["water_temp_c"],
+                    "ph": r["ph"],
+                    "do_pct": r["do_pct"],
+                    "turbidity_fnu": r["turbidity_fnu"],
+                    "chlorophyll_rfu": r["chlorophyll_rfu"],
+                    "spcond_ms_cm": r["spcond_ms_cm"],
+                }
+                for r in rows
+            ],
+        })
 
     # ------------------------------------------------------------------
     # CSV exports
