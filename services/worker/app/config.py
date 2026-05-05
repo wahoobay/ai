@@ -44,6 +44,16 @@ class Config:
     classifier_input_h: int
     classifier_input_w: int
     min_accept_accuracy: float
+    # Skip the classifier on detections below this det_conf — they get
+    # persisted as bbox-only events with an empty top-K (UI shows
+    # "unknown species"). Trades species-coverage on shaky detections
+    # for inference throughput.
+    min_classify_det_conf: float
+    # Mixed-precision autocast on the classifier forward. "off" = fp32,
+    # "float16" = fp16 autocast, "bfloat16" = bf16 autocast (preferred
+    # on H100/H200: same throughput as fp16 but the dynamic range of
+    # fp32, so numerically safer).
+    classifier_autocast: str
 
     # persistence
     database_url: str
@@ -118,6 +128,8 @@ class Config:
             classifier_input_h=_int("CLASSIFIER_INPUT_H", 154),
             classifier_input_w=_int("CLASSIFIER_INPUT_W", 434),
             min_accept_accuracy=_float("MIN_ACCEPT_ACCURACY", 0.0),
+            min_classify_det_conf=_float("MIN_CLASSIFY_DET_CONF", 0.40),
+            classifier_autocast=_str("CLASSIFIER_AUTOCAST", "bfloat16"),
             database_url=_str(
                 "DATABASE_URL",
                 "postgresql://wahoobay:wahoobay@localhost:5432/wahoobay",

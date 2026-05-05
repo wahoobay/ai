@@ -197,6 +197,23 @@ Both app services expose `/healthz` + `/readyz` for orchestrator probes.
 3. Validate parity with DGX outputs for ~1 week (same detections, same DB schema, same image outputs).
 4. Cut camera ingest over to KVS, decommission DGX service (or keep as warm standby).
 
+## Inference performance backlog
+
+After moving inference into a separate OS process (commit fdcf70a), the
+detector + classifier subprocess is the throughput ceiling. With
+SEAHIVECAM at 720p compression=90 we observe `frames_seen` ≈ 14.4 fps
+and `frames_inferred` ≈ 4.8 fps. Speed-ups in priority order:
+
+| # | Change | Speedup | Status | Notes |
+|---|---|---|---|---|
+| 1 | Cap detections / frame to top-K by det_conf | ~1.5–2× | deferred | sort detector output by `det_conf`, classify only top-K. Drops are likely-redundant detections in dense scenes. New env: `MAX_CLASSIFY_PER_FRAME` (default unset = no cap). |
+| 2 | Skip classifier when `det_conf < threshold` | ~1.3× | done (this commit) | det_conf-low events still persist with empty top-K (UI shows "unknown species"). Default threshold 0.4, env: `MIN_CLASSIFY_DET_CONF`. |
+| 3 | bf16 autocast on classifier forward | ~1.5–2× | done (this commit) | bfloat16 is preferred over fp16 on H200 (same throughput, better numerics). Env: `CLASSIFIER_AUTOCAST` (off/float16/bfloat16). |
+| 4 | Image saves go async | ~1.1× | deferred | move ImageSaver writes to a worker thread inside the inference subprocess. |
+| 5 | TensorRT engine for detector + classifier | ~2–3× on top | deferred | torch → ONNX → TRT, FP16 first, INT8 with calibration set. Probably worth doing right before the public URL goes wide. |
+| 6 | Smaller backbone (DinoV2-Small → Tiny) | ~2–3× | deferred | Fishial doesn't ship a Tiny checkpoint; would need retraining or distillation. |
+| 7 | Custom small classifier (MobileNetV3-S / EfficientNet-B0) on the **176 Wahoo Bay species** after fine-tuning | ~5–10× eventually | deferred until reviewer corrections accumulate | the right destination — 176 classes is small enough that a 2–5 M-param model handles it comfortably and is ≥10× faster than the 22 M-param DinoV2-S. |
+
 ## Blockers (what we're waiting on)
 1. **Dataset** — Wahoo Bay-specific validation set or ground-truth species list to verify / fine-tune Fishial's 866-class model.
 2. **Camera access** — RTSP URL, stream resolution, framerate, codec (H.264 vs H.265), day/night mode behavior.
