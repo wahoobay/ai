@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .config import Config
 from .fishial import FishialPipeline
 from .persistence import EventLog, ImageSaver, PgWriter
-from .pipeline import LiveBuffer, PipelineRunner
+from .pipeline import FrameTap, LatestSlot, LiveBuffer, PipelineRunner, PipelineStats
 from .provenance import compute as compute_provenance
 from .ptz import PTZPoller
 from .sources import _strip_creds, source_from_config
@@ -44,7 +44,14 @@ def _setup_logging(level: str) -> None:
 class WorkerApp:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        # Two buffers: annotated updates at inference rate; raw updates at
+        # source's native fps. Viewers toggle between them via /stream{,_raw}.
         self.live = LiveBuffer()
+        self.live_raw = LiveBuffer()
+        self.slot = LatestSlot()
+        self.stats = PipelineStats()
+        self.source = None
+        self.tap: FrameTap | None = None
         self.runner: PipelineRunner | None = None
         self.ptz: PTZPoller | None = None
 
@@ -55,7 +62,7 @@ class WorkerApp:
         provenance = compute_provenance(cfg)
 
         fishial = FishialPipeline(cfg)
-        source = source_from_config(cfg)
+        self.source = source_from_config(cfg)
         event_log = EventLog(cfg.events_log_dir)
         saver = ImageSaver(cfg)
 
@@ -67,11 +74,25 @@ class WorkerApp:
             log.warning("postgres unavailable (%s); continuing with jsonl-only", e)
             pg = None
 
+        # Frame-grabber thread owns the source. Keeps raw MJPEG flowing at
+        # native fps regardless of how slow inference is.
+        self.tap = FrameTap(
+            cfg=cfg,
+            source=self.source,
+            live_raw=self.live_raw,
+            slot=self.slot,
+            stats=self.stats,
+        )
+        self.tap.start()
+
+        # Inference thread consumes whatever frame is currently in the slot;
+        # intermediate frames are dropped if it can't keep up.
         self.runner = PipelineRunner(
             cfg=cfg,
-            source=source,
             fishial=fishial,
             live=self.live,
+            slot=self.slot,
+            stats=self.stats,
             pg=pg,
             event_log=event_log,
             saver=saver,
@@ -88,6 +109,8 @@ class WorkerApp:
             self.ptz.stop()
         if self.runner:
             self.runner.stop()
+        if self.tap:
+            self.tap.stop()
 
 
 def build_app(cfg: Config | None = None) -> FastAPI:
@@ -110,7 +133,8 @@ def build_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/readyz")
     async def readyz() -> Response:
-        live = worker.live.snapshot()
+        # raw buffer ticks first (FrameTap is ahead of inference), so use it
+        live = worker.live_raw.snapshot()
         if live.frame_id > 0:
             return JSONResponse({"ready": True, "frame_id": live.frame_id})
         return JSONResponse({"ready": False}, status_code=503)
@@ -124,7 +148,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/snapshot_raw.jpg")
     async def snapshot_raw() -> Response:
-        live = worker.live.snapshot()
+        live = worker.live_raw.snapshot()
         if not live.jpeg_raw:
             return Response(status_code=503)
         return Response(content=live.jpeg_raw, media_type="image/jpeg")
@@ -142,24 +166,22 @@ def build_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/stats")
     async def stats() -> dict:
-        s = worker.runner.stats if worker.runner else None
+        s = worker.stats if worker.runner else None
         if s is None:
             return {"running": False}
         # autoswitch state (if AutoswitchSource is active)
         autoswitch = None
-        runner = worker.runner
-        if runner is not None:
-            src = runner.source
-            if hasattr(src, "is_dark"):
-                autoswitch = {
-                    "active": True,
-                    "is_dark": getattr(src, "is_dark", False),
-                    "last_luma": getattr(src, "last_luma", None),
-                    "last_avg_luma": getattr(src, "last_avg_luma", None),
-                    "switches": getattr(src, "switches", 0),
-                    "dark_threshold": getattr(src, "dark_threshold", None),
-                    "light_threshold": getattr(src, "light_threshold", None),
-                }
+        src = worker.source
+        if src is not None and hasattr(src, "is_dark"):
+            autoswitch = {
+                "active": True,
+                "is_dark": getattr(src, "is_dark", False),
+                "last_luma": getattr(src, "last_luma", None),
+                "last_avg_luma": getattr(src, "last_avg_luma", None),
+                "switches": getattr(src, "switches", 0),
+                "dark_threshold": getattr(src, "dark_threshold", None),
+                "light_threshold": getattr(src, "light_threshold", None),
+            }
         ptz = None
         if worker.ptz is not None:
             ps = worker.ptz.stats
@@ -175,7 +197,8 @@ def build_app(cfg: Config | None = None) -> FastAPI:
             }
         return {
             "running": True,
-            "frames_seen": s.frames_seen,
+            "frames_seen": s.frames_seen,         # grabbed at native fps
+            "frames_inferred": s.frames_inferred, # processed by detector+classifier
             "frames_with_fish": s.frames_with_fish,
             "detections_total": s.detections_total,
             "last_infer_ms": s.last_infer_ms,
@@ -189,13 +212,13 @@ def build_app(cfg: Config | None = None) -> FastAPI:
 
     BOUNDARY = b"wahoobay-mjpeg-boundary"
 
-    def _mjpeg_streaming_response(pick_jpeg) -> StreamingResponse:
-        """Shared MJPEG generator parameterised on which JPEG byte-payload to
-        send (annotated vs raw). `pick_jpeg(LiveFrame) -> bytes`."""
+    def _mjpeg_streaming_response(buffer: LiveBuffer, pick_jpeg) -> StreamingResponse:
+        """Shared MJPEG generator parameterised on which buffer to drain and
+        which JPEG byte-payload to send. `pick_jpeg(LiveFrame) -> bytes`."""
         async def gen() -> AsyncIterator[bytes]:
             last = -1
             loop = asyncio.get_running_loop()
-            current = worker.live.snapshot()
+            current = buffer.snapshot()
             if current.frame_id > 0:
                 last = current.frame_id
                 payload = pick_jpeg(current)
@@ -203,7 +226,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
                     yield _mjpeg_chunk(payload, BOUNDARY)
             while True:
                 current = await loop.run_in_executor(
-                    None, worker.live.wait_for_next, last, 10.0,
+                    None, buffer.wait_for_next, last, 10.0,
                 )
                 if current is None:
                     continue
@@ -222,11 +245,13 @@ def build_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/stream.mjpeg")
     async def stream() -> StreamingResponse:
-        return _mjpeg_streaming_response(lambda f: f.jpeg)
+        # Annotated stream: bboxes drawn, gated by inference rate.
+        return _mjpeg_streaming_response(worker.live, lambda f: f.jpeg)
 
     @app.get("/stream_raw.mjpeg")
     async def stream_raw() -> StreamingResponse:
-        return _mjpeg_streaming_response(lambda f: f.jpeg_raw)
+        # Raw stream: native fps, no overlay; bbox-toggle off shows this.
+        return _mjpeg_streaming_response(worker.live_raw, lambda f: f.jpeg_raw)
 
     return app
 

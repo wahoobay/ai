@@ -1,7 +1,17 @@
 """Inference loop: pull frames, detect+classify, persist, publish.
 
-Runs in a background thread so the worker's FastAPI app can serve the MJPEG
-stream and /events endpoints concurrently.
+Two threads:
+- `FrameTap`     reads source frames at native fps, publishes raw MJPEG
+                 immediately so the live video stays smooth, and hands the
+                 latest frame to the inference consumer through a one-slot
+                 queue (intermediate frames are dropped if inference is slow).
+- `PipelineRunner` pulls the latest raw frame, runs detector + classifier,
+                 persists, draws the overlay, and publishes the annotated
+                 MJPEG. Annotated stream therefore updates at inference rate;
+                 raw stream stays at source rate.
+
+That split is what lets viewers toggle bboxes off and get a silky native-fps
+feed even when the model is doing 13-fish-per-frame work.
 """
 from __future__ import annotations
 
@@ -29,10 +39,11 @@ log = logging.getLogger(__name__)
 class LiveFrame:
     """Latest annotated + raw frames + detections, served to dashboard clients.
 
-    Both encodings live on each LiveFrame so a viewer can choose to see the
-    pipeline's bounding-box overlay (`jpeg`) or the unannotated source frame
-    (`jpeg_raw`) — the dashboard's bbox-visibility toggle just swaps the
-    `<img src>` between /api/stream.mjpeg and /api/stream_raw.mjpeg.
+    With the FrameTap split there are two LiveBuffers in play: one populated
+    by FrameTap at native fps (only `jpeg_raw` is meaningful) and one
+    populated by PipelineRunner at inference rate (only `jpeg` + the
+    detection summary are meaningful). We reuse the same dataclass for both
+    so the MJPEG/snapshot endpoints can pick out whichever field they need.
     """
     jpeg: bytes              # annotated (with bboxes + labels)
     jpeg_raw: bytes          # source-pixel frame, no overlay
@@ -75,8 +86,47 @@ class LiveBuffer:
 
 
 @dataclass
+class LatestRaw:
+    """One frame in transit between the FrameTap and the inference loop."""
+    frame_id: int
+    frame_bgr: np.ndarray
+    ts: datetime
+    source_name: str
+    in_fallback: bool
+
+
+class LatestSlot:
+    """Drop-old single-frame queue. The producer (FrameTap) overwrites whatever
+    is currently here; the consumer (PipelineRunner) is woken up and pulls
+    whichever frame happened to be most recent at consume time. Intermediate
+    frames are dropped — the inference loop never queues up a backlog."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._latest: Optional[LatestRaw] = None
+        self._consumed_id: int = -1
+
+    def publish(self, item: LatestRaw) -> None:
+        with self._cond:
+            self._latest = item
+            self._cond.notify_all()
+
+    def wait_next(self, timeout: float = 5.0) -> Optional[LatestRaw]:
+        with self._cond:
+            self._cond.wait_for(
+                lambda: self._latest is not None and self._latest.frame_id != self._consumed_id,
+                timeout=timeout,
+            )
+            if self._latest is None or self._latest.frame_id == self._consumed_id:
+                return None
+            self._consumed_id = self._latest.frame_id
+            return self._latest
+
+
+@dataclass
 class PipelineStats:
-    frames_seen: int = 0
+    frames_seen: int = 0           # frames grabbed from source (native fps)
+    frames_inferred: int = 0       # frames the inference loop processed
     frames_with_fish: int = 0
     detections_total: int = 0
     last_infer_ms: float = 0.0
@@ -88,27 +138,103 @@ class PipelineStats:
     fallback_frames: int = 0
 
 
-class PipelineRunner:
+class FrameTap:
+    """Reads frames from the source at native fps in its own thread.
+    Publishes raw JPEG to `live_raw` immediately and hands the latest frame
+    to `slot` for inference. Owns the source (calls .close on stop)."""
+
     def __init__(
         self,
         cfg,
         source: VideoSource,
+        live_raw: LiveBuffer,
+        slot: LatestSlot,
+        stats: PipelineStats,
+    ) -> None:
+        self.cfg = cfg
+        self.source = source
+        self.live_raw = live_raw
+        self.slot = slot
+        self.stats = stats
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="frame-tap", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop.set()
+        try:
+            self.source.close()
+        except Exception:
+            pass
+        if self._thread:
+            self._thread.join(timeout=timeout)
+
+    def _run(self) -> None:
+        cfg = self.cfg
+        jpeg_q = [int(cv2.IMWRITE_JPEG_QUALITY), cfg.jpeg_quality]
+        try:
+            for frame_id, frame, source_name in self.source.frames():
+                if self._stop.is_set():
+                    break
+                ts = datetime.now(timezone.utc)
+                in_fallback = bool(getattr(self.source, "is_dark", False))
+
+                self.stats.frames_seen += 1
+                self.stats.last_frame_at = ts
+                self.stats.current_source = source_name
+                if in_fallback:
+                    self.stats.fallback_frames += 1
+
+                # publish raw JPEG for /stream_raw.mjpeg & /snapshot_raw.jpg
+                ok, buf = cv2.imencode(".jpg", frame, jpeg_q)
+                if ok:
+                    self.live_raw.publish(LiveFrame(
+                        jpeg=b"",
+                        jpeg_raw=buf.tobytes(),
+                        frame_id=frame_id,
+                        ts=ts,
+                        source_name=source_name,
+                        detections_summary=[],
+                        infer_ms=0.0,
+                    ))
+
+                # hand off to inference; intermediate frames are dropped
+                self.slot.publish(LatestRaw(
+                    frame_id=frame_id,
+                    frame_bgr=frame,
+                    ts=ts,
+                    source_name=source_name,
+                    in_fallback=in_fallback,
+                ))
+        except Exception:
+            log.exception("frame-tap crashed")
+
+
+class PipelineRunner:
+    def __init__(
+        self,
+        cfg,
         fishial: FishialPipeline,
-        live: LiveBuffer,
+        live: LiveBuffer,           # annotated buffer (inference rate)
+        slot: LatestSlot,           # latest raw frame from FrameTap
+        stats: PipelineStats,       # shared with FrameTap
         pg: Optional[PgWriter],
         event_log: EventLog,
         saver: ImageSaver,
         provenance: Optional[Provenance] = None,
     ) -> None:
         self.cfg = cfg
-        self.source = source
         self.fishial = fishial
         self.live = live
+        self.slot = slot
+        self.stats = stats
         self.pg = pg
         self.event_log = event_log
         self.saver = saver
         self.provenance = provenance
-        self.stats = PipelineStats()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._frame_stats_buf: list[tuple] = []
@@ -138,7 +264,6 @@ class PipelineRunner:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
-        self.source.close()
         if self._thread:
             self._thread.join(timeout=timeout)
         self._flush_frame_stats()
@@ -153,22 +278,17 @@ class PipelineRunner:
         was_fallback = False
 
         try:
-            for frame_id, frame, source_name in self.source.frames():
-                if self._stop.is_set():
-                    break
-                now_mono = time.monotonic()
-                ts = datetime.now(timezone.utc)
-                self.stats.frames_seen += 1
-                self.stats.last_frame_at = ts
-                self.stats.current_source = source_name
+            while not self._stop.is_set():
+                item = self.slot.wait_next(timeout=5.0)
+                if item is None:
+                    continue  # source idle; keep waiting
 
-                # Is the autoswitch source currently serving fallback frames?
-                # If so, this frame is from the fallback playlist (or other
-                # backup source), NOT from the real camera. We must not
-                # collect any video-derived data: no detections, no
-                # frame_stats, no saved frames, no tracker updates. Water
-                # quality + other independent collectors keep running.
-                in_fallback = bool(getattr(self.source, "is_dark", False))
+                frame_id = item.frame_id
+                frame = item.frame_bgr
+                ts = item.ts
+                source_name = item.source_name
+                in_fallback = item.in_fallback
+                now_mono = time.monotonic()
 
                 # On fallback transitions, reset the smoother so its tracks
                 # don't bridge real-camera fish and playlist fish.
@@ -183,32 +303,30 @@ class PipelineRunner:
                     )
 
                 if in_fallback:
-                    self.stats.fallback_frames += 1
-                    # Publish the fallback frame as visual placeholder. No
-                    # inference, no overlay, no DB writes.
+                    # No inference, no DB writes. The raw stream is already
+                    # serving the fallback frame at native fps (handled by
+                    # FrameTap). Mirror it onto the annotated buffer so a
+                    # viewer with bboxes ON also sees the dark-camera image
+                    # rather than a frozen prior frame.
                     if (now_mono - last_publish) >= min_period:
                         self._publish_live(
                             frame_id, ts, source_name,
-                            annotated=frame, raw=frame,
-                            detections=[], infer_ms=0.0,
+                            annotated=frame, detections=[], infer_ms=0.0,
                         )
                         last_publish = now_mono
                     continue
 
-                # ----- live-camera path: collect everything ---------------
+                # ----- live-camera path: full inference + persist ---------
                 t0 = time.time()
                 detections = self.fishial.process_frame(frame)
                 infer_ms = (time.time() - t0) * 1000
                 self.stats.last_infer_ms = infer_ms
+                self.stats.frames_inferred += 1
                 if detections:
                     self.stats.frames_with_fish += 1
                     self.stats.detections_total += len(detections)
 
-                # Run smoother first so we know which raw detection belongs
-                # to which persistent track. We still write the raw (per-frame)
-                # detections to the DB — but tagged with a track_id, so a
-                # single fish that flickers across species becomes one
-                # "sighting" rather than N independent events.
+                # smoother first so each raw detection knows its track id
                 if self.smoother:
                     upd = self.smoother.update(frame_id, detections)
                     display = upd.display
@@ -246,9 +364,9 @@ class PipelineRunner:
                     except Exception:
                         log.exception("pg: saved_frame insert failed")
 
-                # publish to live buffer, rate-limited (smoothed payload for display)
+                # publish annotated (smoothed) frame for /stream.mjpeg
                 if (now_mono - last_publish) >= min_period:
-                    self._publish_live(frame_id, ts, source_name, annotated, frame, display, infer_ms)
+                    self._publish_live(frame_id, ts, source_name, annotated, display, infer_ms)
                     last_publish = now_mono
         except Exception:
             log.exception("pipeline crashed")
@@ -264,7 +382,6 @@ class PipelineRunner:
         if not detections:
             return
         prov_dict = self.provenance.as_dict() if self.provenance else {}
-        # jsonl line per detection
         for d, tid in zip(detections, track_ids):
             rec = {
                 "ts": ts.isoformat(),
@@ -295,14 +412,11 @@ class PipelineRunner:
         frame_bgr: np.ndarray,
         detections: List[FishDetection],
     ) -> None:
-        """Downsample and compute cheap per-frame stats for drift monitoring."""
-        # Resize for speed; preserves brightness/colour statistics well enough.
         small = cv2.resize(frame_bgr, (160, 90), interpolation=cv2.INTER_AREA)
         b, g, r = small[..., 0], small[..., 1], small[..., 2]
-        # BT.601 luma
         luma = 0.114 * b + 0.587 * g + 0.299 * r
         mean_luma = float(luma.mean())
-        std_luma  = float(luma.std())
+        std_luma = float(luma.std())
         mean_r, mean_g, mean_b = float(r.mean()), float(g.mean()), float(b.mean())
         num = len(detections)
         mean_conf = float(np.mean([d.det_conf for d in detections])) if num else 0.0
@@ -330,16 +444,13 @@ class PipelineRunner:
         ts: datetime,
         source_name: str,
         annotated: np.ndarray,
-        raw: np.ndarray,
         detections: List[FishDetection],
         infer_ms: float,
     ) -> None:
         jpeg_q = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality]
         ok_a, buf_a = cv2.imencode(".jpg", annotated, jpeg_q)
-        ok_r, buf_r = cv2.imencode(".jpg", raw, jpeg_q)
-        if not ok_a or not ok_r:
+        if not ok_a:
             return
-
         summary = [
             {
                 "bbox": list(d.bbox),
@@ -356,7 +467,7 @@ class PipelineRunner:
         ]
         self.live.publish(LiveFrame(
             jpeg=buf_a.tobytes(),
-            jpeg_raw=buf_r.tobytes(),
+            jpeg_raw=b"",
             frame_id=frame_id,
             ts=ts,
             source_name=source_name,
