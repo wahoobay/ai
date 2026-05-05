@@ -980,29 +980,6 @@ function renderSightingsXWater(data, paramKey) {
     ${bars}${linePath}`;
 }
 
-function renderWqHistoryGrid(latest, history) {
-  const grid = document.getElementById("chart-wq-grid");
-  if (!grid) return;
-  const series = (history && history.series) || [];
-  if (!series.length && !latest) {
-    grid.innerHTML = `<div class="empty" style="font-size:12px">no readings</div>`;
-    return;
-  }
-  const cells = WQ_PARAMS.map(p => {
-    const vals = series.map(r => r[p.key]);
-    const last = (latest && latest[p.key] != null)
-      ? latest[p.key]
-      : vals.filter(v => v != null).slice(-1)[0];
-    const txt = last != null ? p.fmt(last) : "—";
-    return `<div class="chart-wq-cell">
-      <div class="wq-cell-name">${p.label}</div>
-      <div class="wq-cell-value">${txt}<span class="wq-cell-unit">${p.unit}</span></div>
-      ${sparkline(vals, p.normal)}
-    </div>`;
-  }).join("");
-  grid.innerHTML = cells;
-}
-
 let _lastSxwData = null;
 function tickSxwParamOnly() {
   if (!_lastSxwData) return;
@@ -1011,56 +988,52 @@ function tickSxwParamOnly() {
 }
 
 function trendsActive() {
-  const t = document.getElementById("view-trends");
-  return t && !t.classList.contains("hidden");
+  const body = document.getElementById("trends-body");
+  return body && !body.classList.contains("collapsed");
 }
 
 async function tickTrends() {
-  // Skip work entirely when the user is on the Live view.
+  // Skip work entirely when the panel is collapsed.
   if (!trendsActive()) return;
   const hours = parseInt(document.getElementById("trends-window")?.value || "24", 10);
   const param = document.getElementById("chart-sxw-param")?.value || "water_temp_c";
 
-  // Snapshot first (returning visitors)
+  // Snapshot first (returning visitors get instant content)
   const cdr  = readCached(`/api/charts/detection_rate?hours=${hours}`);
   const cts  = readCached(`/api/charts/top_species_timeseries?hours=${hours}&top_n=8`);
   const csxw = readCached(`/api/charts/sightings_x_water?hours=${hours}`);
-  const cwql = readCached("/api/water_quality/latest");
-  const cwqh = readCached(`/api/water_quality/history?hours=${hours}&max_points=300`);
   if (cdr)  renderDetectionRate(cdr.data);
   if (cts)  renderTopSpeciesTimeseries(cts.data);
   if (csxw) { _lastSxwData = csxw.data; renderSightingsXWater(csxw.data, param); }
-  if (cwql || cwqh) renderWqHistoryGrid(cwql?.data || null, cwqh?.data || null);
 
   try {
-    const [dr, ts, sxw, wql, wqh] = await Promise.all([
+    const [dr, ts, sxw] = await Promise.all([
       pollWithCache(`/api/charts/detection_rate?hours=${hours}`).catch(() => null),
       pollWithCache(`/api/charts/top_species_timeseries?hours=${hours}&top_n=8`).catch(() => null),
       pollWithCache(`/api/charts/sightings_x_water?hours=${hours}`).catch(() => null),
-      pollWithCache("/api/water_quality/latest").catch(() => null),
-      pollWithCache(`/api/water_quality/history?hours=${hours}&max_points=300`).catch(() => null),
     ]);
     if (dr)  renderDetectionRate(dr);
     if (ts)  renderTopSpeciesTimeseries(ts);
     if (sxw) { _lastSxwData = sxw; renderSightingsXWater(sxw, param); }
-    if (wql || wqh) renderWqHistoryGrid(wql, wqh);
   } catch {}
 }
 
-function initViewToggle() {
-  const btn    = document.getElementById("view-toggle");
-  const live   = document.getElementById("view-live");
-  const trends = document.getElementById("view-trends");
-  if (!btn || !live || !trends) return;
-  function apply(showTrends) {
-    live.classList.toggle("hidden", showTrends);
-    trends.classList.toggle("hidden", !showTrends);
-    btn.textContent = showTrends ? "🐠 Live" : "📊 Trends";
-    localStorage.setItem("wb_view", showTrends ? "trends" : "live");
-    if (showTrends) tickTrends();
-  }
-  apply(localStorage.getItem("wb_view") === "trends");
-  btn.addEventListener("click", () => apply(trends.classList.contains("hidden")));
+function initTrendsToggle() {
+  const btn  = document.getElementById("trends-toggle");
+  const body = document.getElementById("trends-body");
+  if (!btn || !body) return;
+  // Restore previous collapse state.
+  const saved = localStorage.getItem("wb_trends_hidden") === "1";
+  if (saved) { body.classList.add("collapsed"); btn.textContent = "show"; }
+  btn.addEventListener("click", () => {
+    const collapsed = body.classList.toggle("collapsed");
+    btn.textContent = collapsed ? "show" : "hide";
+    localStorage.setItem("wb_trends_hidden", collapsed ? "1" : "0");
+    if (!collapsed) tickTrends();
+  });
+  // Handlers for the in-panel controls. Both must be bound exactly once,
+  // here, so they fire reliably (the SxW param dropdown was previously
+  // attached inside a different init path that didn't run reliably).
   document.getElementById("trends-window")?.addEventListener("change", tickTrends);
   document.getElementById("chart-sxw-param")?.addEventListener("change", tickSxwParamOnly);
 }
@@ -1069,7 +1042,7 @@ initReviewer();
 initDownloads();
 initReefToggle();
 initBboxToggle();
-initViewToggle();
+initTrendsToggle();
 refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);

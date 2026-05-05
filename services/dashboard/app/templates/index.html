@@ -16,12 +16,11 @@
       <span id="stat-infer">inference: —</span>
       <span id="stat-infer-fps">infer fps: —</span>
     </div>
-    <button id="view-toggle" class="view-toggle" title="Switch view">📊 Trends</button>
   </header>
 
   <div id="alerts-banner" class="alerts-banner hidden"></div>
 
-  <main id="view-live" class="view">
+  <main>
     <section class="stream-col">
       <div class="stream-wrap">
         <img id="stream" src="/api/stream.mjpeg" alt="live stream">
@@ -66,6 +65,51 @@
               <div class="reef-card-title">Reef conditions right now</div>
               <div id="reef-conditions" class="reef-conditions"></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="trends-panel" id="trends-panel">
+        <h2>
+          <span>Trends</span>
+          <span class="trends-header-right">
+            <select id="trends-window" class="trends-window">
+              <option value="6">6h</option>
+              <option value="24" selected>24h</option>
+              <option value="72">72h</option>
+              <option value="168">7d</option>
+              <option value="720">30d</option>
+            </select>
+            <button id="trends-toggle" class="reef-toggle">hide</button>
+          </span>
+        </h2>
+        <div id="trends-body" class="trends-body">
+          <div class="trends-grid">
+            <section class="chart-card">
+              <h2>Detections per hour <span class="chart-meta" id="chart-detection-rate-meta">—</span></h2>
+              <div class="chart-svg-wrap"><svg id="chart-detection-rate" viewBox="0 0 480 180" preserveAspectRatio="none"></svg></div>
+            </section>
+            <section class="chart-card">
+              <h2>Top species over time <span class="chart-meta" id="chart-top-species-meta">—</span></h2>
+              <div class="chart-svg-wrap"><svg id="chart-top-species" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
+              <div id="chart-top-species-legend" class="chart-legend"></div>
+            </section>
+            <section class="chart-card">
+              <h2>
+                Sightings vs water quality
+                <span class="chart-toolbar">
+                  <select id="chart-sxw-param">
+                    <option value="water_temp_c" selected>Water temp (°C)</option>
+                    <option value="ph">pH</option>
+                    <option value="do_pct">DO (% sat)</option>
+                    <option value="turbidity_fnu">Turbidity (FNU)</option>
+                    <option value="chlorophyll_rfu">Chlorophyll (RFU)</option>
+                    <option value="spcond_ms_cm">Sp. cond. (mS/cm)</option>
+                  </select>
+                </span>
+              </h2>
+              <div class="chart-svg-wrap"><svg id="chart-sxw" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
+            </section>
           </div>
         </div>
       </section>
@@ -133,50 +177,6 @@
         <div id="drift-grid" class="drift-grid"><div class="empty">collecting samples…</div></div>
       </section>
     </aside>
-  </main>
-
-  <main id="view-trends" class="view hidden">
-    <div class="trends-toolbar">
-      <span class="trends-toolbar-label">window:</span>
-      <select id="trends-window">
-        <option value="6">6h</option>
-        <option value="24" selected>24h</option>
-        <option value="72">72h</option>
-        <option value="168">7d</option>
-        <option value="720">30d</option>
-      </select>
-    </div>
-    <section class="trends-grid">
-      <section class="chart-card chart-wide">
-        <h2>Detections per hour <span class="chart-meta" id="chart-detection-rate-meta">—</span></h2>
-        <div class="chart-svg-wrap"><svg id="chart-detection-rate" viewBox="0 0 480 180" preserveAspectRatio="none"></svg></div>
-      </section>
-      <section class="chart-card chart-wide">
-        <h2>Top species over time <span class="chart-meta" id="chart-top-species-meta">—</span></h2>
-        <div class="chart-svg-wrap"><svg id="chart-top-species" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
-        <div id="chart-top-species-legend" class="chart-legend"></div>
-      </section>
-      <section class="chart-card chart-wide">
-        <h2>
-          Sightings vs water quality
-          <span class="chart-toolbar">
-            <select id="chart-sxw-param">
-              <option value="water_temp_c" selected>Water temp (°C)</option>
-              <option value="ph">pH</option>
-              <option value="do_pct">DO (% sat)</option>
-              <option value="turbidity_fnu">Turbidity (FNU)</option>
-              <option value="chlorophyll_rfu">Chlorophyll (RFU)</option>
-              <option value="spcond_ms_cm">Sp. cond. (mS/cm)</option>
-            </select>
-          </span>
-        </h2>
-        <div class="chart-svg-wrap"><svg id="chart-sxw" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
-      </section>
-      <section class="chart-card chart-wide">
-        <h2>Water quality history</h2>
-        <div id="chart-wq-grid" class="chart-wq-grid"></div>
-      </section>
-    </section>
   </main>
 
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
