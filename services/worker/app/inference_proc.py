@@ -87,11 +87,12 @@ def run_inference_worker(
     frames from `in_queue`, emits results to `out_queue`. Returns when it
     receives `SHUTDOWN`."""
     # Delayed imports: keep CUDA + heavy deps out of the parent.
+    import threading
     import cv2
 
     from .fishial import FishialPipeline
     from .overlay import annotate
-    from .persistence import EventLog, ImageSaver, PgWriter
+    from .persistence import EventLog, ImageSaver, PgWriter, SaveJob
     from .provenance import compute as compute_provenance
     from .tracker import DetectionSmoother
 
@@ -130,6 +131,40 @@ def run_inference_worker(
     frame_stats_buf: list = []
     frame_stats_flush_threshold = 30
     jpeg_q = [int(cv2.IMWRITE_JPEG_QUALITY), cfg.jpeg_quality]
+
+    # Background save-worker: takes SaveJobs off `save_queue` and does the
+    # disk I/O (encode + write JPEGs, write COCO sidecar) plus the
+    # `record_saved_frame` DB call. Bounded queue with drop-oldest if the
+    # writer falls behind — losing a saved frame is cosmetic, but stalling
+    # inference would matter.
+    SAVE_QUEUE_MAXSIZE = 8
+    save_queue: queue.Queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
+    save_worker_stop = threading.Event()
+
+    def save_worker() -> None:
+        log.info("save worker: started")
+        while True:
+            try:
+                job = save_queue.get(timeout=1.0)
+            except queue.Empty:
+                if save_worker_stop.is_set():
+                    return
+                continue
+            if job is None:
+                return
+            try:
+                saver.write(job)
+                if pg:
+                    pg.record_saved_frame(
+                        job.ts, job.frame_id, job.source_name,
+                        job.reason, str(job.img_path), str(job.coco_path),
+                        num_fish=job.n_fish,
+                    )
+            except Exception:
+                log.exception("save worker: write failed for frame_id=%d", job.frame_id)
+
+    save_thread = threading.Thread(target=save_worker, name="save-worker", daemon=True)
+    save_thread.start()
 
     def _flush_frame_stats() -> None:
         nonlocal frame_stats_buf
@@ -214,9 +249,12 @@ def run_inference_worker(
                 if pg and len(frame_stats_buf) >= frame_stats_flush_threshold:
                     _flush_frame_stats()
 
-            # Image save (annotated render uses smoothed; COCO uses raw)
+            # Image save (annotated render uses smoothed; COCO uses raw).
+            # maybe_save does the gating + state updates synchronously and
+            # returns a SaveJob; the disk-bound part is handled by the
+            # save-worker thread so this loop never blocks on I/O.
             annotated = annotate(item.frame_bgr, display) if display else item.frame_bgr
-            saved = saver.maybe_save(
+            job = saver.maybe_save(
                 frame_bgr=item.frame_bgr,
                 annotated_bgr=annotated,
                 detections=detections,
@@ -225,15 +263,16 @@ def run_inference_worker(
                 source_name=item.source_name,
                 now_mono=time.monotonic(),
             )
-            if saved and pg:
-                reason, image_path, coco_path = saved
+            if job is not None:
                 try:
-                    pg.record_saved_frame(
-                        item.ts, item.frame_id, item.source_name,
-                        reason, image_path, coco_path, num_fish=n_detections,
-                    )
-                except Exception:
-                    log.exception("pg: saved_frame insert failed")
+                    save_queue.put_nowait(job)
+                except queue.Full:
+                    # Drop-oldest: pop and re-put so the freshest save wins.
+                    try: save_queue.get_nowait()
+                    except queue.Empty: pass
+                    try: save_queue.put_nowait(job)
+                    except queue.Full: pass
+                    log.warning("save queue full; dropped a save")
 
             # Encode the annotated JPEG and ship it back. The parent
             # publishes it onto live_annotated.
@@ -275,6 +314,16 @@ def run_inference_worker(
     except Exception:
         log.exception("inference subprocess: unhandled error, exiting")
     finally:
+        # Drain pending saves before pg is closed so record_saved_frame
+        # rows for queued jobs still land. Sentinel + join with timeout.
+        try:
+            save_queue.put_nowait(None)
+        except Exception:
+            save_worker_stop.set()
+        save_thread.join(timeout=10.0)
+        if save_thread.is_alive():
+            log.warning("save worker did not drain in 10s; %d job(s) lost",
+                        save_queue.qsize())
         try:
             _flush_frame_stats()
         except Exception:

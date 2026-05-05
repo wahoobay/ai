@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -181,6 +181,26 @@ class PgWriter:
         self._pool.close()
 
 
+@dataclass
+class SaveJob:
+    """Everything the async writer needs to actually persist a frame
+    (encode JPEGs + write COCO sidecar). Built synchronously from the
+    inference loop; consumed by a background thread so disk I/O doesn't
+    stall inference. Holds the BGR ndarrays by reference — they live
+    until the writer is done with them, no copy taken."""
+    frame_bgr: object  # np.ndarray, kept lightly typed to avoid import here
+    annotated_bgr: object
+    img_path: Path
+    ann_path: Path
+    coco_path: Path
+    coco: dict
+    reason: str
+    frame_id: int
+    ts: datetime
+    source_name: str
+    n_fish: int
+
+
 class ImageSaver:
     """Handles timelapse / per-detection / interesting-only frame dumps with COCO sidecars."""
 
@@ -247,8 +267,14 @@ class ImageSaver:
         ts: datetime,
         source_name: str,
         now_mono: float,
-    ) -> Optional[tuple[str, str, str]]:
-        """Return (reason, image_path, coco_path) if saved, else None."""
+    ) -> Optional[SaveJob]:
+        """Decide whether to save and, if so, return a `SaveJob` ready for
+        a background writer to materialise. Synchronous work only — state
+        updates (`_last_timelapse`, `_species_seen_today`, etc.), path
+        construction, COCO dict building. The disk-bound part (encode +
+        write JPEGs, write COCO JSON) happens in `write()`, which the
+        caller hands to a worker thread so the inference loop never blocks
+        on disk."""
         reason = self._reason(now_mono, ts, detections)
         if reason is None:
             return None
@@ -269,9 +295,6 @@ class ImageSaver:
         ann_path = day_dir / f"{stem}.annotated.jpg"
         coco_path = day_dir / f"{stem}.coco.json"
 
-        cv2.imwrite(str(img_path), frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality])
-        cv2.imwrite(str(ann_path), annotated_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality])
-
         h, w = frame_bgr.shape[:2]
         coco = self._build_coco(
             image_path=img_path.name,
@@ -282,9 +305,26 @@ class ImageSaver:
             reason=reason,
             detections=detections,
         )
-        coco_path.write_text(json.dumps(coco, indent=2))
+        return SaveJob(
+            frame_bgr=frame_bgr,
+            annotated_bgr=annotated_bgr,
+            img_path=img_path,
+            ann_path=ann_path,
+            coco_path=coco_path,
+            coco=coco,
+            reason=reason,
+            frame_id=frame_id,
+            ts=ts,
+            source_name=source_name,
+            n_fish=len(detections),
+        )
 
-        return reason, str(img_path), str(coco_path)
+    def write(self, job: SaveJob) -> None:
+        """Materialise a SaveJob to disk. Called from a worker thread."""
+        q = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality]
+        cv2.imwrite(str(job.img_path), job.frame_bgr, q)
+        cv2.imwrite(str(job.ann_path), job.annotated_bgr, q)
+        job.coco_path.write_text(json.dumps(job.coco, indent=2))
 
     def _build_coco(
         self,
