@@ -103,8 +103,35 @@ function renderCurrent(live) {
     .join("");
 }
 
+// Rolling-window FPS: derived from frames_seen sampled at every tick().
+// Window slides over ~the last 5 s, so a sustained-rate change shows up
+// within a couple of seconds without flickering frame-to-frame.
+const _FPS_WINDOW_MS = 5000;
+let _fpsSamples = []; // [{frames, ts_ms}, ...]
+
+function computeFps(framesSeen) {
+  if (framesSeen == null) return null;
+  const now = performance.now();
+  // Worker restart → frames_seen jumps backward; drop the old window.
+  if (_fpsSamples.length && framesSeen < _fpsSamples[_fpsSamples.length - 1].frames) {
+    _fpsSamples = [];
+  }
+  _fpsSamples.push({ frames: framesSeen, ts_ms: now });
+  // Trim entries older than the window
+  while (_fpsSamples.length > 1 && (now - _fpsSamples[0].ts_ms) > _FPS_WINDOW_MS) {
+    _fpsSamples.shift();
+  }
+  if (_fpsSamples.length < 2) return null;
+  const oldest = _fpsSamples[0];
+  const dt = (now - oldest.ts_ms) / 1000;
+  if (dt < 0.4) return null; // not enough span to be meaningful
+  return (framesSeen - oldest.frames) / dt;
+}
+
 function renderStats(live, stats) {
   document.getElementById("stat-frames").textContent = `frames: ${stats.frames_seen ?? "—"}`;
+  const fps = computeFps(stats.frames_seen);
+  document.getElementById("stat-fps").textContent = `fps: ${fps == null ? "—" : fps.toFixed(1)}`;
   document.getElementById("stat-fish").textContent = `with fish: ${stats.frames_with_fish ?? "—"}`;
   document.getElementById("stat-infer").textContent = `inference: ${fmtMs(live.infer_ms)}`;
 
