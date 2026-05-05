@@ -25,6 +25,7 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
 from .alerts import SLOChecker, SLO_RULES
+from .matviews import MatviewRefresher
 from .common_names import common as common_name
 from .exports import (
     export_events,
@@ -86,6 +87,9 @@ class DashboardCfg:
         # default and you only hand the token to people who should be able
         # to submit corrections / acknowledge alerts).
         self.write_token = _env("DASHBOARD_WRITE_TOKEN", "").strip()
+        # How often to refresh species_sightings_mat. 60 s gives the dashboard
+        # near-real-time data; raise on a busy DB to reduce refresh cost.
+        self.matview_refresh_interval_s = float(_env("MATVIEW_REFRESH_INTERVAL_S", "60"))
 
 
 def build_app() -> FastAPI:
@@ -108,6 +112,7 @@ def build_app() -> FastAPI:
 
         # SLO checker runs as a background task and upserts rows into `alerts`.
         slo_task: Optional[asyncio.Task] = None
+        matview_task: Optional[asyncio.Task] = None
         if state.get("pool") is not None:
             checker = SLOChecker(
                 pool=state["pool"],
@@ -118,15 +123,26 @@ def build_app() -> FastAPI:
             state["slo"] = checker
             slo_task = asyncio.create_task(checker.run_forever(interval_s=30.0), name="slo-checker")
 
+            # Keep species_sightings_mat fresh so user-facing endpoints
+            # don't seq-scan detection_events on every request.
+            refresher = MatviewRefresher(
+                pool=state["pool"],
+                names=("species_sightings_mat",),
+                interval_s=cfg.matview_refresh_interval_s,
+            )
+            state["matviews"] = refresher
+            matview_task = asyncio.create_task(refresher.run_forever(), name="matview-refresher")
+
         try:
             yield
         finally:
-            if slo_task is not None:
-                slo_task.cancel()
-                try:
-                    await slo_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+            for t in (slo_task, matview_task):
+                if t is not None:
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
             await client.aclose()
             if state.get("pool") is not None:
                 await state["pool"].close()
@@ -271,7 +287,7 @@ def build_app() -> FastAPI:
                        max(last_seen)               AS last_seen,
                        sum(frame_count)::int        AS total_frames,
                        avg(frame_count)::real       AS mean_frames_per_track
-                  FROM species_sightings
+                  FROM species_sightings_mat
                  WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
                    AND frame_count >= %s
                  GROUP BY 1, 2
@@ -904,11 +920,11 @@ def build_app() -> FastAPI:
 
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                # Top species by sighting count (uses the species_sightings view)
+                # Top species by sighting count (matview, refreshed ~60s)
                 await cur.execute(
                     """
                     SELECT name AS latin, count(*)::int AS sightings
-                      FROM species_sightings
+                      FROM species_sightings_mat
                      WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
                        AND frame_count >= 3
                      GROUP BY 1
@@ -924,7 +940,7 @@ def build_app() -> FastAPI:
                     """
                     SELECT date_trunc('hour', first_seen) AS hour,
                            count(*)::int AS sightings
-                      FROM species_sightings
+                      FROM species_sightings_mat
                      WHERE first_seen >= NOW() - (%s::int || ' hours')::interval
                        AND frame_count >= 3
                      GROUP BY 1
@@ -954,7 +970,7 @@ def build_app() -> FastAPI:
                     """
                     SELECT count(*)::int AS sightings,
                            count(DISTINCT species_id) AS unique_species
-                      FROM species_sightings
+                      FROM species_sightings_mat
                      WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
                        AND frame_count >= 3
                     """,

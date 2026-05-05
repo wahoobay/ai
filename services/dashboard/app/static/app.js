@@ -8,6 +8,41 @@ async function poll(url) {
   return r.json();
 }
 
+// ---------- localStorage stale-while-revalidate cache ----------
+//
+// Returning visitors see the panels populated immediately from their
+// last successful response; the live fetch then replaces it. Discards
+// snapshots older than this TTL so a long-absent visitor doesn't get
+// misled by stale data — they fall back to the (now matview-backed,
+// sub-100 ms) live fetch.
+const SWR_TTL_MS = 60 * 60 * 1000;       // 1 hour
+const SWR_PREFIX = "wb_swr_";
+
+function readCached(url) {
+  try {
+    const raw = localStorage.getItem(SWR_PREFIX + url);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.ts !== "number") return null;
+    if (Date.now() - parsed.ts > SWR_TTL_MS) return null;
+    return parsed; // { data, ts }
+  } catch { return null; }
+}
+
+function writeCached(url, data) {
+  try {
+    localStorage.setItem(SWR_PREFIX + url, JSON.stringify({ data, ts: Date.now() }));
+  } catch {
+    // localStorage full / disabled — ignore, cache is best-effort
+  }
+}
+
+async function pollWithCache(url) {
+  const fresh = await poll(url);
+  writeCached(url, fresh);
+  return fresh;
+}
+
 function writeAuthHeaders() {
   const tok = (localStorage.getItem("wb_write_token") || "").trim();
   return tok ? { "Authorization": `Bearer ${tok}` } : {};
@@ -265,15 +300,21 @@ async function tick() {
 }
 
 async function tickHistory() {
+  // Render last-known-good snapshot immediately so returning visitors
+  // see populated panels on first paint; live data overwrites below.
+  const cs = readCached("/api/species_counts?hours=24");
+  const ce = readCached("/api/events?limit=25");
+  if (cs) renderSpecies(cs.data);
+  if (ce) renderEvents(ce.data);
   try {
     const [species, events] = await Promise.all([
-      poll("/api/species_counts?hours=24").catch(() => []),
-      poll("/api/events?limit=25").catch(() => []),
+      pollWithCache("/api/species_counts?hours=24").catch(() => null),
+      pollWithCache("/api/events?limit=25").catch(() => null),
     ]);
-    renderSpecies(species);
-    renderEvents(events);
+    if (species != null) renderSpecies(species);
+    if (events  != null) renderEvents(events);
   } catch (e) {
-    // ignore
+    // ignore — the cached snapshot above is what the user sees
   }
 }
 
@@ -345,14 +386,17 @@ function renderWaterQuality(latest, history) {
 }
 
 async function tickWaterQuality() {
+  const cl = readCached("/api/water_quality/latest");
+  const ch = readCached("/api/water_quality/history?hours=24&max_points=144");
+  if (cl || ch) renderWaterQuality(cl?.data ?? null, ch?.data ?? null);
   try {
     const [latest, history] = await Promise.all([
-      poll("/api/water_quality/latest").catch(() => null),
-      poll("/api/water_quality/history?hours=24&max_points=144").catch(() => null),
+      pollWithCache("/api/water_quality/latest").catch(() => null),
+      pollWithCache("/api/water_quality/history?hours=24&max_points=144").catch(() => null),
     ]);
     renderWaterQuality(latest, history);
   } catch (e) {
-    // keep previous render
+    // keep cached render
   }
 }
 
@@ -672,8 +716,16 @@ function renderTotals(t) {
 }
 
 async function tickReef() {
+  const cached = readCached("/api/visitor_stats?hours=24");
+  if (cached) {
+    const d = cached.data;
+    renderTotals(d.totals);
+    renderTopSpecies(d.top_species);
+    renderHourly(d.hourly_activity);
+    renderConditions(d.water_quality);
+  }
   try {
-    const d = await poll("/api/visitor_stats?hours=24");
+    const d = await pollWithCache("/api/visitor_stats?hours=24");
     renderTotals(d.totals);
     renderTopSpecies(d.top_species);
     renderHourly(d.hourly_activity);

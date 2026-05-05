@@ -262,7 +262,7 @@ def export_sightings(pool: AsyncConnectionPool, hours: int, min_frames: int):
                         LIMIT 3
                    ) t
                ) AS top3_species
-          FROM species_sightings s
+          FROM species_sightings_mat s
          WHERE s.last_seen >= NOW() - (%s::int || ' hours')::interval
            AND s.frame_count >= %s
          ORDER BY s.first_seen DESC

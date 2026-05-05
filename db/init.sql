@@ -255,6 +255,55 @@ SELECT track_id, source_name,
   FROM ranked
  WHERE rn = 1;
 
+-- Materialised mirror of species_sightings, refreshed periodically by the
+-- dashboard's background refresher (~60 s cadence). Use this for any
+-- user-facing dashboard endpoint or export — the live view above seq-scans
+-- the full detection_events table on every call (33 M+ rows after a few
+-- weeks → ~20 s queries) and is only acceptable for ad-hoc psql.
+CREATE MATERIALIZED VIEW IF NOT EXISTS species_sightings_mat AS
+WITH track_votes AS (
+    SELECT track_id,
+           source_name,
+           best_species_id,
+           best_name,
+           SUM(best_accuracy)         AS score,
+           COUNT(*)                   AS frame_count,
+           MIN(ts)                    AS first_seen,
+           MAX(ts)                    AS last_seen,
+           AVG(best_accuracy)::real   AS mean_accuracy,
+           MAX(best_accuracy)::real   AS peak_accuracy
+      FROM detection_events
+     WHERE track_id IS NOT NULL
+       AND best_species_id IS NOT NULL
+     GROUP BY 1, 2, 3, 4
+),
+ranked AS (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY track_id ORDER BY score DESC) AS rn
+      FROM track_votes
+)
+SELECT track_id, source_name,
+       best_species_id AS species_id,
+       best_name       AS name,
+       frame_count,
+       first_seen, last_seen,
+       mean_accuracy, peak_accuracy
+  FROM ranked
+ WHERE rn = 1
+ WITH DATA;
+
+-- Unique index is required for REFRESH MATERIALIZED VIEW CONCURRENTLY,
+-- which lets us refresh in the background without blocking reads. Each
+-- track_id appears exactly once by construction (rn = 1 above).
+CREATE UNIQUE INDEX IF NOT EXISTS species_sightings_mat_track
+  ON species_sightings_mat (track_id);
+CREATE INDEX IF NOT EXISTS species_sightings_mat_last_seen
+  ON species_sightings_mat (last_seen DESC);
+CREATE INDEX IF NOT EXISTS species_sightings_mat_species
+  ON species_sightings_mat (species_id);
+CREATE INDEX IF NOT EXISTS species_sightings_mat_first_seen
+  ON species_sightings_mat (first_seen DESC);
+
 CREATE OR REPLACE VIEW species_counts_hourly AS
     SELECT
         date_trunc('hour', ts)   AS hour,
