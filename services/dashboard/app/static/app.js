@@ -103,37 +103,45 @@ function renderCurrent(live) {
     .join("");
 }
 
-// Rolling-window FPS: derived from frames_seen sampled at every tick().
-// Window slides over ~the last 5 s, so a sustained-rate change shows up
-// within a couple of seconds without flickering frame-to-frame.
+// Rolling-window FPS: derived from a monotonically increasing counter
+// sampled at every tick(). Window slides over ~the last 5 s, so a
+// sustained-rate change shows up within a couple of seconds without
+// flickering frame-to-frame. Keyed so we can track grab and inference
+// rates independently.
 const _FPS_WINDOW_MS = 5000;
-let _fpsSamples = []; // [{frames, ts_ms}, ...]
+const _fpsSamples = new Map(); // key → [{count, ts_ms}, ...]
 
-function computeFps(framesSeen) {
-  if (framesSeen == null) return null;
+function computeFps(key, count) {
+  if (count == null) return null;
   const now = performance.now();
-  // Worker restart → frames_seen jumps backward; drop the old window.
-  if (_fpsSamples.length && framesSeen < _fpsSamples[_fpsSamples.length - 1].frames) {
-    _fpsSamples = [];
+  let samples = _fpsSamples.get(key);
+  if (!samples) {
+    samples = [];
+    _fpsSamples.set(key, samples);
   }
-  _fpsSamples.push({ frames: framesSeen, ts_ms: now });
-  // Trim entries older than the window
-  while (_fpsSamples.length > 1 && (now - _fpsSamples[0].ts_ms) > _FPS_WINDOW_MS) {
-    _fpsSamples.shift();
+  // Worker restart → counter jumps backward; drop the old window.
+  if (samples.length && count < samples[samples.length - 1].count) {
+    samples.length = 0;
   }
-  if (_fpsSamples.length < 2) return null;
-  const oldest = _fpsSamples[0];
+  samples.push({ count, ts_ms: now });
+  while (samples.length > 1 && (now - samples[0].ts_ms) > _FPS_WINDOW_MS) {
+    samples.shift();
+  }
+  if (samples.length < 2) return null;
+  const oldest = samples[0];
   const dt = (now - oldest.ts_ms) / 1000;
   if (dt < 0.4) return null; // not enough span to be meaningful
-  return (framesSeen - oldest.frames) / dt;
+  return (count - oldest.count) / dt;
 }
 
 function renderStats(live, stats) {
   document.getElementById("stat-frames").textContent = `frames: ${stats.frames_seen ?? "—"}`;
-  const fps = computeFps(stats.frames_seen);
-  document.getElementById("stat-fps").textContent = `fps: ${fps == null ? "—" : fps.toFixed(1)}`;
+  const grabFps = computeFps("grab", stats.frames_seen);
+  document.getElementById("stat-fps").textContent = `fps: ${grabFps == null ? "—" : grabFps.toFixed(1)}`;
   document.getElementById("stat-fish").textContent = `with fish: ${stats.frames_with_fish ?? "—"}`;
   document.getElementById("stat-infer").textContent = `inference: ${fmtMs(live.infer_ms)}`;
+  const inferFps = computeFps("infer", stats.frames_inferred);
+  document.getElementById("stat-infer-fps").textContent = `infer fps: ${inferFps == null ? "—" : inferFps.toFixed(1)}`;
 
   // Toggle fallback / "demo mode" banner based on autoswitch state.
   const banner = document.getElementById("fallback-banner");
