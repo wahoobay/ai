@@ -24,9 +24,14 @@ from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import Config
-from .fishial import FishialPipeline
-from .persistence import EventLog, ImageSaver, PgWriter
-from .pipeline import FrameTap, LatestSlot, LiveBuffer, PipelineRunner, PipelineStats
+from .persistence import PgWriter
+from .pipeline import (
+    FrameTap,
+    InferenceClient,
+    LiveBuffer,
+    PipelineStats,
+    spawn_inference,
+)
 from .provenance import compute as compute_provenance
 from .ptz import PTZPoller
 from .sources import _strip_creds, source_from_config
@@ -48,69 +53,67 @@ class WorkerApp:
         # source's native fps. Viewers toggle between them via /stream{,_raw}.
         self.live = LiveBuffer()
         self.live_raw = LiveBuffer()
-        self.slot = LatestSlot()
         self.stats = PipelineStats()
         self.source = None
         self.tap: FrameTap | None = None
-        self.runner: PipelineRunner | None = None
+        self.infer: InferenceClient | None = None
         self.ptz: PTZPoller | None = None
+        self._ptz_pg: PgWriter | None = None
 
     def start(self) -> None:
         cfg = self.cfg
         log.info("starting worker: source=%s device=%s", _strip_creds(cfg.video_source), cfg.device)
 
-        provenance = compute_provenance(cfg)
-
-        fishial = FishialPipeline(cfg)
         self.source = source_from_config(cfg)
-        event_log = EventLog(cfg.events_log_dir)
-        saver = ImageSaver(cfg)
 
-        pg: PgWriter | None = None
-        try:
-            pg = PgWriter(cfg.database_url, provenance=provenance)
-            log.info("postgres connected: %s", cfg.database_url.split("@")[-1])
-        except Exception as e:
-            log.warning("postgres unavailable (%s); continuing with jsonl-only", e)
-            pg = None
+        # Spawn the inference subprocess BEFORE we open any DB / source
+        # handles in this process: the subprocess will inherit nothing
+        # (spawn-context, fresh interpreter), and the parent stays
+        # CUDA-free. Returns an InferenceClient bound to the subprocess's
+        # in/out queues.
+        self.infer = spawn_inference(
+            cfg=cfg,
+            live_annotated=self.live,
+            stats=self.stats,
+        )
+        self.infer.start()
 
-        # Frame-grabber thread owns the source. Keeps raw MJPEG flowing at
-        # native fps regardless of how slow inference is.
+        # Frame-grabber thread owns the source and dispatches non-fallback
+        # frames to the inference subprocess via the in-queue.
         self.tap = FrameTap(
             cfg=cfg,
             source=self.source,
             live_raw=self.live_raw,
-            slot=self.slot,
+            live_annotated=self.live,
+            in_queue=self.infer.in_queue,
             stats=self.stats,
         )
         self.tap.start()
 
-        # Inference thread consumes whatever frame is currently in the slot;
-        # intermediate frames are dropped if it can't keep up.
-        self.runner = PipelineRunner(
-            cfg=cfg,
-            fishial=fishial,
-            live=self.live,
-            slot=self.slot,
-            stats=self.stats,
-            pg=pg,
-            event_log=event_log,
-            saver=saver,
-            provenance=provenance,
-        )
-        self.runner.start()
-
-        if pg is not None:
-            self.ptz = PTZPoller(cfg, pg)
-            self.ptz.start()
+        # PTZ poller is the only thing in the parent process that talks to
+        # Postgres. The inference subprocess has its own pg connection for
+        # detection events, frame_stats, and saved_frames.
+        if cfg.ptz_poll_enabled:
+            try:
+                provenance = compute_provenance(cfg)
+                self._ptz_pg = PgWriter(cfg.database_url, provenance=provenance)
+                self.ptz = PTZPoller(cfg, self._ptz_pg)
+                self.ptz.start()
+            except Exception as e:
+                log.warning("PTZ poller startup failed (%s); skipping", e)
 
     def stop(self) -> None:
         if self.ptz:
             self.ptz.stop()
-        if self.runner:
-            self.runner.stop()
+        if self._ptz_pg:
+            try:
+                self._ptz_pg.close()
+            except Exception:
+                pass
         if self.tap:
             self.tap.stop()
+        if self.infer:
+            self.infer.stop()
 
 
 def build_app(cfg: Config | None = None) -> FastAPI:
@@ -166,7 +169,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/stats")
     async def stats() -> dict:
-        s = worker.stats if worker.runner else None
+        s = worker.stats if worker.infer else None
         if s is None:
             return {"running": False}
         # autoswitch state (if AutoswitchSource is active)
