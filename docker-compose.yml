@@ -1,12 +1,31 @@
+# Local-development docker-compose for the Wahoo Bay fish-ID stack.
+#
+# Brings up Postgres + worker + dashboard + sensestream poller, all
+# bound to 127.0.0.1 only (reach from a laptop via SSH tunnel). The
+# DGX bare-metal `scripts/dev/run_*.sh` flow continues to work
+# unchanged — this is an additive option for fresh contributors and a
+# stepping stone toward AWS deployment.
+#
+# Quick start:   make up      (docker compose up -d)
+# Logs:          make logs    (follow all services)
+# Shell into pg: make psql
+# Tear down:     make down
+#
+# .env at repo root drives runtime config (RTSP URLs, GPU pin, etc.);
+# values like DATABASE_URL are overridden below to point at the
+# in-network postgres service instead of localhost.
+
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: wahoobay
       POSTGRES_PASSWORD: wahoobay
       POSTGRES_DB: wahoobay
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # init.sql runs once on first boot of an empty pgdata volume.
+      # Fully idempotent so repeated bind-mount runs are safe.
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wahoobay -d wahoobay"]
@@ -25,42 +44,57 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
+      # In-network DB hostname overrides whatever's in .env.
       DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
+      # Container-internal paths the app writes to. Bind-mounts below
+      # land them on host disk for inspection / persistence.
       EVENTS_LOG_DIR: /data/logs/events
       FRAMES_DIR: /data/frames
-      VIDEO_SOURCE: file:///data/test_videos
     volumes:
+      # Mount host models on top of the baked layer — dev users can swap
+      # weights without rebuilding the image. Strip this in production.
+      - ./data/models:/data/models:ro
+      # Playlist fallback content (autoswitch falls back here when the
+      # camera goes dark). Read-only.
       - ./data/test_videos:/data/test_videos:ro
+      # Per-frame artifacts and JSONL audit log persist on host disk.
       - ./frames:/data/frames
       - ./logs:/data/logs
-    runtime: nvidia
+    # GPU passthrough. .env's CUDA_VISIBLE_DEVICES picks which physical
+    # GPU is exposed; inside the container it always shows up as cuda:0
+    # (the existing run_worker.sh comment explains why).
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
-    expose:
-      - "8081"
-    # Expose to host only for debugging; dashboard proxies in prod.
     ports:
+      # Dashboard reaches the worker via in-network DNS; this binding is
+      # for direct-poke debugging only (curl /stats, /healthz from host).
       - "127.0.0.1:8081:8081"
+    restart: unless-stopped
 
   dashboard:
     build:
       context: .
       dockerfile: services/dashboard/Dockerfile
     depends_on:
-      - worker
-      - postgres
+      postgres:
+        condition: service_healthy
+      worker:
+        condition: service_started
     env_file: .env
     environment:
-      WORKER_URL: http://worker:8081
       DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
+      WORKER_URL: http://worker:8081
+      POLLER_URL: http://sensestream-poller:8082
     ports:
-      # bind to localhost only; reach from laptop via SSH tunnel
-      - "127.0.0.1:18080:8080"
+      # Bind to 127.0.0.1 only; expose externally via Cloudflare tunnel
+      # or a reverse-proxy + TLS terminator in production.
+      - "127.0.0.1:18080:18080"
+    restart: unless-stopped
 
   sensestream-poller:
     build:
@@ -72,10 +106,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
-    expose:
-      - "8082"
     ports:
       - "127.0.0.1:8082:8082"
+    restart: unless-stopped
 
 volumes:
   pgdata:

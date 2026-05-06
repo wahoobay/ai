@@ -197,6 +197,82 @@ Both app services expose `/healthz` + `/readyz` for orchestrator probes.
 3. Validate parity with DGX outputs for ~1 week (same detections, same DB schema, same image outputs).
 4. Cut camera ingest over to KVS, decommission DGX service (or keep as warm standby).
 
+## Deployment-grade rollout
+
+Phased build-out of the dev → CI → CD → production → MLOps story. Each
+phase is a checkpoint we can stop at without breaking anything that
+came before. Decisions agreed 2026-05-05:
+- Long-term home: AWS; for now, keep everything on the DGX.
+- Secrets: `.env` for now → GitHub Actions secrets in CI →
+  AWS Secrets Manager / SSM Parameter Store at runtime.
+- Container registry: GHCR.
+- Public domain: `wahoobay.org` subdomain eventually, not yet.
+- Kafka: deferred; revisit when scale or fan-out justifies it.
+
+### Phase 1 — Containerise (in progress)
+
+| File | Purpose |
+|---|---|
+| `services/worker/Dockerfile` | CUDA 12.4 runtime, models baked, GPU passthrough |
+| `services/dashboard/Dockerfile` | python:3.11-slim, exposes 18080 |
+| `services/sensestream_poller/Dockerfile` | python:3.11-slim, COPYs `scripts/gen_synthetic_sensor_data.py` for stub-mode synthetic |
+| `services/*/requirements.txt` | Pinned to the DGX conda env's working set (2026-05-05) |
+| `docker-compose.yml` | Postgres + worker + dashboard + poller, all bound to 127.0.0.1, GPU on worker via `deploy.resources.reservations.devices` |
+| `.dockerignore` | Keeps `pgdata/`, `frames/`, `logs/`, secrets, model zips out of build context |
+| `Makefile` | `make up / down / build / logs / psql / worker-logs / ...` |
+
+**The DGX bare-metal `scripts/dev/run_*.sh` flow continues to work
+unchanged** — Phase 1 is additive. Once the compose stack is verified,
+PR review + CI work in Phase 2 can run against it.
+
+**Phase 1 blocker (DGX-side, one-time):** the user account isn't in
+the `docker` group. Fix:
+```bash
+sudo usermod -aG docker $USER
+# log out + back in (or `newgrp docker`)
+```
+After that, `make up` works.
+
+### Phase 2 — GitHub Actions CI
+
+ruff / black / mypy / pytest matrix, multi-arch container build on every
+PR (with cache), push to GHCR on merge to main, image vulnerability
+scan via Trivy. Branch protection on `main`.
+
+### Phase 3 — Prometheus + Grafana
+
+`prometheus_client` instrumentation in worker / dashboard / poller,
+`/metrics` endpoints, scrape config. Grafana dashboards for: worker
+fps + GPU + inference latency, dashboard request rate / errors,
+Postgres health, business metrics (sightings/hr, model accuracy from
+corrections). Alertmanager replaces the current ad-hoc `alerts` table
+SLO checker.
+
+### Phase 4 — CD to staging
+
+GitHub Actions deploy job, secrets via GitHub → AWS Secrets Manager,
+blue/green or rolling deploy on a single GPU EC2 (worker) +
+ECS Fargate (dashboard, poller, optional Postgres) with automatic
+rollback on healthcheck failure.
+
+### Phase 5 — Production
+
+Same as staging plus persistent domain, TLS, durable Postgres
+(RDS or self-hosted on EBS), S3-backed frame storage, retention policy,
+on-call escalation.
+
+### Phase 6 — MLOps pipeline
+
+Reviewer-correction threshold trigger → fine-tune job → eval-set gate
+(must beat current per-class P/R) → model registry → blue/green model
+swap with provenance fingerprint.
+
+### Phase 7 — Kafka (deferred)
+
+Adds replayability and horizontal fan-out. Revisit when (a) we add
+multiple cameras, (b) we want a real-time analytics path that doesn't
+touch the OLTP DB, or (c) we want event replay for ML feature backfills.
+
 ## Inference performance backlog
 
 After moving inference into a separate OS process (commit fdcf70a), the

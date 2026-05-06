@@ -1,0 +1,58 @@
+# Keep build context lean. Anything in here doesn't get sent to the
+# Docker daemon, which speeds builds and prevents accidentally baking
+# secrets / large artifacts into images.
+
+# secrets
+.env
+.env.*
+.dashboard_write_token
+*.token
+
+# version control
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# editor / tooling
+.vscode/
+.idea/
+.claude/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# data the image shouldn't pull in
+# (worker Dockerfile selectively COPYs data/models/{detector_v26,classifier_v0_10_2}
+# and dashboard Dockerfile COPYs data/camera_metadata.json — those still work
+# because they're explicit COPY paths, not wildcards.)
+data/test_videos/
+data/synthetic/
+data/models/*.zip
+
+# runtime artifacts
+pgdata/
+pgdata.*/
+frames/
+logs/
+eval/reports/
+
+# docs / scratch (keep db/init.sql etc — they're not .md)
+docs/
+README.md
+PLAN.md
+backups/
+
+# screenshots / random images at repo root
+/*.png
+/*.jpg

@@ -1,16 +1,36 @@
 # Runtime deps for the inference worker.
-# torch/torchvision are installed from the CUDA index in the Dockerfile.
-ultralytics>=8.3.0
-albumentations==2.0.8
+# Versions pinned to what the DGX conda env runs successfully (2026-05-05).
+# torch/torchvision come from PyTorch's CUDA 12.4 wheel index.
+
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+# --- inference -------------------------------------------------------------
+torch==2.4.1+cu124
+torchvision==0.19.1+cu124
+ultralytics==8.4.37
+
+# --- vendored Fishial classifier deps (mounted under /data/models) ---------
 timm==1.0.15
-opencv-python-headless>=4.10
-Pillow>=10
-numpy<2
-scipy
-joblib
-fastapi[standard]>=0.115
-uvicorn[standard]>=0.30
-psycopg[binary,pool]>=3.2
-pydantic>=2
-python-multipart
-pyyaml
+albumentations==2.0.8
+faiss-cpu==1.9.0
+scipy==1.17.1
+joblib==1.5.2
+pillow==12.1.1
+
+# --- video / image i/o -----------------------------------------------------
+# headless build: no GTK/Qt, smaller image, avoids X11 deps. FFmpeg is
+# bundled so RTSP/H.264 decoding still works.
+opencv-python-headless==4.13.0.92
+numpy==2.4.3
+
+# --- HTTP layer ------------------------------------------------------------
+fastapi==0.135.3
+uvicorn==0.44.0
+pydantic==2.13.0
+starlette==1.0.0
+anyio==4.13.0
+python-multipart==0.0.26
+pyyaml==6.0.3
+
+# --- persistence -----------------------------------------------------------
+psycopg[binary,pool]==3.3.3

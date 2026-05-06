@@ -1052,8 +1052,12 @@ def build_app() -> FastAPI:
 
     @app.get("/api/export/camera_metadata.json")
     async def export_camera_metadata() -> Response:
-        # Try the repo-root location first (where humans edit it).
+        # Try several candidates so this works in:
+        #   - bare-metal DGX dev: file lives in repo root
+        #   - container: file is COPYed to /data/camera_metadata.json
+        #   - any other layout: relative to dashboard's BASE_DIR
         for candidate in (
+            Path("/data/camera_metadata.json"),
             Path("/raid/scratch/dzimmerman2021/wahoobay/data/camera_metadata.json"),
             BASE_DIR / "data" / "camera_metadata.json",
         ):
