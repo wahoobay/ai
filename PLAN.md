@@ -233,11 +233,36 @@ sudo usermod -aG docker $USER
 ```
 After that, `make up` works.
 
-### Phase 2 — GitHub Actions CI
+### Phase 2 — GitHub Actions CI (in progress)
 
-ruff / black / mypy / pytest matrix, multi-arch container build on every
-PR (with cache), push to GHCR on merge to main, image vulnerability
-scan via Trivy. Branch protection on `main`.
+| File | Purpose |
+|---|---|
+| `pyproject.toml` | ruff + pytest config; not a packaged distribution. |
+| `.github/workflows/ci.yml` | lint → smoke-test → build-image matrix on every push and PR. Pushes images to GHCR on `main` + on `v*` tags. |
+| `tests/test_dashboard_stats.py` | first real pytest entries — boundary tests for the bootstrap-CI helpers. |
+
+**Lint state:** `ruff check` passes cleanly across the codebase
+(282 issues fixed in the autofix pass; 26 remaining issues fixed by
+hand). `ruff format --check` is **not** enabled in CI yet — there's
+~3 k lines of pending whitespace/wrap churn we'll land as one
+dedicated formatting commit when there's a quiet window.
+
+**Image build strategy:** workflow matrix builds dashboard + poller +
+worker on every push. Worker uses placeholder model files in CI so
+the COPY layer succeeds without committing 400 MB of weights to git;
+the real bundle is fetched at deploy time. Buildx GHA cache is scoped
+per-service so the worker's CUDA layers don't evict slim base layers.
+
+**GHCR image names:**
+```
+ghcr.io/<owner>/<repo>-dashboard:{main,sha-XXXX,vX.Y.Z}
+ghcr.io/<owner>/<repo>-sensestream_poller:{main,sha-XXXX,vX.Y.Z}
+ghcr.io/<owner>/<repo>-worker:{main,sha-XXXX,vX.Y.Z}
+```
+
+**Deferred to later:** mypy (would require typing the existing code
+which is partial), Trivy vulnerability scan (warning-only first), branch
+protection rules (configured at the GitHub-org level, not in repo files).
 
 ### Phase 3 — Prometheus + Grafana
 

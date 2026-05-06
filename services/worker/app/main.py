@@ -11,13 +11,11 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import signal
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import uvicorn
 from fastapi import FastAPI, Response

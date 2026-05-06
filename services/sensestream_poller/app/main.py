@@ -32,11 +32,12 @@ import logging
 import os
 import sys
 import time
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterable, Optional
+from typing import Any
 
 import httpx
 import psycopg
@@ -93,7 +94,7 @@ class Config:
     log_level: str
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         return cls(
             base_url=_env("SENSESTREAM_BASE_URL", "https://api.sensestream.org").rstrip("/"),
             auth_token=_env("SENSESTREAM_AUTH_TOKEN", ""),
@@ -145,7 +146,7 @@ COLUMNS_ORDER = (
 )
 
 
-def _normalize_channel(name: str) -> Optional[str]:
+def _normalize_channel(name: str) -> str | None:
     key = name.strip().lower()
     return CHANNEL_TO_COLUMN.get(key)
 
@@ -190,13 +191,13 @@ def parse_observations(payload: Any) -> list[tuple[datetime, dict]]:
         if t is None:
             continue
         try:
-            if isinstance(t, (int, float)):
+            if isinstance(t, int | float):
                 # assume ms if value is large; else seconds
-                ts = datetime.fromtimestamp((t / 1000.0) if t > 1e12 else t, tz=timezone.utc)
+                ts = datetime.fromtimestamp((t / 1000.0) if t > 1e12 else t, tz=UTC)
             else:
                 ts = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                    ts = ts.replace(tzinfo=UTC)
         except Exception:
             continue
 
@@ -207,7 +208,7 @@ def parse_observations(payload: Any) -> list[tuple[datetime, dict]]:
         if isinstance(channels, dict):
             for k, v in channels.items():
                 col = _normalize_channel(str(k))
-                if col and isinstance(v, (int, float)):
+                if col and isinstance(v, int | float):
                     values[col] = float(v)
 
         # form 2b: list of {name, value}
@@ -221,7 +222,7 @@ def parse_observations(payload: Any) -> list[tuple[datetime, dict]]:
                 if name is None or val is None:
                     continue
                 col = _normalize_channel(str(name))
-                if col and isinstance(val, (int, float)):
+                if col and isinstance(val, int | float):
                     values[col] = float(val)
 
         # form 1: positional readings (fallback; only used if the first two yielded nothing)
@@ -245,16 +246,16 @@ def parse_observations(payload: Any) -> list[tuple[datetime, dict]]:
 
 @dataclass
 class PollerStats:
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_probe_ok_at: Optional[datetime] = None
-    last_fetch_attempt_at: Optional[datetime] = None
-    last_insert_at: Optional[datetime] = None
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_probe_ok_at: datetime | None = None
+    last_fetch_attempt_at: datetime | None = None
+    last_insert_at: datetime | None = None
     last_error: str = ""
     total_inserted: int = 0
     running: bool = False
     token_configured: bool = False
-    deployment_active: Optional[bool] = None
-    last_status_code: Optional[int] = None
+    deployment_active: bool | None = None
+    last_status_code: int | None = None
 
 
 class Poller:
@@ -281,7 +282,7 @@ class Poller:
                 delay = max(1.0, self.cfg.poll_interval_s - elapsed)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
         self.stats.running = False
 
@@ -303,7 +304,7 @@ class Poller:
     def _upsert_synthetic_window(self) -> None:
         if not _SYNTH_OK:
             return
-        end = datetime.now(timezone.utc).replace(microsecond=0, second=0)
+        end = datetime.now(UTC).replace(microsecond=0, second=0)
         # First time we run in this process, backfill 30 days; afterward
         # just refresh the trailing 2 hours (a couple of new samples per
         # tick at the 10-min sonde cadence).
@@ -328,7 +329,7 @@ class Poller:
         keys = ("water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
                 "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm")
         for i in range(n):
-            t = datetime.utcfromtimestamp(int(arrays["ts"][i].astype("int64"))).replace(tzinfo=timezone.utc)
+            t = datetime.utcfromtimestamp(int(arrays["ts"][i].astype("int64"))).replace(tzinfo=UTC)
             rows.append((t, {k: float(arrays[k][i]) for k in keys}))
         try:
             inserted = self._upsert(rows, source="synthetic")
@@ -337,7 +338,7 @@ class Poller:
             return
         self.stats.total_inserted += inserted
         if inserted:
-            self.stats.last_insert_at = datetime.now(timezone.utc)
+            self.stats.last_insert_at = datetime.now(UTC)
         log.info("synthetic stub: upserted %d row(s) over %d %s window (total=%d)",
                  inserted, days_or_hours[0], days_or_hours[1], self.stats.total_inserted)
 
@@ -350,7 +351,7 @@ class Poller:
                 j = r.json()
                 result = j.get("result") or {}
                 self.stats.deployment_active = bool(result.get("active"))
-                self.stats.last_probe_ok_at = datetime.now(timezone.utc)
+                self.stats.last_probe_ok_at = datetime.now(UTC)
                 if not self.stats.deployment_active:
                     log.warning("deployment %s is not active", self.cfg.deployment_uri)
             else:
@@ -361,7 +362,7 @@ class Poller:
 
     async def _fetch_and_store(self, client: httpx.AsyncClient) -> None:
         cfg = self.cfg
-        self.stats.last_fetch_attempt_at = datetime.now(timezone.utc)
+        self.stats.last_fetch_attempt_at = datetime.now(UTC)
 
         end_ms = int(time.time() * 1000)
         start_ms = end_ms - cfg.backfill_minutes * 60 * 1000
@@ -391,10 +392,10 @@ class Poller:
 
         inserted = self._upsert(rows)
         self.stats.total_inserted += inserted
-        self.stats.last_insert_at = datetime.now(timezone.utc)
+        self.stats.last_insert_at = datetime.now(UTC)
         log.info("inserted %d rows (total=%d)", inserted, self.stats.total_inserted)
 
-    def _upsert(self, rows: Iterable[tuple[datetime, dict]], source: Optional[str] = None) -> int:
+    def _upsert(self, rows: Iterable[tuple[datetime, dict]], source: str | None = None) -> int:
         cfg = self.cfg
         src = source if source is not None else cfg.source_tag
         payload = []

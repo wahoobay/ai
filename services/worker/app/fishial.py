@@ -11,7 +11,6 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 import torch
@@ -23,7 +22,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class Prediction:
     name: str
-    species_id: Optional[str]
+    species_id: str | None
     accuracy: float
 
 
@@ -31,10 +30,10 @@ class Prediction:
 class FishDetection:
     bbox: tuple[int, int, int, int]
     det_conf: float
-    topk: List[Prediction]
+    topk: list[Prediction]
 
     @property
-    def best(self) -> Optional[Prediction]:
+    def best(self) -> Prediction | None:
         return self.topk[0] if self.topk else None
 
 
@@ -57,7 +56,7 @@ class _AutocastForward:
             out = self._inner(x)
         # cast tensor outputs back to fp32 for compatibility with the
         # downstream scoring path (centroid scatter_reduce, KNN)
-        if isinstance(out, (list, tuple)):
+        if isinstance(out, list | tuple):
             return type(out)(o.float() if torch.is_tensor(o) else o for o in out)
         return out.float() if torch.is_tensor(out) else out
 
@@ -115,7 +114,7 @@ class FishialPipeline:
             self.device,
         )
 
-    def _autocast_dtype(self) -> Optional[torch.dtype]:
+    def _autocast_dtype(self) -> torch.dtype | None:
         m = (self.cfg.classifier_autocast or "off").strip().lower()
         if m in ("off", "none", "fp32", "float32", ""):
             return None
@@ -126,7 +125,7 @@ class FishialPipeline:
         log.warning("unknown CLASSIFIER_AUTOCAST=%r; falling back to fp32", m)
         return None
 
-    def process_frame(self, frame_bgr: np.ndarray) -> List[FishDetection]:
+    def process_frame(self, frame_bgr: np.ndarray) -> list[FishDetection]:
         t0 = time.time()
         r = self.detector.predict(
             source=frame_bgr,
@@ -164,14 +163,14 @@ class FishialPipeline:
             )
             if not isinstance(results, list):
                 results = [results]
-            for i, fr in zip(keep_idx, results):
+            for i, fr in zip(keep_idx, results, strict=False):
                 results_by_idx[i] = fr
         t2 = time.time()
 
-        out: List[FishDetection] = []
+        out: list[FishDetection] = []
         for i, box in enumerate(boxes):
             x1, y1, x2, y2, conf, _cls = box.tolist()
-            topk: List[Prediction] = []
+            topk: list[Prediction] = []
             fr = results_by_idx.get(i)
             if fr is not None:
                 for p in fr.top_k:

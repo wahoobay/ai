@@ -10,15 +10,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone, date
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 import cv2
-import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -32,7 +30,7 @@ class EventLog:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._current_day: Optional[date] = None
+        self._current_day: date | None = None
         self._fh = None
 
     def _rotate(self, now: datetime) -> None:
@@ -46,7 +44,7 @@ class EventLog:
         self._current_day = today
 
     def write(self, record: dict) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._lock:
             self._rotate(now)
             self._fh.write(json.dumps(record, separators=(",", ":")) + "\n")
@@ -59,11 +57,11 @@ class EventLog:
 
 
 class PgWriter:
-    def __init__(self, dsn: str, provenance: Optional[object] = None) -> None:
+    def __init__(self, dsn: str, provenance: object | None = None) -> None:
         self._pool = ConnectionPool(dsn, min_size=1, max_size=4, open=True)
         self._prov = provenance  # app.provenance.Provenance or None
 
-    def _prov_tuple(self) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
+    def _prov_tuple(self) -> tuple[str | None, str | None, str | None, str | None, str | None]:
         p = self._prov
         if p is None:
             return (None, None, None, None, None)
@@ -75,15 +73,15 @@ class PgWriter:
         frame_id: int,
         source_name: str,
         detections: Iterable,
-        track_ids: Optional[list] = None,
-        image_path: Optional[str] = None,
+        track_ids: list | None = None,
+        image_path: str | None = None,
     ) -> None:
         mv, dsha, csha, cfghash, gitsha = self._prov_tuple()
         detections = list(detections)
         if track_ids is None:
             track_ids = [None] * len(detections)
         rows = []
-        for d, tid in zip(detections, track_ids):
+        for d, tid in zip(detections, track_ids, strict=False):
             best = d.best
             rows.append((
                 ts, frame_id, source_name,
@@ -142,10 +140,10 @@ class PgWriter:
         self,
         ts: datetime,
         source_name: str,
-        pan_deg: Optional[float],
-        tilt_deg: Optional[float],
-        zoom: Optional[float],
-        raw: Optional[dict],
+        pan_deg: float | None,
+        tilt_deg: float | None,
+        zoom: float | None,
+        raw: dict | None,
         poll_method: str,
     ) -> None:
         _mv, _dsha, _csha, cfghash, _gitsha = self._prov_tuple()
@@ -211,18 +209,18 @@ class ImageSaver:
         self._last_timelapse = 0.0
         self._last_any_save_ts = 0.0
         self._species_seen_today: set[str] = set()
-        self._today: Optional[date] = None
+        self._today: date | None = None
         self._annotation_id = 0
         # COCO category ids are assigned lazily as species are seen.
         self._category_ids: dict[str, int] = {}
 
     def _reset_today(self, ts: datetime) -> None:
-        d = ts.astimezone(timezone.utc).date()
+        d = ts.astimezone(UTC).date()
         if d != self._today:
             self._today = d
             self._species_seen_today = set()
 
-    def _reason(self, now_mono: float, ts: datetime, detections: list) -> Optional[str]:
+    def _reason(self, now_mono: float, ts: datetime, detections: list) -> str | None:
         self._reset_today(ts)
         cfg = self.cfg
 
@@ -267,7 +265,7 @@ class ImageSaver:
         ts: datetime,
         source_name: str,
         now_mono: float,
-    ) -> Optional[SaveJob]:
+    ) -> SaveJob | None:
         """Decide whether to save and, if so, return a `SaveJob` ready for
         a background writer to materialise. Synchronous work only — state
         updates (`_last_timelapse`, `_species_seen_today`, etc.), path

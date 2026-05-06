@@ -31,9 +31,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
-from urllib.parse import urlparse
+from datetime import UTC, datetime
 
 import httpx
 
@@ -42,13 +40,13 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class PTZPollerStats:
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     poll_count:    int = 0
     success_count: int = 0
-    last_success_at: Optional[datetime] = None
-    last_pan_deg:  Optional[float] = None
-    last_tilt_deg: Optional[float] = None
-    last_zoom:     Optional[float] = None
+    last_success_at: datetime | None = None
+    last_pan_deg:  float | None = None
+    last_tilt_deg: float | None = None
+    last_zoom:     float | None = None
     last_error:    str = ""
     enabled:       bool = False
 
@@ -58,7 +56,7 @@ class PTZPoller:
         self.cfg = cfg
         self.pg  = pg
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self.stats = PTZPollerStats(enabled=cfg.ptz_poll_enabled and bool(cfg.ptz_poll_url))
 
     def start(self) -> None:
@@ -110,7 +108,7 @@ class PTZPoller:
         if state is None:
             return
 
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         try:
             self.pg.record_ptz_state(
                 ts=ts,
@@ -133,7 +131,7 @@ class PTZPoller:
         self.stats.last_error    = ""
 
     @staticmethod
-    def _poll_vapix(client: httpx.Client) -> Optional[dict]:
+    def _poll_vapix(client: httpx.Client) -> dict | None:
         # cfg.ptz_poll_url contains creds + path; httpx handles userinfo natively
         # (the caller passes the full URL string into ptz_poll_url).
         # We need the URL on the instance; read via `self`. Method is static for
@@ -160,7 +158,7 @@ def _parse_vapix_response(text: str) -> dict:
     return parsed
 
 
-def _vapix_state(client: httpx.Client, url: str) -> Optional[dict]:
+def _vapix_state(client: httpx.Client, url: str) -> dict | None:
     r = client.get(url)
     if r.status_code != 200:
         return None
@@ -169,15 +167,15 @@ def _vapix_state(client: httpx.Client, url: str) -> Optional[dict]:
     tilt = parsed.get("tilt")
     zoom = parsed.get("zoom")
     return {
-        "pan_deg":  float(pan)  if isinstance(pan,  (int, float)) else None,
-        "tilt_deg": float(tilt) if isinstance(tilt, (int, float)) else None,
-        "zoom":     float(zoom) if isinstance(zoom, (int, float)) else None,
+        "pan_deg":  float(pan)  if isinstance(pan,  int | float) else None,
+        "tilt_deg": float(tilt) if isinstance(tilt, int | float) else None,
+        "zoom":     float(zoom) if isinstance(zoom, int | float) else None,
         "raw": parsed,
     }
 
 
 # Wire the static-method placeholder to the actual implementation
-def _poll_vapix(self, client: httpx.Client) -> Optional[dict]:
+def _poll_vapix(self, client: httpx.Client) -> dict | None:
     return _vapix_state(client, self.cfg.ptz_poll_url)
 
 

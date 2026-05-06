@@ -36,9 +36,8 @@ import multiprocessing as mp
 import os
 import queue
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
+from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 
@@ -79,8 +78,8 @@ SHUTDOWN = object()
 
 def run_inference_worker(
     cfg,
-    in_queue: "mp.Queue",
-    out_queue: "mp.Queue",
+    in_queue: mp.Queue,
+    out_queue: mp.Queue,
     ready_event,
 ) -> None:
     """Subprocess entry point. Initialises models + persistence, drains
@@ -88,11 +87,12 @@ def run_inference_worker(
     receives `SHUTDOWN`."""
     # Delayed imports: keep CUDA + heavy deps out of the parent.
     import threading
+
     import cv2
 
     from .fishial import FishialPipeline
     from .overlay import annotate
-    from .persistence import EventLog, ImageSaver, PgWriter, SaveJob
+    from .persistence import EventLog, ImageSaver, PgWriter
     from .provenance import compute as compute_provenance
     from .tracker import DetectionSmoother
 
@@ -108,14 +108,14 @@ def run_inference_worker(
     event_log = EventLog(cfg.events_log_dir)
     saver = ImageSaver(cfg)
 
-    pg: Optional[PgWriter] = None
+    pg: PgWriter | None = None
     try:
         pg = PgWriter(cfg.database_url, provenance=provenance)
         log.info("inference subprocess: postgres connected")
     except Exception as e:
         log.warning("postgres unavailable in inference subprocess (%s); jsonl-only", e)
 
-    smoother: Optional[DetectionSmoother] = None
+    smoother: DetectionSmoother | None = None
     if cfg.tracker_enabled:
         smoother = DetectionSmoother(
             window=cfg.tracker_window,
@@ -213,7 +213,7 @@ def run_inference_worker(
             # Persist raw events tagged with their track ids
             if detections:
                 prov_dict = provenance.as_dict() if provenance else {}
-                for d, tid in zip(detections, track_ids):
+                for d, tid in zip(detections, track_ids, strict=False):
                     rec = {
                         "ts": item.ts.isoformat(),
                         "frame_id": item.frame_id,
@@ -268,10 +268,14 @@ def run_inference_worker(
                     save_queue.put_nowait(job)
                 except queue.Full:
                     # Drop-oldest: pop and re-put so the freshest save wins.
-                    try: save_queue.get_nowait()
-                    except queue.Empty: pass
-                    try: save_queue.put_nowait(job)
-                    except queue.Full: pass
+                    try:
+                        save_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        save_queue.put_nowait(job)
+                    except queue.Full:
+                        pass
                     log.warning("save queue full; dropped a save")
 
             # Encode the annotated JPEG and ship it back. The parent

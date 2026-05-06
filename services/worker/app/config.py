@@ -107,7 +107,7 @@ class Config:
     ptz_poll_timeout_s: float
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         return cls(
             video_source=_str("VIDEO_SOURCE", "file:///data/test_videos"),
             video_loop=_bool("VIDEO_LOOP", True),

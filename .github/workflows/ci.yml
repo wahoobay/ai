@@ -1,0 +1,174 @@
+name: CI
+
+# Phase 2 of the deployment-grade rollout (see PLAN.md). Every push to
+# main and every PR lints the codebase, smoke-imports the dashboard and
+# poller, and builds container images for all three services. Pushes to
+# main also publish the images to GHCR with `:main` and `:sha-<short>`
+# tags so production / staging can pull deterministic versions.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository is owner/repo; image tags become
+  # ghcr.io/owner/repo-<service>:<tag>
+  IMAGE_NS: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write   # push to GHCR
+  id-token: write   # allow keyless image signing later
+
+concurrency:
+  # On PRs, cancel in-flight runs of the same PR so we only ever build
+  # the latest commit. On main, never cancel — we want every merged
+  # commit's image to land in the registry.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # -------------------------------------------------------------------
+  # Lint: ruff check + format. Fast (~30 s), runs on every push.
+  # -------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+      - name: ruff check
+        run: ruff check .
+      # ruff format --check is deliberately not enabled yet — the
+      # codebase has 3 k+ lines of pending formatting churn that we'll
+      # land in one focused commit, then re-enable.
+
+  # -------------------------------------------------------------------
+  # Smoke-import the dashboard + poller modules. Catches obvious Python
+  # errors (missing imports, syntax issues) before paying for a 5–15 min
+  # container build. Worker is excluded — it imports torch / cuda which
+  # we don't want on a CPU runner.
+  # -------------------------------------------------------------------
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dashboard requirements
+        run: pip install -r services/dashboard/requirements.txt
+      - name: Install poller requirements
+        run: pip install -r services/sensestream_poller/requirements.txt
+      - name: Smoke-import dashboard.app
+        env:
+          PYTHONPATH: services/dashboard
+          DATABASE_URL: postgresql://wahoobay:wahoobay@localhost:5432/wahoobay
+        run: python -c "from app import main; print('dashboard ok')"
+      - name: Smoke-import poller.app
+        env:
+          PYTHONPATH: services/sensestream_poller
+        run: python -c "from app import main; print('poller ok')"
+      - name: Run pytest (anything we've collected so far)
+        run: |
+          pip install pytest
+          # Pass if there are no tests collected yet — Phase 2 deliverable
+          # is the harness, not the suite.
+          pytest --collect-only -q || true
+          pytest -q || [ "$?" -eq 5 ]   # exit 5 == "no tests collected"
+
+  # -------------------------------------------------------------------
+  # Build (and on main, push) container images. Matrix over the three
+  # services. Worker gets placeholder model files so the COPY layer
+  # succeeds without checking 400 MB of weights into git.
+  # -------------------------------------------------------------------
+  build-image:
+    needs: [lint, smoke-test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [dashboard, sensestream_poller, worker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk (worker image is large)
+        if: matrix.service == 'worker'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/local/share/boost
+          df -h
+
+      - name: Create placeholder model files
+        if: matrix.service == 'worker'
+        run: |
+          mkdir -p data/models/detector_v26 data/models/classifier_v0_10_2
+          : > data/models/detector_v26/model.pt
+          echo '{"placeholder": true}' > data/models/detector_v26/info.json
+          : > data/models/classifier_v0_10_2/model.pt
+          echo '{"placeholder": true}' > data/models/classifier_v0_10_2/info.json
+          echo "# CI placeholder; real bundle fetched at deploy time." \
+            > data/models/classifier_v0_10_2/inference.py
+          echo "# CI placeholder" \
+            > data/models/classifier_v0_10_2/requirements.txt
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Compute image name (lowercase)
+        id: imgname
+        run: |
+          # GHCR requires lowercase image paths; github.repository may
+          # contain uppercase, so down-case explicitly.
+          REPO_LC=$(echo "${IMAGE_NS}" | tr '[:upper:]' '[:lower:]')
+          echo "image=${{ env.REGISTRY }}/${REPO_LC}-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute tags
+        id: tags
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-12)
+          TAGS="${{ steps.imgname.outputs.image }}:sha-${SHA_SHORT}"
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS="${TAGS}"$'\n'"${{ steps.imgname.outputs.image }}:main"
+          fi
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAGS="${TAGS}"$'\n'"${{ steps.imgname.outputs.image }}:${VERSION}"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push if on main / tag)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          # Service-scoped cache so the worker's CUDA layers don't evict
+          # the dashboard's slim layers.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}

@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -28,12 +27,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "services" / "worker"))
 
 # Worker-side imports
-from app.config import Config                  # noqa: E402
-from app.fishial import FishialPipeline         # noqa: E402
+from app.config import Config  # noqa: E402
+from app.fishial import FishialPipeline  # noqa: E402
 from app.provenance import compute as compute_prov  # noqa: E402
 
-from eval import metrics                        # noqa: E402
-
+from eval import metrics  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Manifest + label schema
@@ -209,10 +207,16 @@ def _write_report(out_dir: Path, payload: dict) -> None:
         "| clip | det P | det R | det F1 | top-1 | top-1 CI | top-3 CI | top-5 CI | p95 latency |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
+    def ci_s(x):
+        return f"[{x['lo']:.2f}, {x['hi']:.2f}]" if x.get("lo") is not None else "—"
+
     for r in payload["clips"]:
-        d = r["detector"]; c = r["classifier"]
-        t1 = c["top1"]; t1ci = t1["ci"]; t3 = c["top3_ci"]; t5 = c["top5_ci"]
-        ci_s = lambda x: f"[{x['lo']:.2f}, {x['hi']:.2f}]" if x.get("lo") is not None else "—"
+        d = r["detector"]
+        c = r["classifier"]
+        t1 = c["top1"]
+        t1ci = t1["ci"]
+        t3 = c["top3_ci"]
+        t5 = c["top5_ci"]
         lines.append(
             f"| {r['clip_id']} | {d['precision']:.2f} | {d['recall']:.2f} | {d['f1']:.2f} "
             f"| {t1['hits']}/{t1['total']} ({t1['acc']*100:.1f}%) | {ci_s(t1ci)} | {ci_s(t3)} | {ci_s(t5)} "
@@ -260,7 +264,7 @@ def main() -> int:
         print(f"→ {spec.id}", flush=True)
         per_clip.append(_evaluate_clip(pipeline, spec))
 
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
     payload = {
         "timestamp": ts,
         "eval_git_sha": _git_sha(),

@@ -6,11 +6,10 @@ directly when running.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Detector metrics (bbox matching at fixed IoU threshold)
@@ -92,7 +91,7 @@ def top_k_accuracy(
     k: int,
 ) -> TopKResult:
     hits = 0
-    for topk, y in zip(predictions_top_k, truths):
+    for topk, y in zip(predictions_top_k, truths, strict=False):
         if y in list(topk)[:k]:
             hits += 1
     return TopKResult(k=k, hits=hits, total=len(truths))
@@ -105,9 +104,9 @@ def per_class_prf1(
     classes = sorted(set(truths) | set(pred_top1))
     out: list[dict] = []
     for c in classes:
-        tp = sum(1 for p, t in zip(pred_top1, truths) if p == c and t == c)
-        fp = sum(1 for p, t in zip(pred_top1, truths) if p == c and t != c)
-        fn = sum(1 for p, t in zip(pred_top1, truths) if p != c and t == c)
+        tp = sum(1 for p, t in zip(pred_top1, truths, strict=False) if p == c and t == c)
+        fp = sum(1 for p, t in zip(pred_top1, truths, strict=False) if p == c and t != c)
+        fn = sum(1 for p, t in zip(pred_top1, truths, strict=False) if p != c and t == c)
         support = sum(1 for t in truths if t == c)
         row = prf1(tp, fp, fn)
         row.update({"class": c, "support": support})

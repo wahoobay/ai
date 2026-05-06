@@ -1,7 +1,7 @@
 """Draw annotated overlays on frames for the live stream + saved snapshots."""
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import cv2
 import numpy as np

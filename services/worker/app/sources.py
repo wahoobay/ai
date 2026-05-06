@@ -15,15 +15,15 @@ import random
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Tuple
 from urllib.parse import urlparse
 
 import cv2
 
 log = logging.getLogger(__name__)
 
-Frame = Tuple[int, "cv2.Mat", str]  # (frame_id, bgr, source_name)
+Frame = tuple[int, "cv2.Mat", str]  # (frame_id, bgr, source_name)
 
 
 class VideoSource(ABC):
@@ -225,7 +225,7 @@ class AutoswitchSource(VideoSource):
         self.dark_threshold = dark_threshold
         self.light_threshold = light_threshold
         self.sample_every_n_frames = max(1, sample_every_n_frames)
-        self._window: "deque[float]" = deque(maxlen=max(1, window_samples))
+        self._window: deque[float] = deque(maxlen=max(1, window_samples))
         self._stop = threading.Event()
         # exposed state (read by /stats etc.)
         self.is_dark: bool = False
@@ -286,10 +286,14 @@ class AutoswitchSource(VideoSource):
 
     def close(self) -> None:
         self._stop.set()
-        try: self.primary.close()
-        except Exception: pass
-        try: self.fallback.close()
-        except Exception: pass
+        try:
+            self.primary.close()
+        except Exception:
+            pass
+        try:
+            self.fallback.close()
+        except Exception:
+            pass
 
 
 def _build_one(cfg, spec: str, label: str | None = None) -> VideoSource:

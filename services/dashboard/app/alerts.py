@@ -18,11 +18,10 @@ Alerts auto-resolve (``resolved_at`` set) once the condition clears.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional
+from datetime import UTC, datetime
 
 import httpx
 from psycopg.rows import dict_row
@@ -39,7 +38,7 @@ RuleResult = tuple[bool, str, dict]           # (firing, message, details)
 class SLORule:
     name: str
     severity: str                             # info | warning | critical
-    check: Callable[["SLOChecker"], Awaitable[RuleResult]]
+    check: Callable[[SLOChecker], Awaitable[RuleResult]]
     description: str = ""
 
 
@@ -48,14 +47,14 @@ class SLORule:
 # ---------------------------------------------------------------------------
 
 
-async def _check_pipeline_silence(c: "SLOChecker") -> RuleResult:
+async def _check_pipeline_silence(c: SLOChecker) -> RuleResult:
     async with c.pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT max(ts) FROM detection_events")
             (last,) = await cur.fetchone() or (None,)
     if last is None:
         return (True, "no detection_events ever written", {"last_event_ts": None})
-    age_s = (datetime.now(timezone.utc) - last).total_seconds()
+    age_s = (datetime.now(UTC) - last).total_seconds()
     if age_s > 300:
         return (True,
                 f"no detections in {age_s/60:.1f} min (threshold 5 min)",
@@ -63,21 +62,21 @@ async def _check_pipeline_silence(c: "SLOChecker") -> RuleResult:
     return (False, "ok", {"last_event_ts": last.isoformat(), "age_seconds": age_s})
 
 
-async def _check_frame_stats_stalled(c: "SLOChecker") -> RuleResult:
+async def _check_frame_stats_stalled(c: SLOChecker) -> RuleResult:
     async with c.pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT max(ts) FROM frame_stats")
             (last,) = await cur.fetchone() or (None,)
     if last is None:
         return (False, "no frame_stats yet (waiting for worker)", {})
-    age_s = (datetime.now(timezone.utc) - last).total_seconds()
+    age_s = (datetime.now(UTC) - last).total_seconds()
     if age_s > 300:
         return (True, f"frame_stats sampler silent for {age_s/60:.1f} min",
                 {"last_ts": last.isoformat(), "age_seconds": age_s})
     return (False, "ok", {"age_seconds": age_s})
 
 
-async def _check_inference_latency(c: "SLOChecker") -> RuleResult:
+async def _check_inference_latency(c: SLOChecker) -> RuleResult:
     try:
         r = await c.http.get(f"{c.worker_url}/stats", timeout=5.0)
         if r.status_code != 200:
@@ -96,7 +95,7 @@ async def _check_inference_latency(c: "SLOChecker") -> RuleResult:
     return (False, "ok", {"last_infer_ms": last_ms})
 
 
-async def _check_poller_probe_stale(c: "SLOChecker") -> RuleResult:
+async def _check_poller_probe_stale(c: SLOChecker) -> RuleResult:
     try:
         r = await c.http.get(f"{c.poller_url}/status", timeout=5.0)
         if r.status_code != 200:
@@ -111,14 +110,14 @@ async def _check_poller_probe_stale(c: "SLOChecker") -> RuleResult:
         last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
     except Exception:
         return (False, f"bad timestamp from poller: {last}", {})
-    age_s = (datetime.now(timezone.utc) - last_dt).total_seconds()
+    age_s = (datetime.now(UTC) - last_dt).total_seconds()
     if age_s > 1800:
         return (True, f"poller last probe was {age_s/60:.1f} min ago",
                 {"last_probe_ok_at": last, "age_seconds": age_s})
     return (False, "ok", {"age_seconds": age_s})
 
 
-async def _check_drift_luma(c: "SLOChecker") -> RuleResult:
+async def _check_drift_luma(c: SLOChecker) -> RuleResult:
     async with c.pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute("SELECT * FROM frame_stats_drift LIMIT 1")
@@ -132,7 +131,7 @@ async def _check_drift_luma(c: "SLOChecker") -> RuleResult:
     return (False, "ok", {"delta": delta})
 
 
-async def _check_drift_fish_rate(c: "SLOChecker") -> RuleResult:
+async def _check_drift_fish_rate(c: SLOChecker) -> RuleResult:
     async with c.pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute("SELECT * FROM frame_stats_drift LIMIT 1")

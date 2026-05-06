@@ -1,0 +1,56 @@
+[project]
+name = "wahoobay"
+version = "0.0.1"
+description = "Real-time fish identification + water quality at Wahoo Bay (FAU SEAHIVE Reef)."
+requires-python = ">=3.11"
+
+# This isn't a packaged distribution — services are containerised
+# individually with their own requirements.txt. The pyproject.toml
+# exists to host shared tooling config (ruff, pytest) for CI.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    # vendored Fishial inference module — third-party code, don't lint
+    "data/models/**",
+    # generator emits CSV-style code with manually-aligned columns
+    "scripts/gen_synthetic_sensor_data.py",
+    # build / runtime artifacts
+    "frames",
+    "logs",
+    "pgdata",
+    "eval/reports",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line too long — formatter handles it
+    "B008",  # do not perform function call in argument defaults — FastAPI Depends()
+    "B007",  # unused loop control variable — common in our code
+]
+
+[tool.ruff.lint.per-file-ignores]
+# tests can do whatever
+"tests/**" = ["B", "F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q --strict-markers"
+testpaths = ["tests", "eval", "services"]
+filterwarnings = [
+    "ignore::DeprecationWarning:pkg_resources",
+]

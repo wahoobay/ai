@@ -14,12 +14,11 @@ they work in both the dashboard and eval harness.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
-
 import math
-import numpy as np
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
+import numpy as np
 
 DEFAULT_B = 2000          # bootstrap resamples
 DEFAULT_ALPHA = 0.05      # → 95 % CI

@@ -24,15 +24,12 @@ import logging
 import multiprocessing as mp
 import queue
 import threading
-import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 import cv2
-import numpy as np
 
-from .inference_proc import FrameIn, FrameOut, SHUTDOWN, run_inference_worker
+from .inference_proc import SHUTDOWN, FrameIn, FrameOut, run_inference_worker
 from .sources import VideoSource
 
 log = logging.getLogger(__name__)
@@ -58,10 +55,10 @@ class LiveFrame:
     infer_ms: float = 0.0
 
     @classmethod
-    def empty(cls) -> "LiveFrame":
+    def empty(cls) -> LiveFrame:
         return cls(
             jpeg=b"", jpeg_raw=b"", frame_id=0,
-            ts=datetime.now(timezone.utc),
+            ts=datetime.now(UTC),
             source_name="", detections_summary=[],
         )
 
@@ -82,7 +79,7 @@ class LiveBuffer:
         with self._cond:
             return self._current
 
-    def wait_for_next(self, last_frame_id: int, timeout: float = 5.0) -> Optional[LiveFrame]:
+    def wait_for_next(self, last_frame_id: int, timeout: float = 5.0) -> LiveFrame | None:
         with self._cond:
             if self._current.frame_id == last_frame_id:
                 self._cond.wait(timeout=timeout)
@@ -96,15 +93,15 @@ class PipelineStats:
     frames_with_fish: int = 0
     detections_total: int = 0
     last_infer_ms: float = 0.0
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_frame_at: Optional[datetime] = None
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_frame_at: datetime | None = None
     current_source: str = ""
     # frames consumed during autoswitch fallback (no video data is collected
     # from these — they're a visual placeholder only)
     fallback_frames: int = 0
 
 
-def _drain_old(q: "mp.Queue") -> None:
+def _drain_old(q: mp.Queue) -> None:
     """Empty a queue without blocking. Used to keep the inference in-queue
     drop-old: when FrameTap finds the queue full, it drains and re-puts so
     the freshest frame is what inference sees."""
@@ -135,7 +132,7 @@ class FrameTap:
         source: VideoSource,
         live_raw: LiveBuffer,
         live_annotated: LiveBuffer,
-        in_queue: "mp.Queue",
+        in_queue: mp.Queue,
         stats: PipelineStats,
     ) -> None:
         self.cfg = cfg
@@ -145,7 +142,7 @@ class FrameTap:
         self.in_queue = in_queue
         self.stats = stats
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="frame-tap", daemon=True)
@@ -168,7 +165,7 @@ class FrameTap:
             for frame_id, frame, source_name in self.source.frames():
                 if self._stop.is_set():
                     break
-                ts = datetime.now(timezone.utc)
+                ts = datetime.now(UTC)
                 in_fallback = bool(getattr(self.source, "is_dark", False))
 
                 self.stats.frames_seen += 1
@@ -236,9 +233,9 @@ class InferenceClient:
         cfg,
         live_annotated: LiveBuffer,
         stats: PipelineStats,
-        in_queue: "mp.Queue",
-        out_queue: "mp.Queue",
-        proc: "mp.Process",
+        in_queue: mp.Queue,
+        out_queue: mp.Queue,
+        proc: mp.Process,
     ) -> None:
         self.cfg = cfg
         self.live_annotated = live_annotated
@@ -247,7 +244,7 @@ class InferenceClient:
         self.out_queue = out_queue
         self.proc = proc
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._drain, name="infer-drain", daemon=True)
@@ -313,9 +310,9 @@ def spawn_inference(
     to its queues. Caller starts the client (drain thread) and gets the
     `in_queue` to hand to FrameTap."""
     ctx = mp.get_context("spawn")
-    in_queue: "mp.Queue" = ctx.Queue(maxsize=in_qsize)
-    out_queue: "mp.Queue" = ctx.Queue(maxsize=out_qsize)
-    ready: "mp.synchronize.Event" = ctx.Event()
+    in_queue: mp.Queue = ctx.Queue(maxsize=in_qsize)
+    out_queue: mp.Queue = ctx.Queue(maxsize=out_qsize)
+    ready: mp.synchronize.Event = ctx.Event()
     proc = ctx.Process(
         target=run_inference_worker,
         args=(cfg, in_queue, out_queue, ready),

@@ -29,7 +29,6 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Deque, List, Optional, Tuple
 
 import numpy as np
 
@@ -45,11 +44,11 @@ class SmootherUpdate:
     the rest of the pipeline which persistent track each raw detection
     belongs to so we can deduplicate counts across frames.
     """
-    display: List[FishDetection]
-    raw_track_ids: List[Optional[int]]
+    display: list[FishDetection]
+    raw_track_ids: list[int | None]
 
 
-def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
     ix1, iy1 = max(ax1, bx1), max(ay1, by1)
@@ -73,12 +72,12 @@ class _Track:
     vy: float = 0.0
     w:  float = 0.0
     h:  float = 0.0
-    size_history: Deque[Tuple[float, float]] = field(default_factory=deque)
+    size_history: deque[tuple[float, float]] = field(default_factory=deque)
     initialized:  bool = False
 
     # classifier-output memory
-    conf_history: Deque[float] = field(default_factory=deque)
-    topk_history: Deque[List[Prediction]] = field(default_factory=deque)
+    conf_history: deque[float] = field(default_factory=deque)
+    topk_history: deque[list[Prediction]] = field(default_factory=deque)
 
     # bookkeeping
     last_seen_frame: int = -1
@@ -88,9 +87,9 @@ class _Track:
     def update_with(
         self,
         frame_id: int,
-        bbox: Tuple[int, int, int, int],
+        bbox: tuple[int, int, int, int],
         det_conf: float,
-        topk: List[Prediction],
+        topk: list[Prediction],
         *,
         window: int,
         center_alpha: float,
@@ -156,7 +155,7 @@ class _Track:
         self.vy *= velocity_decay
         self.age_since_hit += 1
 
-    def smoothed_bbox(self) -> Tuple[int, int, int, int]:
+    def smoothed_bbox(self) -> tuple[int, int, int, int]:
         x1 = int(round(self.cx - self.w / 2))
         y1 = int(round(self.cy - self.h / 2))
         x2 = int(round(self.cx + self.w / 2))
@@ -166,7 +165,7 @@ class _Track:
     def smoothed_conf(self) -> float:
         return float(np.mean(list(self.conf_history))) if self.conf_history else 0.0
 
-    def smoothed_topk(self, k: int) -> List[Prediction]:
+    def smoothed_topk(self, k: int) -> list[Prediction]:
         """Sum per-species accuracy across the window, take top-k. Normalised
         by window length so absent species don't get a free ride."""
         agg:  dict[str, float] = defaultdict(float)
@@ -182,7 +181,7 @@ class _Track:
                 meta[key] = p
         window = max(1, len(self.topk_history))
         ranked = sorted(agg.items(), key=lambda kv: kv[1] / window, reverse=True)
-        out: List[Prediction] = []
+        out: list[Prediction] = []
         for key, total in ranked[:k]:
             proto = meta[key]
             out.append(Prediction(
@@ -193,7 +192,7 @@ class _Track:
         return out
 
 
-def _trim(d: Deque, max_len: int) -> None:
+def _trim(d: deque, max_len: int) -> None:
     while len(d) > max_len:
         d.popleft()
 
@@ -225,9 +224,9 @@ class DetectionSmoother:
         self._tracks.clear()
         self._next_id = 1
 
-    def update(self, frame_id: int, detections: List[FishDetection]) -> SmootherUpdate:
+    def update(self, frame_id: int, detections: list[FishDetection]) -> SmootherUpdate:
         existing_ids = list(self._tracks.keys())
-        raw_track_ids: List[Optional[int]] = [None] * len(detections)
+        raw_track_ids: list[int | None] = [None] * len(detections)
 
         # Greedy IoU matching on *predicted* current bboxes, not last-frame
         # bboxes — so a moving fish's track stays associated after a one-frame
@@ -296,7 +295,7 @@ class DetectionSmoother:
             raw_track_ids[j] = new_id
 
         # Emit current state for every track with enough hits
-        out: List[FishDetection] = []
+        out: list[FishDetection] = []
         for t in self._tracks.values():
             if t.total_hits < self.min_hits or not t.initialized:
                 continue

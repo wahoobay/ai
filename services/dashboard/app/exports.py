@@ -14,12 +14,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
-from typing import AsyncIterator, Iterable, Optional
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
-
 
 # ---------------------------------------------------------------------------
 # Generic helpers
@@ -38,7 +37,7 @@ def _format(v) -> str:
         return ""
     if isinstance(v, datetime):
         return v.isoformat()
-    if isinstance(v, (list, tuple)):
+    if isinstance(v, list | tuple):
         return ",".join(map(str, v))         # bbox arrays etc. — flatten to "x1,y1,x2,y2"
     if isinstance(v, dict):
         return json.dumps(v, separators=(",", ":"), default=str)
@@ -80,7 +79,7 @@ async def _fetch_all(pool: AsyncConnectionPool, sql: str, params: tuple,
 
 
 def export_events(pool: AsyncConnectionPool, hours: int,
-                  species_id: Optional[str], min_accuracy: float):
+                  species_id: str | None, min_accuracy: float):
     where = ["ts >= NOW() - (%s::int || ' hours')::interval",
              "best_accuracy >= %s"]
     params: list = [hours, min_accuracy]
@@ -179,8 +178,8 @@ def export_saved_frames(pool: AsyncConnectionPool, hours: int):
     return _stream(pool, sql, (hours,), cols)
 
 
-def export_corrections(pool: AsyncConnectionPool, hours: Optional[int],
-                       reviewer: Optional[str]):
+def export_corrections(pool: AsyncConnectionPool, hours: int | None,
+                       reviewer: str | None):
     where = []
     params: list = []
     if hours is not None:
@@ -469,6 +468,7 @@ KNOWN_RESOURCES = {
 async def fetch_parquet_bytes(pool: AsyncConnectionPool, sql: str,
                               params: tuple, columns: list[str]) -> bytes:
     import io
+
     import pandas as pd
     rows = await _fetch_all(pool, sql, params, columns)
     df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
@@ -491,7 +491,8 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
     Each branch returns (sql, params_tuple, column_list).
     """
     if resource == "events":
-        hours = kwargs["hours"]; species_id = kwargs.get("species_id")
+        hours = kwargs["hours"]
+        species_id = kwargs.get("species_id")
         min_accuracy = kwargs.get("min_accuracy", 0.0)
         where = ["ts >= NOW() - (%s::int || ' hours')::interval",
                  "best_accuracy >= %s"]
@@ -519,7 +520,8 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
         return sql, tuple(params), cols
 
     if resource == "tracks_timeline":
-        hours = kwargs["hours"]; min_frames = kwargs.get("min_frames", 3)
+        hours = kwargs["hours"]
+        min_frames = kwargs.get("min_frames", 3)
         sql = """
             WITH eligible_tracks AS (
                 SELECT track_id
@@ -551,7 +553,8 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
         return sql, (hours, min_frames, hours), cols
 
     if resource == "topk_long":
-        hours = kwargs["hours"]; min_accuracy = kwargs.get("min_accuracy", 0.0)
+        hours = kwargs["hours"]
+        min_accuracy = kwargs.get("min_accuracy", 0.0)
         sql = """
             SELECT e.id AS event_id, e.ts, e.frame_id, e.source_name, e.track_id,
                    e.det_conf,
@@ -570,7 +573,8 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
         return sql, (hours, min_accuracy), cols
 
     if resource == "hourly_summary":
-        hours = kwargs["hours"]; deployment = kwargs.get("deployment", "wahoo_2")
+        hours = kwargs["hours"]
+        deployment = kwargs.get("deployment", "wahoo_2")
         sql = """
             WITH detection_buckets AS (
                 SELECT date_trunc('hour', ts) AS hour,

@@ -39,9 +39,8 @@ import random
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import cv2
 
@@ -59,7 +58,7 @@ def _slug(name: str) -> str:
     return out or "unknown"
 
 
-def _parse_bbox(value: str) -> Optional[tuple[int, int, int, int]]:
+def _parse_bbox(value: str) -> tuple[int, int, int, int] | None:
     """CSV exports bbox as 'x1,y1,x2,y2'."""
     if not value:
         return None
@@ -72,7 +71,7 @@ def _parse_bbox(value: str) -> Optional[tuple[int, int, int, int]]:
     return None
 
 
-def _resolve_frame(rel: str, frames_root: Optional[Path]) -> Optional[Path]:
+def _resolve_frame(rel: str, frames_root: Path | None) -> Path | None:
     """Try several resolutions for the frame path the CSV gave us.
 
     Order: as-is (absolute) → frames_root + trailing path → frames_root + basename.
@@ -102,7 +101,7 @@ def _resolve_frame(rel: str, frames_root: Optional[Path]) -> Optional[Path]:
     return None
 
 
-def _frame_from_coco(coco_path: str) -> Optional[str]:
+def _frame_from_coco(coco_path: str) -> str | None:
     """Saved frames live next to their COCO sidecar — same stem, different
     extension. If the export gave us a coco_path, we can derive the .jpg."""
     if not coco_path:
@@ -365,7 +364,7 @@ def main() -> int:
         species_counts[sp][split] = n
 
     manifest = {
-        "generated_at":          datetime.now(timezone.utc).isoformat(),
+        "generated_at":          datetime.now(UTC).isoformat(),
         "corrections_csv":       str(csv_path),
         "corrections_csv_md5":   corrections_md5,
         "frames_root":           str(frames_root) if frames_root else None,
@@ -441,7 +440,7 @@ def main() -> int:
         if thin:
             print()
             print(f"  ⚠  {len(thin)} species have <10 crops total — too few for")
-            print(f"     reliable fine-tuning. More reviewer corrections needed for:")
+            print("     reliable fine-tuning. More reviewer corrections needed for:")
             for sp in thin[:8]:
                 print(f"       {sp}")
             if len(thin) > 8:

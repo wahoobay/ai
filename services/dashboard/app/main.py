@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncIterator, Optional
 
 import httpx
 import uvicorn
@@ -20,46 +20,43 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from psycopg_pool import AsyncConnectionPool
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
 
-from .alerts import SLOChecker, SLO_RULES
-from .matviews import MatviewRefresher
+from .alerts import SLO_RULES, SLOChecker
 from .common_names import common as common_name
 from .exports import (
-    export_events,
-    export_species_counts,
-    export_water_quality,
-    export_frame_stats,
-    export_saved_frames,
-    export_corrections,
     export_alerts,
-    export_sightings,
+    export_corrections,
+    export_events,
+    export_frame_stats,
     export_hourly_summary,
-    export_tracks_timeline,
-    export_topk_long,
     export_labeled_corrections,
+    export_saved_frames,
+    export_sightings,
+    export_species_counts,
+    export_topk_long,
+    export_tracks_timeline,
+    export_water_quality,
     fetch_parquet_bytes,
     query_for,
 )
+from .matviews import MatviewRefresher
 from .stats import (
-    poisson_count_ci,
     rate_ci,
-    mean_ci,
-    bootstrap_count_ci,
     species_counts_with_ci,
 )
 
 
 class CorrectionIn(BaseModel):
     event_id: int
-    corrected_name: Optional[str] = None
-    corrected_species_id: Optional[str] = None
+    corrected_name: str | None = None
+    corrected_species_id: str | None = None
     not_a_fish: bool = False
     confidence: str = Field("probable", pattern="^(certain|probable|uncertain)$")
-    reviewer: Optional[str] = None
-    notes: Optional[str] = None
+    reviewer: str | None = None
+    notes: str | None = None
 
 log = logging.getLogger("wahoobay.dashboard")
 
@@ -111,8 +108,8 @@ def build_app() -> FastAPI:
             state["pool"] = None
 
         # SLO checker runs as a background task and upserts rows into `alerts`.
-        slo_task: Optional[asyncio.Task] = None
-        matview_task: Optional[asyncio.Task] = None
+        slo_task: asyncio.Task | None = None
+        matview_task: asyncio.Task | None = None
         if state.get("pool") is not None:
             checker = SLOChecker(
                 pool=state["pool"],
@@ -155,7 +152,7 @@ def build_app() -> FastAPI:
     app = FastAPI(title="Wahoo Bay dashboard", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-    def require_write_token(authorization: Optional[str] = Header(None)) -> None:
+    def require_write_token(authorization: str | None = Header(None)) -> None:
         """Gate mutation endpoints on a static bearer token if one is configured."""
         if not cfg.write_token:
             return  # open mode (no token configured)
@@ -252,10 +249,10 @@ def build_app() -> FastAPI:
     @app.get("/api/events")
     async def events(
         limit: int = Query(50, ge=1, le=500),
-        species_id: Optional[str] = None,
+        species_id: str | None = None,
         min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         where = ["best_name IS NOT NULL", "best_accuracy >= %s"]
@@ -294,7 +291,7 @@ def build_app() -> FastAPI:
         mode=events: every detection counts independently — the old behaviour.
             Useful for low-level debugging / event-rate monitoring.
         """
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         if mode == "sightings":
@@ -349,7 +346,7 @@ def build_app() -> FastAPI:
     async def water_quality_latest(
         deployment: str = Query("wahoo_2"),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         cols = ", ".join(SENSOR_COLUMNS)
@@ -380,7 +377,7 @@ def build_app() -> FastAPI:
         Bucketed by an even interval so max_points is honored regardless of the
         sample rate underlying the data.
         """
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         # bucket size in seconds
@@ -416,7 +413,7 @@ def build_app() -> FastAPI:
         hours: int = Query(24, ge=1, le=24 * 30),
     ) -> Response:
         """Min / mean / max for each parameter over the window."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         aggs = ",\n              ".join(
@@ -450,7 +447,7 @@ def build_app() -> FastAPI:
     @app.get("/api/drift/recent")
     async def drift_recent() -> Response:
         """Current hour vs. 7-day and 28-day baselines from frame_stats_drift view."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         async with pool.connection() as conn:
@@ -462,10 +459,10 @@ def build_app() -> FastAPI:
     @app.get("/api/drift/timeline")
     async def drift_timeline(
         hours: int = Query(72, ge=1, le=24 * 30),
-        source_name: Optional[str] = None,
+        source_name: str | None = None,
     ) -> Response:
         """Hourly rollup for plotting brightness / detection rate over time."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         where = ["hour >= NOW() - (%s::int || ' hours')::interval"]
@@ -506,7 +503,7 @@ def build_app() -> FastAPI:
         dashboards). The dashboard's regular /api/species_counts is a point
         estimate; this endpoint is what belongs in a written claim.
         """
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -542,7 +539,7 @@ def build_app() -> FastAPI:
     @app.get("/api/frame_rate_ci")
     async def frame_rate_ci(hours: int = Query(24, ge=1, le=24 * 30)) -> Response:
         """Wilson CI for frame-with-fish rate from frame_stats."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -565,7 +562,7 @@ def build_app() -> FastAPI:
 
     @app.post("/api/corrections", dependencies=[Depends(require_write_token)])
     async def post_correction(body: CorrectionIn) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         if not body.not_a_fish and not (body.corrected_name or body.corrected_species_id):
@@ -596,9 +593,9 @@ def build_app() -> FastAPI:
     @app.get("/api/corrections")
     async def list_corrections(
         limit: int = Query(50, ge=1, le=500),
-        reviewer: Optional[str] = None,
+        reviewer: str | None = None,
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         where = []
@@ -629,7 +626,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/corrections/stats")
     async def correction_stats() -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -651,7 +648,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/alerts/active")
     async def alerts_active() -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -677,8 +674,8 @@ def build_app() -> FastAPI:
         return JSONResponse(rows)
 
     @app.post("/api/alerts/{alert_id}/ack", dependencies=[Depends(require_write_token)])
-    async def ack_alert(alert_id: int, reviewer: Optional[str] = None) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+    async def ack_alert(alert_id: int, reviewer: str | None = None) -> Response:
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         async with pool.connection() as conn:
@@ -712,7 +709,7 @@ def build_app() -> FastAPI:
     async def chart_detection_rate(
         hours: int = Query(24, ge=1, le=24 * 30),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -742,7 +739,7 @@ def build_app() -> FastAPI:
         """Top-N species by total sightings in window, with per-hour series
         for each. Returns one row per (hour, species) for charting; the
         client builds the multi-line chart."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -793,7 +790,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         """Hourly sightings joined with hourly avg water-quality. Lets
         the client overlay fish activity against any water parameter."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
@@ -861,17 +858,17 @@ def build_app() -> FastAPI:
         )
 
     def _csv_filename(stem: str, **bits) -> str:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         suffix = "_".join(f"{k}-{v}" for k, v in bits.items() if v not in (None, ""))
         return f"wahoobay_{stem}{('_' + suffix) if suffix else ''}_{ts}.csv"
 
     @app.get("/api/export/events.csv")
     async def export_events_csv(
         hours: int = Query(24, ge=1, le=24 * 365),
-        species_id: Optional[str] = None,
+        species_id: str | None = None,
         min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_events(pool, hours, species_id, min_accuracy)
@@ -881,7 +878,7 @@ def build_app() -> FastAPI:
     async def export_species_counts_csv(
         hours: int = Query(24, ge=1, le=24 * 365),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_species_counts(pool, hours)
@@ -892,7 +889,7 @@ def build_app() -> FastAPI:
         hours: int = Query(24, ge=1, le=24 * 365),
         deployment: str = Query("wahoo_2"),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_water_quality(pool, hours, deployment)
@@ -902,7 +899,7 @@ def build_app() -> FastAPI:
     async def export_frame_stats_csv(
         hours: int = Query(24, ge=1, le=24 * 365),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_frame_stats(pool, hours)
@@ -912,7 +909,7 @@ def build_app() -> FastAPI:
     async def export_saved_frames_csv(
         hours: int = Query(24, ge=1, le=24 * 365),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_saved_frames(pool, hours)
@@ -920,10 +917,10 @@ def build_app() -> FastAPI:
 
     @app.get("/api/export/corrections.csv")
     async def export_corrections_csv(
-        hours: Optional[int] = Query(None, ge=1, le=24 * 365),
-        reviewer: Optional[str] = None,
+        hours: int | None = Query(None, ge=1, le=24 * 365),
+        reviewer: str | None = None,
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_corrections(pool, hours, reviewer)
@@ -933,7 +930,7 @@ def build_app() -> FastAPI:
     async def export_alerts_csv(
         include_resolved: bool = Query(False),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_alerts(pool, include_resolved)
@@ -946,7 +943,7 @@ def build_app() -> FastAPI:
         hours: int = Query(24, ge=1, le=24 * 365),
         min_frames: int = Query(3, ge=1, le=1000),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_sightings(pool, hours, min_frames)
@@ -957,7 +954,7 @@ def build_app() -> FastAPI:
         hours: int = Query(168, ge=1, le=24 * 365),
         deployment: str = Query("wahoo_2"),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_hourly_summary(pool, hours, deployment)
@@ -968,7 +965,7 @@ def build_app() -> FastAPI:
         hours: int = Query(24, ge=1, le=24 * 365),
         min_frames: int = Query(3, ge=1, le=1000),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_tracks_timeline(pool, hours, min_frames)
@@ -979,7 +976,7 @@ def build_app() -> FastAPI:
         hours: int = Query(24, ge=1, le=24 * 365),
         min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_topk_long(pool, hours, min_accuracy)
@@ -987,7 +984,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/export/labeled_corrections.csv")
     async def export_labeled_corrections_csv() -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_labeled_corrections(pool)
@@ -1001,7 +998,7 @@ def build_app() -> FastAPI:
     async def export_parquet(
         resource: str,
         hours: int = Query(24, ge=1, le=24 * 365),
-        species_id: Optional[str] = None,
+        species_id: str | None = None,
         min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
         min_frames: int = Query(3, ge=1, le=1000),
         deployment: str = Query("wahoo_2"),
@@ -1011,7 +1008,7 @@ def build_app() -> FastAPI:
                 {"error": f"parquet only available for: {sorted(PARQUET_RESOURCES)}"},
                 status_code=400,
             )
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         try:
@@ -1080,7 +1077,7 @@ def build_app() -> FastAPI:
         hours: int = Query(24, ge=1, le=24 * 30),
         deployment: str = Query("wahoo_2"),
     ) -> Response:
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
 
@@ -1184,7 +1181,7 @@ def build_app() -> FastAPI:
     @app.get("/api/provenance/current")
     async def provenance_current() -> Response:
         """Most recent provenance tuple seen in detection_events."""
-        pool: Optional[AsyncConnectionPool] = state.get("pool")
+        pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         sql = """
