@@ -46,10 +46,15 @@ services:
     environment:
       # In-network DB hostname overrides whatever's in .env.
       DATABASE_URL: postgresql://wahoobay:wahoobay@postgres:5432/wahoobay
-      # Container-internal paths the app writes to. Bind-mounts below
-      # land them on host disk for inspection / persistence.
+      # Translate DGX-absolute paths from .env into container-internal
+      # paths. The .env values keep working for bare-metal `run_*.sh`;
+      # compose just rewrites them on the way into the container.
+      DETECTOR_PATH: /data/models/detector_v26/model.pt
+      CLASSIFIER_PATH: /data/models/classifier_v0_10_2/model.pt
+      CLASSIFIER_INFERENCE_MODULE_DIR: /data/models/classifier_v0_10_2
       EVENTS_LOG_DIR: /data/logs/events
       FRAMES_DIR: /data/frames
+      FALLBACK_VIDEO_SOURCE: file:///data/test_videos
     volumes:
       # Mount host models on top of the baked layer — dev users can swap
       # weights without rebuilding the image. Strip this in production.
