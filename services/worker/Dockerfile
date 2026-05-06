@@ -17,22 +17,29 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # python3.11 + ffmpeg (RTSP/H.264 decode) + libGL/glib (opencv-headless
-# still pulls a few system libs even though it's GUI-less).
+# still pulls a few system libs even though it's GUI-less). We bootstrap
+# pip into Python 3.11 explicitly via ensurepip — `python3-pip` from apt
+# binds to the distro's default Python (3.10 on ubuntu 22.04), which
+# would silently install cp310 wheels and miss recent releases that
+# only ship cp311+ wheels (e.g., scipy 1.17.x).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-venv python3-pip \
+        python3.11 python3.11-venv \
         libgl1 libglib2.0-0 \
         ffmpeg \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && python3.11 -m ensurepip --upgrade \
+    && python3.11 -m pip install --upgrade pip
 
 WORKDIR /app
 
-# Single pip install: requirements.txt declares its own --extra-index-url
-# for the CUDA 12.4 torch wheels.
+# Always invoke pip via `python -m pip` so it uses our 3.11 interpreter
+# (and finds cp311 wheels). requirements.txt declares its own
+# --extra-index-url for the CUDA 12.4 torch wheels.
 COPY services/worker/requirements.txt /app/requirements.txt
-RUN pip install -r /app/requirements.txt
+RUN python -m pip install --no-cache-dir -r /app/requirements.txt
 
 # Fishial model artifacts (detector + classifier bundle + the vendored
 # inference.py the worker loads into sys.path at runtime).
