@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     chlorophyll_rfu   REAL,
     phycoerythrin_rfu REAL,
     turbidity_fnu     REAL,
-    no3_mg_l          REAL,
+    -- (nitrate sensor removed from the sonde 2026-05; column dropped via
+    -- migration in this commit; left out of fresh schemas going forward.)
     spcond_ms_cm      REAL,
     source            TEXT NOT NULL DEFAULT 'live',  -- 'live' | 'synthetic'
     UNIQUE (deployment_uri, ts)

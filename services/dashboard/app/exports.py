@@ -134,7 +134,7 @@ def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str)
         SELECT ts, deployment_uri, source,
                water_temp_c, ph, do_pct,
                chlorophyll_rfu, phycoerythrin_rfu,
-               turbidity_fnu, no3_mg_l, spcond_ms_cm
+               turbidity_fnu, spcond_ms_cm
           FROM sensor_readings
          WHERE deployment_uri = %s
            AND ts >= NOW() - (%s::int || ' hours')::interval
@@ -143,7 +143,7 @@ def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str)
     cols = ["ts", "deployment_uri", "source",
             "water_temp_c", "ph", "do_pct",
             "chlorophyll_rfu", "phycoerythrin_rfu",
-            "turbidity_fnu", "no3_mg_l", "spcond_ms_cm"]
+            "turbidity_fnu", "spcond_ms_cm"]
     return _stream(pool, sql, (deployment, hours), cols)
 
 
@@ -306,7 +306,6 @@ def export_hourly_summary(pool: AsyncConnectionPool, hours: int, deployment: str
                    avg(chlorophyll_rfu)::real   AS chlorophyll_rfu,
                    avg(phycoerythrin_rfu)::real AS phycoerythrin_rfu,
                    avg(turbidity_fnu)::real     AS turbidity_fnu,
-                   avg(no3_mg_l)::real          AS no3_mg_l,
                    avg(spcond_ms_cm)::real      AS spcond_ms_cm
               FROM sensor_readings
              WHERE deployment_uri = %s
@@ -318,7 +317,7 @@ def export_hourly_summary(pool: AsyncConnectionPool, hours: int, deployment: str
                db.event_count, db.sighting_count, db.mean_accuracy,
                wq.water_temp_c, wq.ph, wq.do_pct,
                wq.chlorophyll_rfu, wq.phycoerythrin_rfu, wq.turbidity_fnu,
-               wq.no3_mg_l, wq.spcond_ms_cm
+               wq.spcond_ms_cm
           FROM detection_buckets db
           LEFT JOIN wq_buckets wq USING (hour)
          ORDER BY db.hour ASC, db.event_count DESC
@@ -327,7 +326,7 @@ def export_hourly_summary(pool: AsyncConnectionPool, hours: int, deployment: str
             "event_count", "sighting_count", "mean_accuracy",
             "water_temp_c", "ph", "do_pct",
             "chlorophyll_rfu", "phycoerythrin_rfu", "turbidity_fnu",
-            "no3_mg_l", "spcond_ms_cm"]
+            "spcond_ms_cm"]
     return _stream(pool, sql, (hours, deployment, hours), cols)
 
 
@@ -594,7 +593,6 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
                        avg(chlorophyll_rfu)::real   AS chlorophyll_rfu,
                        avg(phycoerythrin_rfu)::real AS phycoerythrin_rfu,
                        avg(turbidity_fnu)::real     AS turbidity_fnu,
-                       avg(no3_mg_l)::real          AS no3_mg_l,
                        avg(spcond_ms_cm)::real      AS spcond_ms_cm
                   FROM sensor_readings
                  WHERE deployment_uri = %s
@@ -605,7 +603,7 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
                    db.event_count, db.sighting_count, db.mean_accuracy,
                    wq.water_temp_c, wq.ph, wq.do_pct,
                    wq.chlorophyll_rfu, wq.phycoerythrin_rfu, wq.turbidity_fnu,
-                   wq.no3_mg_l, wq.spcond_ms_cm
+                   wq.spcond_ms_cm
               FROM detection_buckets db
               LEFT JOIN wq_buckets wq USING (hour)
              ORDER BY db.hour ASC, db.event_count DESC
@@ -614,7 +612,7 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
                 "event_count", "sighting_count", "mean_accuracy",
                 "water_temp_c", "ph", "do_pct",
                 "chlorophyll_rfu", "phycoerythrin_rfu", "turbidity_fnu",
-                "no3_mg_l", "spcond_ms_cm"]
+                "spcond_ms_cm"]
         return sql, (hours, deployment, hours), cols
 
     raise ValueError(f"resource '{resource}' has no query builder")

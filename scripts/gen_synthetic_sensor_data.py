@@ -10,8 +10,9 @@ by the ``wahoo_2`` deployment on sensestream.org:
     - Chlorophyll (RFU)
     - Phycoerythrin (RFU)
     - Turbidity (FNU)
-    - NO3-N (mg/L)
     - Specific Conductance (mS/cm)
+    (NO3-N nitrate sensor was removed from the sonde 2026-05;
+     it's no longer generated or written.)
 
 Model assumptions (Pompano Beach / Hillsboro Inlet, tidal, oligotrophic,
 Atlantic-influenced with some Intracoastal mixing):
@@ -19,7 +20,7 @@ Atlantic-influenced with some Intracoastal mixing):
     - Solar-driven diurnal cycle for temp / pH / DO / chlorophyll.
     - M2 semidiurnal tide + S2 daily tide drives turbidity + minor mixing.
     - Rain events (Poisson-like, more frequent in wet season) dilute sPCond,
-      pulse NO3 and turbidity, transiently depress DO and pH.
+      pulse turbidity, transiently depress DO and pH.
     - Occasional chlorophyll bloom events, correlated with phycoerythrin.
     - Gaussian instrument noise per channel (scale set by typical EXO2 spec).
 
@@ -192,13 +193,6 @@ def synthesize(
     turb_noise = np.maximum(0.0, rng.normal(0.0, 0.25, steps))
     turbidity_fnu = 1.8 + turb_tidal + turb_storm + turb_noise
 
-    # --- NO3-N (mg/L) ---------------------------------------------------------
-    base_no3 = 0.05
-    storm_no3 = 0.25 * rain                                   # stormwater runoff pulse
-    wet_bias = 0.05 * _wet_season(doy)
-    no3_noise = np.abs(rng.normal(0.0, 0.01, steps))
-    no3_mg_l = base_no3 + storm_no3 + wet_bias + no3_noise
-
     # --- Specific Conductance (mS/cm) ----------------------------------------
     # Seawater ~53 mS/cm; freshwater dilution from storms + ICW mixing on ebb.
     base_sp = 52.5
@@ -217,7 +211,6 @@ def synthesize(
         "chlorophyll_rfu": chlorophyll_rfu,
         "phycoerythrin_rfu": phycoerythrin_rfu,
         "turbidity_fnu": turbidity_fnu,
-        "no3_mg_l": no3_mg_l,
         "spcond_ms_cm": spcond_ms_cm,
     }
 
@@ -229,7 +222,7 @@ def synthesize(
 COLUMNS = (
     "ts", "deployment_uri", "water_temp_c", "ph", "do_pct",
     "chlorophyll_rfu", "phycoerythrin_rfu", "turbidity_fnu",
-    "no3_mg_l", "spcond_ms_cm", "source",
+    "spcond_ms_cm", "source",
 )
 
 
@@ -247,7 +240,6 @@ def _iter_rows(arrays: dict, deployment_uri: str, source: str) -> Iterable[tuple
             round(float(arrays["chlorophyll_rfu"][i]), 3),
             round(float(arrays["phycoerythrin_rfu"][i]), 3),
             round(float(arrays["turbidity_fnu"][i]), 3),
-            round(float(arrays["no3_mg_l"][i]), 4),
             round(float(arrays["spcond_ms_cm"][i]), 3),
             source,
         )
@@ -275,8 +267,8 @@ def load_postgres(dsn: str, arrays: dict, deployment_uri: str, source: str) -> i
             INSERT INTO sensor_readings
                 (ts, deployment_uri, water_temp_c, ph, do_pct,
                  chlorophyll_rfu, phycoerythrin_rfu, turbidity_fnu,
-                 no3_mg_l, spcond_ms_cm, source)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 spcond_ms_cm, source)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (deployment_uri, ts) DO NOTHING
             """,
             rows,
@@ -326,7 +318,7 @@ def main() -> int:
     print(f"samples: {n:,} rows @ {SAMPLE_PERIOD_S}s cadence")
 
     for key in ("water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
-                "phycoerythrin_rfu", "turbidity_fnu", "no3_mg_l", "spcond_ms_cm"):
+                "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm"):
         vals = arrays[key]
         print(f"  {key:20s}  mean={vals.mean():8.3f}  min={vals.min():8.3f}  max={vals.max():8.3f}")
 

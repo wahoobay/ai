@@ -201,7 +201,20 @@ def build_app() -> FastAPI:
         client: httpx.AsyncClient = state["client"]
         try:
             r = await client.get(f"{cfg.worker_url}/live.json")
-            return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+            if r.status_code != 200:
+                return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+            try:
+                data = r.json()
+            except Exception:
+                return Response(content=r.content, media_type="application/json")
+            # Enrich with common names so the dashboard's Current detections
+            # panel can show "Sergeant Major (Abudefduf saxatilis)" without a
+            # client-side lookup table.
+            for d in data.get("detections", []) or []:
+                latin = d.get("best_name")
+                if latin:
+                    d["best_common"] = common_name(latin)
+            return JSONResponse(data)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
 
@@ -329,7 +342,7 @@ def build_app() -> FastAPI:
     # ------------------------------------------------------------------
     SENSOR_COLUMNS = (
         "water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
-        "phycoerythrin_rfu", "turbidity_fnu", "no3_mg_l", "spcond_ms_cm",
+        "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm",
     )
 
     @app.get("/api/water_quality/latest")

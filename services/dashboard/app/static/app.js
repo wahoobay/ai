@@ -85,7 +85,14 @@ function renderCurrent(live) {
     .slice()
     .sort((a, b) => (b.best_accuracy ?? 0) - (a.best_accuracy ?? 0))
     .map((d) => {
-      const name = d.best_name ?? "unknown";
+      const latin = d.best_name ?? "unknown";
+      const common = d.best_common;
+      // Match the "Most-spotted fish" formatting: common name first,
+      // scientific in italic parens; if there's no common name we fall
+      // back to italic Latin alone.
+      const display = common
+        ? `${common} <em>(${latin})</em>`
+        : `<em>${latin}</em>`;
       const acc = d.best_accuracy;
       const topk = (d.topk || [])
         .slice(1)
@@ -93,7 +100,7 @@ function renderCurrent(live) {
         .join(" · ");
       return `
         <li>
-          <span class="species-name">${name}</span>
+          <span class="species-name">${display}</span>
           <span class="acc">${fmtPct(acc)}</span>
           <span class="detconf">det ${fmtPct(d.det_conf)}</span>
           <div class="meta">bbox ${d.bbox.join(",")}</div>
@@ -355,14 +362,18 @@ async function tickHistory() {
 
 // ---------- Water quality panel ----------
 
+// Stored values stay in their source units (e.g. water_temp_c is Celsius
+// from the sonde); fmt converts to display units. The `normal` range is
+// in the *stored* units so the out-of-range comparison stays consistent
+// across cell value, sparkline, and any future alerting that hits the
+// raw value.
 const WQ_PARAMS = [
-  { key: "water_temp_c",      label: "Water temp", unit: "°C",    fmt: (v) => v.toFixed(2), normal: [18, 32] },
+  { key: "water_temp_c",      label: "Water temp", unit: "°F",    fmt: (v) => (v * 9/5 + 32).toFixed(1), normal: [18, 32] },
   { key: "ph",                label: "pH",          unit: "",     fmt: (v) => v.toFixed(2), normal: [7.6, 8.4] },
   { key: "do_pct",            label: "DO",          unit: "% sat", fmt: (v) => v.toFixed(1), normal: [60, 130] },
   { key: "chlorophyll_rfu",   label: "Chlorophyll", unit: "RFU",  fmt: (v) => v.toFixed(2), normal: [0, 6] },
   { key: "phycoerythrin_rfu", label: "Phycoerythrin", unit: "RFU", fmt: (v) => v.toFixed(2), normal: [0, 3] },
   { key: "turbidity_fnu",     label: "Turbidity",   unit: "FNU",  fmt: (v) => v.toFixed(2), normal: [0, 15] },
-  { key: "no3_mg_l",          label: "Nitrate-N",   unit: "mg/L", fmt: (v) => v.toFixed(3), normal: [0, 1.0] },
   { key: "spcond_ms_cm",      label: "Sp. cond.",   unit: "mS/cm", fmt: (v) => v.toFixed(2), normal: [25, 60] },
 ];
 
@@ -940,7 +951,13 @@ function renderSightingsXWater(data, paramKey) {
   const maxL = Math.max(...sightings, 1);
   const yL = v => H - padB - (v/maxL) * (H - padT - padB);
 
-  const wq = series.map(p => p[paramKey]);
+  // Display water temperature in Fahrenheit even though it's stored in
+  // Celsius. Other params are pass-through.
+  const tempCelsius = paramKey === "water_temp_c";
+  const wq = series.map(p => {
+    const v = p[paramKey];
+    return v == null ? null : (tempCelsius ? v * 9/5 + 32 : v);
+  });
   const wqDef = wq.filter(v => v != null);
   const minR = wqDef.length ? Math.min(...wqDef) : 0;
   const maxR = wqDef.length ? Math.max(...wqDef) : 1;
@@ -959,8 +976,8 @@ function renderSightingsXWater(data, paramKey) {
 
   let linePath = "";
   if (wqDef.length >= 2) {
-    const pts = series
-      .map((p, i) => p[paramKey] != null ? `${xS(xs[i]).toFixed(1)},${yR(p[paramKey]).toFixed(1)}` : null)
+    const pts = wq
+      .map((v, i) => v != null ? `${xS(xs[i]).toFixed(1)},${yR(v).toFixed(1)}` : null)
       .filter(Boolean)
       .join(" L ");
     linePath = `<path d="M ${pts}" stroke="var(--warn)" stroke-width="1.4" fill="none"/>`;

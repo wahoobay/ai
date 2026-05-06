@@ -84,7 +84,7 @@ with environmental conditions?".
 | `event_count` | raw events that hour |
 | `sighting_count` | distinct tracks that hour |
 | `mean_accuracy` | mean classifier confidence |
-| `water_temp_c`, `ph`, `do_pct`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu`, `no3_mg_l`, `spcond_ms_cm` | hourly means from the sonde |
+| `water_temp_c`, `ph`, `do_pct`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu`, `spcond_ms_cm` | hourly means from the sonde (NO3-N nitrate sensor was removed 2026-05) |
 
 ### `tracks_timeline.csv`
 
