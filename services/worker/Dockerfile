@@ -17,11 +17,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # python3.11 + ffmpeg (RTSP/H.264 decode) + libGL/glib (opencv-headless
-# still pulls a few system libs even though it's GUI-less). We bootstrap
-# pip into Python 3.11 explicitly via ensurepip — `python3-pip` from apt
-# binds to the distro's default Python (3.10 on ubuntu 22.04), which
-# would silently install cp310 wheels and miss recent releases that
-# only ship cp311+ wheels (e.g., scipy 1.17.x).
+# still pulls a few system libs even though it's GUI-less). We don't
+# install `python3-pip` from apt — that binds pip to the distro's
+# default Python (3.10 on Ubuntu 22.04), which would silently install
+# cp310 wheels and miss recent releases that only ship cp311+ wheels
+# (e.g., scipy 1.17.x). Ubuntu also disables ensurepip on the system
+# Python, so we bootstrap pip via the official get-pip.py installer
+# bound explicitly to the python3.11 interpreter.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.11 python3.11-venv \
         libgl1 libglib2.0-0 \
@@ -30,8 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
     && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
-    && python3.11 -m ensurepip --upgrade \
-    && python3.11 -m pip install --upgrade pip
+    && curl -sSL https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && python3.11 -m pip install --no-cache-dir --upgrade pip
 
 WORKDIR /app
 
