@@ -605,20 +605,24 @@ li.empty { color: var(--muted); font-style: italic; }
 .ov-map {
   background: #0e2a3d;
   border-radius: 4px;
-  height: 200px;
+  height: 260px;
   position: relative;
   overflow: hidden;
 }
-.ov-map svg { width: 100%; height: 100%; display: block; }
-.ov-map-pin {
-  fill: var(--accent);
-  stroke: #fff;
-  stroke-width: 1.2;
+/* Leaflet styling — keep it consistent with our dark theme. */
+.ov-map .leaflet-container { background: #0e2a3d; height: 100%; width: 100%; }
+.ov-map .leaflet-popup-content-wrapper {
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 4px;
 }
-.ov-map-label {
+.ov-map .leaflet-popup-tip { background: var(--panel); }
+.ov-map .leaflet-control-attribution {
+  background: rgba(11, 26, 36, 0.75);
+  color: var(--muted);
   font-size: 9px;
-  fill: #cbd9e3;
 }
+.ov-map .leaflet-control-attribution a { color: var(--accent); }
 
 @media (max-width: 700px) {
   .reports-grid { grid-template-columns: 1fr; }
@@ -714,7 +718,7 @@ li.empty { color: var(--muted); font-style: italic; }
 .chart-card.chart-wide { grid-column: 1 / -1; }
 
 /* ----- Species profile modal ----- */
-.species-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; }
+.species-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
 .species-modal.hidden { display: none; }
 .species-modal-backdrop {
   position: absolute; inset: 0;

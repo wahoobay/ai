@@ -1203,9 +1203,15 @@ async function _loadCameraMeta() {
   } catch { return null; }
 }
 
+let _leafletMap = null;
 function _renderMap(sources) {
   const el = document.getElementById("ov-map");
   if (!el) return;
+  if (typeof L === "undefined") {
+    // Leaflet still loading — try again on the next tick.
+    setTimeout(() => _renderMap(sources), 250);
+    return;
+  }
   if (!sources || !Object.keys(sources).length) {
     el.innerHTML = `<div style="padding:20px;color:var(--muted);font-size:12px;text-align:center">no camera metadata</div>`;
     return;
@@ -1213,29 +1219,40 @@ function _renderMap(sources) {
   const pts = Object.entries(sources)
     .filter(([_, v]) => v.lat != null && v.lng != null)
     .map(([k, v]) => ({ key: k, name: v.display_name || k, lat: v.lat, lng: v.lng }));
-  if (pts.length === 0) { el.innerHTML = ""; return; }
-  // Tight bbox around the points with a margin.
-  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng);
-  const latMin = Math.min(...lats), latMax = Math.max(...lats);
-  const lngMin = Math.min(...lngs), lngMax = Math.max(...lngs);
-  const latPad = Math.max(0.005, (latMax - latMin) * 0.4);
-  const lngPad = Math.max(0.005, (lngMax - lngMin) * 0.4);
-  const W = 480, H = 200, padX = 30, padY = 22;
-  const xS = lng => padX + ((lng - (lngMin - lngPad)) / ((lngMax + lngPad) - (lngMin - lngPad))) * (W - 2 * padX);
-  // y inverted (north up)
-  const yS = lat => padY + (1 - ((lat - (latMin - latPad)) / ((latMax + latPad) - (latMin - latPad)))) * (H - 2 * padY);
+  if (pts.length === 0) { el.innerHTML = `<div style="padding:20px;color:var(--muted)">no coordinates in camera_metadata.json</div>`; return; }
 
-  const pins = pts.map(p => `
-    <circle class="ov-map-pin" cx="${xS(p.lng).toFixed(1)}" cy="${yS(p.lat).toFixed(1)}" r="5"/>
-    <text class="ov-map-label" x="${(xS(p.lng) + 8).toFixed(1)}" y="${(yS(p.lat) + 3).toFixed(1)}">${p.name}</text>
-  `).join("");
+  // First call: create the map. Subsequent calls reuse it.
+  if (!_leafletMap || !el.contains(_leafletMap.getContainer())) {
+    el.innerHTML = "";
+    _leafletMap = L.map(el, {
+      attributionControl: true,
+      zoomControl: true,
+      // Dark-theme-friendly defaults
+      preferCanvas: true,
+    });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(_leafletMap);
+  }
 
-  // North arrow + scale ticks
-  const compass = `
-    <text x="14" y="18" font-size="10" fill="var(--muted)" font-weight="600">N ▲</text>
-    <text x="${(W - 8).toFixed(1)}" y="${(H - 6).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">Pompano Beach, FL</text>
-  `;
-  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${compass}${pins}</svg>`;
+  // Drop any existing markers and re-add (cheap; only ever 2 markers).
+  _leafletMap.eachLayer(layer => { if (layer instanceof L.Marker) _leafletMap.removeLayer(layer); });
+  for (const p of pts) {
+    L.marker([p.lat, p.lng])
+      .addTo(_leafletMap)
+      .bindPopup(`<strong>${p.name}</strong><br><small>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</small>`);
+  }
+
+  if (pts.length === 1) {
+    _leafletMap.setView([pts[0].lat, pts[0].lng], 14);
+  } else {
+    const bounds = L.latLngBounds(pts.map(p => [p.lat, p.lng]));
+    _leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+  }
+  // Some layouts (display:none → block) leave Leaflet sized to 0 until
+  // invalidateSize() is called.
+  setTimeout(() => _leafletMap.invalidateSize(), 50);
 }
 
 async function renderOverviewTab(hours) {
