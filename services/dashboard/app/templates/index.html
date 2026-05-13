@@ -24,6 +24,10 @@
     <section class="stream-col">
       <div class="stream-wrap">
         <img id="stream" src="/api/stream.mjpeg" alt="live stream">
+        <div id="camera-toggle" class="camera-toggle" title="Switch camera">
+          <button class="cam-btn active" data-cam="seahivecam">🪸 SeaHIVE</button>
+          <button class="cam-btn"        data-cam="pier_cam">🌊 Pier</button>
+        </div>
         <button id="bbox-toggle" class="stream-overlay-btn" title="Toggle bounding boxes">🟦 boxes: on</button>
         <div id="fallback-banner" class="fallback-banner hidden">
           🌙 <strong>Camera is dark</strong> — showing previously-recorded clips for visual continuity.
@@ -166,12 +170,45 @@
             </div>
           </div>
 
-          <!-- Fish Explorer tab — placeholder; populated in a follow-up branch -->
+          <!-- Fish Explorer tab — species detail + habitat (camera) matrix -->
           <div class="reports-tab-panel" id="tab-fish-explorer" role="tabpanel">
-            <div class="reports-placeholder">
-              <p>Fish Explorer — species-detail table, top-species ranking,
-                 habitat matrix, species profile drill-through.</p>
-              <p class="reports-placeholder-meta">In progress — landing in the next branch.</p>
+            <div class="kpi-row">
+              <div class="kpi-tile"><div class="kpi-label">Unique Species</div><div class="kpi-value" id="fe-kpi-species">—</div><div class="kpi-sub">in window</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Total Sightings</div><div class="kpi-value" id="fe-kpi-sightings">—</div><div class="kpi-sub">distinct tracks</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Rare Species</div><div class="kpi-value" id="fe-kpi-rare">—</div><div class="kpi-sub">≤ 3 sightings</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Top Camera</div><div class="kpi-value" id="fe-kpi-topcam">—</div><div class="kpi-sub">habitat with most fish</div></div>
+            </div>
+            <div class="reports-grid">
+              <section class="chart-card">
+                <h2>Top species by sightings</h2>
+                <div id="fe-top-species" class="reef-top-species"></div>
+              </section>
+              <section class="chart-card">
+                <h2>Species richness over time</h2>
+                <div class="chart-svg-wrap"><svg id="fe-chart-richness" viewBox="0 0 480 160" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card chart-wide">
+                <h2>Species × habitat (camera) matrix</h2>
+                <div id="fe-habitat-matrix" class="habitat-matrix"></div>
+              </section>
+              <section class="chart-card chart-wide">
+                <h2>Species detail</h2>
+                <div class="species-table-wrap">
+                  <table class="species-table" id="fe-species-table">
+                    <thead>
+                      <tr>
+                        <th class="sortable" data-sort="name">Name</th>
+                        <th class="sortable num" data-sort="sightings">Sightings</th>
+                        <th class="sortable num" data-sort="mean_accuracy">Mean acc</th>
+                        <th>Cameras</th>
+                        <th class="sortable num" data-sort="last_seen">Last seen</th>
+                      </tr>
+                    </thead>
+                    <tbody><tr><td colspan="5" class="empty">loading…</td></tr></tbody>
+                  </table>
+                </div>
+                <p class="reports-placeholder-meta">Click any row for a species profile drill-through.</p>
+              </section>
             </div>
           </div>
 
@@ -354,6 +391,33 @@
       </section>
     </aside>
   </main>
+
+  <!-- Species profile drill-through modal (opened from Fish Explorer table) -->
+  <div id="species-modal" class="species-modal hidden" role="dialog" aria-modal="true" aria-labelledby="sm-title">
+    <div class="species-modal-backdrop" data-modal-close="1"></div>
+    <div class="species-modal-card">
+      <button class="species-modal-x" data-modal-close="1" aria-label="Close">✕</button>
+      <h2 id="sm-title">Species profile</h2>
+      <div class="sm-summary">
+        <div class="sm-name"><span id="sm-common">—</span> <em id="sm-latin">—</em></div>
+        <div class="sm-stats" id="sm-stats">—</div>
+      </div>
+      <div class="sm-grid">
+        <section class="sm-card">
+          <h3>Activity by hour of day</h3>
+          <div class="chart-svg-wrap"><svg id="sm-chart-hod" viewBox="0 0 480 120" preserveAspectRatio="none"></svg></div>
+        </section>
+        <section class="sm-card">
+          <h3>Top-1 accuracy distribution</h3>
+          <div class="chart-svg-wrap"><svg id="sm-chart-acc" viewBox="0 0 480 120" preserveAspectRatio="none"></svg></div>
+        </section>
+      </div>
+      <section class="sm-card">
+        <h3>Recent saved frames</h3>
+        <div id="sm-frames" class="sm-frames"></div>
+      </section>
+    </div>
+  </div>
 
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
 </body>

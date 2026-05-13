@@ -784,8 +784,16 @@ function initBboxToggle() {
   const img = document.getElementById("stream");
   if (!btn || !img) return;
 
+  function streamSrc(camId, showing) {
+    if (camId === "pier_cam") {
+      return showing ? "/api/stream_pier.mjpeg" : "/api/stream_pier_raw.mjpeg";
+    }
+    return showing ? "/api/stream.mjpeg" : "/api/stream_raw.mjpeg";
+  }
+
   function apply(showing) {
-    img.src = showing ? "/api/stream.mjpeg" : "/api/stream_raw.mjpeg";
+    const cam = window._wbActiveCamera || localStorage.getItem("wb_camera") || "seahivecam";
+    img.src = streamSrc(cam, showing);
     btn.textContent = showing ? "🟦 boxes: on" : "🟦 boxes: off";
     btn.classList.toggle("off", !showing);
     localStorage.setItem("wb_bboxes_off", showing ? "0" : "1");
@@ -1417,6 +1425,326 @@ function renderDataNotesTab() {
   if (el) el.textContent = new Date().toLocaleString();
 }
 
+// ---------- Render: Fish Explorer ----------
+
+const _feState = { sortBy: "sightings", sortDir: "desc", species: [] };
+
+function _camLabel(src) {
+  if (src === "seahivecam") return "SeaHIVE";
+  if (src === "pier_cam") return "Pier";
+  return src || "—";
+}
+
+function _feSortSpecies(arr) {
+  const key = _feState.sortBy;
+  const dir = _feState.sortDir === "desc" ? -1 : 1;
+  return arr.slice().sort((a, b) => {
+    let va = a[key], vb = b[key];
+    if (key === "name") { va = (a.common || a.latin || "").toLowerCase(); vb = (b.common || b.latin || "").toLowerCase(); }
+    if (key === "last_seen") { va = new Date(va || 0).getTime(); vb = new Date(vb || 0).getTime(); }
+    if (va == null) va = -Infinity;
+    if (vb == null) vb = -Infinity;
+    return va < vb ? -dir : va > vb ? dir : 0;
+  });
+}
+
+function _renderSpeciesTable() {
+  const tbody = document.querySelector("#fe-species-table tbody");
+  if (!tbody) return;
+  const rows = _feSortSpecies(_feState.species);
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty">no sightings in window</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(s => {
+    const name = s.common
+      ? `${s.common} <em>(${s.latin})</em>`
+      : `<em>${s.latin}</em>`;
+    const acc = s.mean_accuracy != null ? (s.mean_accuracy * 100).toFixed(0) + "%" : "—";
+    const cams = (s.sources || []).map(_camLabel).join(", ") || "—";
+    const last = s.last_seen ? new Date(s.last_seen).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+    return `<tr data-species-id="${s.species_id}">
+      <td>${name}</td>
+      <td class="num">${s.sightings}</td>
+      <td class="num">${acc}</td>
+      <td>${cams}</td>
+      <td class="num">${last}</td>
+    </tr>`;
+  }).join("");
+  // sort-active header decoration
+  document.querySelectorAll("#fe-species-table th.sortable").forEach(th => {
+    th.classList.toggle("sort-active", th.dataset.sort === _feState.sortBy);
+  });
+}
+
+function _renderHabitatMatrix(matrix) {
+  const el = document.getElementById("fe-habitat-matrix");
+  if (!el) return;
+  const sources = matrix?.sources || [];
+  const species = matrix?.species || [];
+  if (!sources.length || !species.length) {
+    el.innerHTML = `<div class="empty" style="font-size:12px;color:var(--muted)">collecting…</div>`;
+    return;
+  }
+  // grid: 1 name col + N source cols
+  el.style.gridTemplateColumns = `minmax(160px, 2fr) ${sources.map(() => "1fr").join(" ")}`;
+  let html = `<div class="hm-row"><div class="hm-header">species</div>`;
+  for (const s of sources) html += `<div class="hm-header" style="text-align:right">${_camLabel(s)}</div>`;
+  html += `</div>`;
+  // Max count for color scaling
+  let max = 1;
+  for (const sp of species) for (const v of Object.values(sp.counts || {})) if (v > max) max = v;
+  for (const sp of species) {
+    const name = sp.common ? `${sp.common} <em>(${sp.latin})</em>` : `<em>${sp.latin}</em>`;
+    html += `<div class="hm-row"><div class="hm-name">${name}</div>`;
+    for (const s of sources) {
+      const v = sp.counts?.[s] || 0;
+      const intensity = Math.min(1, v / max);
+      const bg = `rgba(79, 193, 255, ${(0.06 + 0.55 * intensity).toFixed(3)})`;
+      html += `<div class="hm-cell" style="background:${bg}">${v || ""}</div>`;
+    }
+    html += `</div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function renderFishExplorerTab(hours) {
+  const [speciesList, matrix, detRate] = await Promise.all([
+    pollWithCache(`/api/species/list?hours=${hours}`).catch(() => null),
+    pollWithCache(`/api/species/habitat_matrix?hours=${hours}&top_n=15`).catch(() => null),
+    pollWithCache(`/api/charts/detection_rate?hours=${hours}`).catch(() => null),
+  ]);
+
+  const list = speciesList?.species || [];
+  _feState.species = list;
+
+  // KPIs
+  const setText = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+  setText("fe-kpi-species", list.length);
+  const totalSightings = list.reduce((s, x) => s + (x.sightings || 0), 0);
+  setText("fe-kpi-sightings", totalSightings);
+  const rare = list.filter(x => (x.sightings || 0) <= 3).length;
+  setText("fe-kpi-rare", rare);
+  // Top camera = source_name appearing most often across sightings
+  const camCounts = {};
+  for (const s of list) {
+    for (const src of (s.sources || [])) {
+      camCounts[src] = (camCounts[src] || 0) + (s.sightings || 0);
+    }
+  }
+  const topCam = Object.entries(camCounts).sort((a, b) => b[1] - a[1])[0];
+  setText("fe-kpi-topcam", topCam ? _camLabel(topCam[0]) : "—");
+
+  // Top species bar list — reuse the reef explorer renderer's style
+  const topEl = document.getElementById("fe-top-species");
+  if (topEl) {
+    const top = list.slice(0, 8);
+    if (top.length === 0) {
+      topEl.innerHTML = `<div class="empty" style="font-size:12px">no sightings yet</div>`;
+    } else {
+      const max = Math.max(...top.map(r => r.sightings), 1);
+      topEl.innerHTML = top.map(r => {
+        const pct = (100 * r.sightings / max).toFixed(1);
+        const display = r.common ? `${r.common} <em>(${r.latin})</em>` : `<em>${r.latin}</em>`;
+        return `<div class="reef-top-row">
+          <div class="reef-bar-wrap"><div class="reef-bar" style="width:${pct}%"></div><div class="reef-name">${display}</div></div>
+          <div class="reef-count">${r.sightings}</div>
+        </div>`;
+      }).join("");
+    }
+  }
+
+  // Species richness over time — derive from detection_rate (one bucket = one hour;
+  // we don't have hourly distinct species cheaply, so use a proxy: hourly sightings).
+  const richSvg = document.getElementById("fe-chart-richness");
+  if (richSvg && detRate?.series?.length) {
+    const points = detRate.series.map(p => ({
+      x: new Date(p.hour).getTime(),
+      y: p.sightings,
+    }));
+    _miniLine(richSvg, points, { unit: "sightings/hr", fmt: n => n.toFixed(0) });
+  }
+
+  // Habitat matrix
+  _renderHabitatMatrix(matrix);
+
+  // Species table
+  _renderSpeciesTable();
+}
+
+function _initFishExplorerInteractions() {
+  // Header sort
+  document.querySelectorAll("#fe-species-table th.sortable").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (_feState.sortBy === key) {
+        _feState.sortDir = _feState.sortDir === "desc" ? "asc" : "desc";
+      } else {
+        _feState.sortBy = key;
+        _feState.sortDir = (key === "name") ? "asc" : "desc";
+      }
+      _renderSpeciesTable();
+    });
+  });
+  // Row click → drill-through modal (event delegation)
+  const tbody = document.querySelector("#fe-species-table tbody");
+  if (tbody) {
+    tbody.addEventListener("click", (e) => {
+      const tr = e.target.closest("tr[data-species-id]");
+      if (!tr) return;
+      openSpeciesModal(tr.dataset.speciesId);
+    });
+  }
+}
+
+// ---------- Species profile modal ----------
+
+async function openSpeciesModal(speciesId) {
+  const modal = document.getElementById("species-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  document.getElementById("sm-common").textContent = "loading…";
+  document.getElementById("sm-latin").textContent = "";
+  document.getElementById("sm-stats").textContent = "";
+  document.getElementById("sm-frames").innerHTML = "";
+  document.getElementById("sm-chart-hod").innerHTML = "";
+  document.getElementById("sm-chart-acc").innerHTML = "";
+
+  const hours = reportsHours();
+  let data;
+  try {
+    data = await (await fetch(`/api/species/${encodeURIComponent(speciesId)}/profile?hours=${hours}`, { cache: "no-store" })).json();
+  } catch {
+    document.getElementById("sm-common").textContent = "failed to load";
+    return;
+  }
+
+  document.getElementById("sm-common").textContent = data.common || "(no common name)";
+  document.getElementById("sm-latin").textContent = data.latin ? `(${data.latin})` : "";
+  const accMean = data.mean_accuracy != null ? (data.mean_accuracy * 100).toFixed(1) + "%" : "—";
+  const accPeak = data.peak_accuracy != null ? (data.peak_accuracy * 100).toFixed(1) + "%" : "—";
+  const camLabels = (data.sources || []).map(_camLabel).join(", ") || "—";
+  const first = data.first_seen ? new Date(data.first_seen).toLocaleString() : "—";
+  const last = data.last_seen ? new Date(data.last_seen).toLocaleString() : "—";
+  document.getElementById("sm-stats").innerHTML =
+    `<strong>${data.sightings || 0}</strong> sightings · ` +
+    `<strong>${data.total_frames || 0}</strong> frames · ` +
+    `mean acc ${accMean} · peak ${accPeak}<br/>` +
+    `cameras: ${camLabels} · first: ${first} · last: ${last}`;
+
+  // Hour-of-day bars
+  const hod = data.hour_of_day || [];
+  const hodSvg = document.getElementById("sm-chart-hod");
+  if (hodSvg && hod.length) {
+    const W = 480, H = 120, padL = 28, padR = 8, padT = 8, padB = 22;
+    const maxN = Math.max(...hod.map(h => h.sightings), 1);
+    const bw = (W - padL - padR) / 24;
+    const bars = hod.map(h => {
+      const x = padL + h.hour * bw + 1;
+      const bh = ((h.sightings) / maxN) * (H - padT - padB);
+      const y = H - padB - bh;
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" fill="var(--accent)" opacity="0.65"/>`;
+    }).join("");
+    const ticks = [0, 6, 12, 18].map(h => {
+      const x = padL + h * bw + bw / 2;
+      return `<text x="${x.toFixed(1)}" y="${(H - 6).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${h}h</text>`;
+    }).join("");
+    const peakLabel = `<text x="${(padL - 4).toFixed(1)}" y="${(padT + 8).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">peak ${maxN}</text>`;
+    hodSvg.innerHTML = `${peakLabel}${bars}${ticks}`;
+  }
+
+  // Accuracy distribution bars
+  const acc = data.accuracy_bins || [];
+  const accSvg = document.getElementById("sm-chart-acc");
+  if (accSvg && acc.length) {
+    const W = 480, H = 120, padL = 36, padR = 8, padT = 8, padB = 22;
+    const labels = acc.map(a => a.bucket);
+    const counts = acc.map(a => a.n);
+    const maxN = Math.max(...counts, 1);
+    const bw = (W - padL - padR) / labels.length;
+    const bars = counts.map((c, i) => {
+      const x = padL + i * bw + 4;
+      const bh = (c / maxN) * (H - padT - padB);
+      const y = H - padB - bh;
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 8).toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" fill="var(--accent)" opacity="0.65"/>
+              <text x="${(x + (bw - 8) / 2).toFixed(1)}" y="${(y - 3).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${c}</text>`;
+    }).join("");
+    const lbls = labels.map((l, i) => {
+      const x = padL + i * bw + bw / 2;
+      return `<text x="${x.toFixed(1)}" y="${(H - 6).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${l}</text>`;
+    }).join("");
+    accSvg.innerHTML = `${bars}${lbls}`;
+  }
+
+  // Recent frames — link out to the actual JPGs; thumbnails use the image_path
+  // (under /frames/), served separately by an nginx in front in prod; in dev
+  // the path is just shown as text.
+  const frEl = document.getElementById("sm-frames");
+  if (frEl) {
+    const frames = data.recent_frames || [];
+    if (frames.length === 0) {
+      frEl.innerHTML = `<div class="empty" style="font-size:12px;color:var(--muted)">no saved frames containing this species yet</div>`;
+    } else {
+      frEl.innerHTML = frames.map(f => {
+        const when = f.ts ? new Date(f.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+        const cam = _camLabel(f.source_name);
+        return `<div class="sm-frame"><div>📷 ${cam}</div><div style="margin-top:4px">${when}</div><div style="opacity:.6;margin-top:2px">${f.num_fish || 0} fish</div></div>`;
+      }).join("");
+    }
+  }
+}
+
+function _initSpeciesModal() {
+  const modal = document.getElementById("species-modal");
+  if (!modal) return;
+  modal.addEventListener("click", (e) => {
+    if (e.target.dataset.modalClose) modal.classList.add("hidden");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") modal.classList.add("hidden");
+  });
+}
+
+// ---------- Camera toggle (live stream) ----------
+
+async function _initCameraToggle() {
+  // Hide the Pier button up front if the pier worker isn't configured.
+  let cams = [];
+  try {
+    const r = await fetch("/api/cameras", { cache: "no-store" });
+    if (r.ok) cams = (await r.json()).cameras || [];
+  } catch { /* keep defaults */ }
+  const ids = new Set(cams.map(c => c.id));
+
+  document.querySelectorAll("#camera-toggle .cam-btn").forEach(b => {
+    if (b.dataset.cam !== "seahivecam" && !ids.has(b.dataset.cam)) {
+      b.style.display = "none";
+    }
+    b.addEventListener("click", () => _setActiveCamera(b.dataset.cam));
+  });
+
+  // Restore last choice
+  const saved = localStorage.getItem("wb_camera") || "seahivecam";
+  _setActiveCamera(saved);
+}
+
+function _setActiveCamera(camId) {
+  // Highlight button
+  document.querySelectorAll("#camera-toggle .cam-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.cam === camId);
+  });
+  // Swap stream src + bbox-toggle target endpoints
+  const img = document.getElementById("stream");
+  const bboxBtn = document.getElementById("bbox-toggle");
+  const bboxesOn = !bboxBtn?.classList.contains("off");
+  const streamPath = camId === "pier_cam"
+    ? (bboxesOn ? "/api/stream_pier.mjpeg" : "/api/stream_pier_raw.mjpeg")
+    : (bboxesOn ? "/api/stream.mjpeg" : "/api/stream_raw.mjpeg");
+  if (img) img.src = streamPath;
+  window._wbActiveCamera = camId;
+  localStorage.setItem("wb_camera", camId);
+}
+
 // ---------- Master tick ----------
 
 async function tickReports() {
@@ -1424,11 +1752,11 @@ async function tickReports() {
   const tab = activeReportsTab();
   const hours = reportsHours();
   try {
-    if (tab === "overview")        await renderOverviewTab(hours);
-    else if (tab === "water-weather") await renderWaterWeatherTab(hours);
-    else if (tab === "insights")   await renderInsightsTab(hours);
-    else if (tab === "data-notes") renderDataNotesTab();
-    // fish-explorer is a placeholder for now
+    if (tab === "overview")            await renderOverviewTab(hours);
+    else if (tab === "fish-explorer")  await renderFishExplorerTab(hours);
+    else if (tab === "water-weather")  await renderWaterWeatherTab(hours);
+    else if (tab === "insights")       await renderInsightsTab(hours);
+    else if (tab === "data-notes")     renderDataNotesTab();
   } catch (e) {
     // intentionally silent; cached UI stays as last successful render
   }
@@ -1440,6 +1768,9 @@ initReefToggle();
 initBboxToggle();
 initTrendsToggle();
 initReportsToggle();
+_initFishExplorerInteractions();
+_initSpeciesModal();
+_initCameraToggle();
 refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
