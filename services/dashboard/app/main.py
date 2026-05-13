@@ -71,6 +71,10 @@ def _env(key: str, default: str) -> str:
 class DashboardCfg:
     def __init__(self) -> None:
         self.worker_url = _env("WORKER_URL", "http://localhost:8081").rstrip("/")
+        # Pier-cam worker — same code, different camera + GPU. Optional; if
+        # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
+        # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
+        self.worker_url_pier = _env("WORKER_URL_PIER", "").rstrip("/")
         self.poller_url = _env("POLLER_URL", "http://localhost:8082").rstrip("/")
         self.database_url = _env(
             "DATABASE_URL",
@@ -224,11 +228,12 @@ def build_app() -> FastAPI:
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
 
-    def _proxy_mjpeg(worker_path: str) -> StreamingResponse:
+    def _proxy_mjpeg(worker_path: str, base_url: str | None = None) -> StreamingResponse:
         client: httpx.AsyncClient = state["client"]
+        base = (base_url or cfg.worker_url).rstrip("/")
 
         async def gen() -> AsyncIterator[bytes]:
-            async with client.stream("GET", f"{cfg.worker_url}{worker_path}") as r:
+            async with client.stream("GET", f"{base}{worker_path}") as r:
                 async for chunk in r.aiter_raw():
                     yield chunk
 
@@ -238,6 +243,12 @@ def build_app() -> FastAPI:
             headers={"Cache-Control": "no-cache, no-store, must-revalidate, private"},
         )
 
+    def _no_pier_response() -> Response:
+        return JSONResponse(
+            {"error": "pier-cam worker not configured (WORKER_URL_PIER unset)"},
+            status_code=503,
+        )
+
     @app.get("/api/stream.mjpeg")
     async def stream() -> Response:
         return _proxy_mjpeg("/stream.mjpeg")
@@ -245,6 +256,86 @@ def build_app() -> FastAPI:
     @app.get("/api/stream_raw.mjpeg")
     async def stream_raw() -> Response:
         return _proxy_mjpeg("/stream_raw.mjpeg")
+
+    @app.get("/api/stream_pier.mjpeg")
+    async def stream_pier() -> Response:
+        if not cfg.worker_url_pier:
+            return _no_pier_response()
+        return _proxy_mjpeg("/stream.mjpeg", cfg.worker_url_pier)
+
+    @app.get("/api/stream_pier_raw.mjpeg")
+    async def stream_pier_raw() -> Response:
+        if not cfg.worker_url_pier:
+            return _no_pier_response()
+        return _proxy_mjpeg("/stream_raw.mjpeg", cfg.worker_url_pier)
+
+    @app.get("/api/snapshot_pier.jpg")
+    async def snapshot_pier() -> Response:
+        if not cfg.worker_url_pier:
+            return _no_pier_response()
+        client: httpx.AsyncClient = state["client"]
+        try:
+            r = await client.get(f"{cfg.worker_url_pier}/snapshot.jpg")
+            return Response(content=r.content, media_type="image/jpeg", status_code=r.status_code)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+    @app.get("/api/live_pier.json")
+    async def live_pier_json() -> Response:
+        if not cfg.worker_url_pier:
+            return _no_pier_response()
+        client: httpx.AsyncClient = state["client"]
+        try:
+            r = await client.get(f"{cfg.worker_url_pier}/live.json")
+            if r.status_code != 200:
+                return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+            try:
+                data = r.json()
+            except Exception:
+                return Response(content=r.content, media_type="application/json")
+            for d in data.get("detections", []) or []:
+                latin = d.get("best_name")
+                if latin:
+                    d["best_common"] = common_name(latin)
+            return JSONResponse(data)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+    @app.get("/api/stats_pier")
+    async def stats_pier() -> Response:
+        if not cfg.worker_url_pier:
+            return _no_pier_response()
+        client: httpx.AsyncClient = state["client"]
+        try:
+            r = await client.get(f"{cfg.worker_url_pier}/stats")
+            return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+    @app.get("/api/cameras")
+    async def cameras_list() -> Response:
+        """List of configured cameras the dashboard can switch between.
+        Drives the camera-toggle UI on the live stream."""
+        cams = [{
+            "id": "seahivecam",
+            "label": "SEAHIVECAM",
+            "stream": "/api/stream.mjpeg",
+            "stream_raw": "/api/stream_raw.mjpeg",
+            "snapshot": "/api/snapshot.jpg",
+            "live_json": "/api/live.json",
+            "stats": "/api/stats",
+        }]
+        if cfg.worker_url_pier:
+            cams.append({
+                "id": "pier_cam",
+                "label": "Pier",
+                "stream": "/api/stream_pier.mjpeg",
+                "stream_raw": "/api/stream_pier_raw.mjpeg",
+                "snapshot": "/api/snapshot_pier.jpg",
+                "live_json": "/api/live_pier.json",
+                "stats": "/api/stats_pier",
+            })
+        return JSONResponse({"cameras": cams})
 
     @app.get("/api/events")
     async def events(
@@ -439,6 +530,86 @@ def build_app() -> FastAPI:
             if row.get(k):
                 row[k] = row[k].isoformat()
         return JSONResponse(row)
+
+    # ------------------------------------------------------------------
+    # Weather (weather_readings table; fed by the same poller as the
+    # sonde, in synthetic stub mode until the SenseStream auth token
+    # arrives)
+    # ------------------------------------------------------------------
+    WEATHER_COLUMNS = (
+        "bar_press_hpa",
+        "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
+        "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
+        "air_temp_c", "rel_humidity_pct",
+        "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
+        "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
+        "water_level_mm", "solar_rad_wm2",
+        "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
+        "precip_intensity_mm_hr", "precip_prob_pct",
+        "press_sea_level_hpa", "press_surface_hpa",
+        "temp_apparent_c", "uv_index", "weather_code",
+    )
+
+    @app.get("/api/weather/latest")
+    async def weather_latest(deployment: str = Query("wahoo_2")) -> Response:
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        cols = ", ".join(WEATHER_COLUMNS)
+        sql = f"""
+            SELECT ts, deployment_uri, source, {cols}
+              FROM weather_readings
+             WHERE deployment_uri = %s
+             ORDER BY ts DESC
+             LIMIT 1
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (deployment,))
+                row = await cur.fetchone()
+        if not row:
+            return JSONResponse({"error": "no weather readings for deployment"}, status_code=404)
+        row["ts"] = row["ts"].isoformat() if row["ts"] else None
+        return JSONResponse(row)
+
+    @app.get("/api/weather/history")
+    async def weather_history(
+        deployment: str = Query("wahoo_2"),
+        hours: int = Query(24, ge=1, le=24 * 30),
+        max_points: int = Query(200, ge=10, le=2000),
+    ) -> Response:
+        """Bucket-averaged weather history. weather_code is mode-bucketed
+        (taking the most-recent value per bucket) since it's categorical."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        bucket_s = max(60, (hours * 3600) // max_points)
+        numeric_cols = tuple(c for c in WEATHER_COLUMNS if c != "weather_code")
+        aggs = ",\n              ".join(
+            f"avg({c})::real AS {c}" for c in numeric_cols
+        )
+        sql = f"""
+            SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
+                   {aggs},
+                   (array_agg(weather_code ORDER BY ts DESC))[1] AS weather_code
+              FROM weather_readings
+             WHERE deployment_uri = %s
+               AND ts >= NOW() - (%s::int || ' hours')::interval
+             GROUP BY 1
+             ORDER BY 1 ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (bucket_s, bucket_s, deployment, hours))
+                rows = await cur.fetchall()
+        for r in rows:
+            r["bucket"] = r["bucket"].isoformat() if r.get("bucket") else None
+        return JSONResponse({
+            "deployment": deployment,
+            "hours": hours,
+            "bucket_seconds": bucket_s,
+            "series": rows,
+        })
 
     # ------------------------------------------------------------------
     # Drift monitor (input drift on the video feed)
@@ -840,6 +1011,312 @@ def build_app() -> FastAPI:
                     "spcond_ms_cm": r["spcond_ms_cm"],
                 }
                 for r in rows
+            ],
+        })
+
+    @app.get("/api/charts/sightings_x_weather")
+    async def chart_sightings_x_weather(
+        hours: int = Query(24, ge=1, le=24 * 30),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        """Hourly sightings joined with hourly weather. Lets the client
+        overlay fish activity against air temp, wind, rain, pressure,
+        solar, or cloud cover."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            WITH s AS (
+              SELECT hour, SUM(sightings)::int AS sightings
+                FROM species_sightings_hourly_mat
+               WHERE hour >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+            ),
+            w AS (
+              SELECT date_trunc('hour', ts)               AS hour,
+                     avg(air_temp_c)::real                AS air_temp_c,
+                     avg(wind_speed_avg_ms)::real         AS wind_speed_avg_ms,
+                     avg(rain_accum_mm)::real             AS rain_accum_mm,
+                     avg(rain_int_mm_hr)::real            AS rain_int_mm_hr,
+                     sum(rain_accum_mm)::real             AS rain_total_mm,
+                     avg(bar_press_hpa)::real             AS bar_press_hpa,
+                     avg(solar_rad_wm2)::real             AS solar_rad_wm2,
+                     avg(cloud_cover_pct)::real           AS cloud_cover_pct,
+                     avg(rel_humidity_pct)::real          AS rel_humidity_pct,
+                     avg(uv_index)::real                  AS uv_index
+                FROM weather_readings
+               WHERE deployment_uri = %s
+                 AND ts >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+            )
+            SELECT COALESCE(s.hour, w.hour) AS hour,
+                   s.sightings,
+                   w.air_temp_c, w.wind_speed_avg_ms,
+                   w.rain_accum_mm, w.rain_int_mm_hr, w.rain_total_mm,
+                   w.bar_press_hpa, w.solar_rad_wm2, w.cloud_cover_pct,
+                   w.rel_humidity_pct, w.uv_index
+              FROM s
+              FULL OUTER JOIN w ON s.hour = w.hour
+             ORDER BY hour ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours, deployment, hours))
+                rows = await cur.fetchall()
+        return JSONResponse({
+            "hours": hours,
+            "deployment": deployment,
+            "series": [
+                {
+                    "hour": r["hour"].isoformat(),
+                    "sightings": r["sightings"],
+                    "air_temp_c": r["air_temp_c"],
+                    "wind_speed_avg_ms": r["wind_speed_avg_ms"],
+                    "rain_accum_mm": r["rain_accum_mm"],
+                    "rain_int_mm_hr": r["rain_int_mm_hr"],
+                    "rain_total_mm": r["rain_total_mm"],
+                    "bar_press_hpa": r["bar_press_hpa"],
+                    "solar_rad_wm2": r["solar_rad_wm2"],
+                    "cloud_cover_pct": r["cloud_cover_pct"],
+                    "rel_humidity_pct": r["rel_humidity_pct"],
+                    "uv_index": r["uv_index"],
+                }
+                for r in rows
+            ],
+        })
+
+    # ------------------------------------------------------------------
+    # Species explorer — list of species in the window + per-species
+    # drill-through profile. Backs the Fish Explorer tab of the
+    # Reports panel.
+    # ------------------------------------------------------------------
+
+    @app.get("/api/species/list")
+    async def species_list(
+        hours: int = Query(168, ge=1, le=24 * 30),
+        min_frames: int = Query(3, ge=1, le=1000),
+    ) -> Response:
+        """Per-species summary in the window: count, mean acc, first/last seen,
+        sources the species was seen on. Used by the Fish Explorer table.
+        Reads from the matview so it stays sub-100 ms."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            SELECT species_id,
+                   MIN(name)                          AS name,
+                   COUNT(*)::int                      AS sightings,
+                   SUM(frame_count)::bigint           AS total_frames,
+                   AVG(mean_accuracy)::real           AS mean_accuracy,
+                   MAX(peak_accuracy)::real           AS peak_accuracy,
+                   array_agg(DISTINCT source_name)    AS sources,
+                   MIN(first_seen)                    AS first_seen,
+                   MAX(last_seen)                     AS last_seen
+              FROM species_sightings_mat
+             WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
+               AND frame_count >= %s
+             GROUP BY species_id
+             ORDER BY sightings DESC
+             LIMIT 200
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours, min_frames))
+                rows = await cur.fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "species_id": r["species_id"],
+                "latin": r["name"],
+                "common": common_name(r["name"]),
+                "sightings": r["sightings"],
+                "total_frames": int(r["total_frames"]) if r["total_frames"] is not None else 0,
+                "mean_accuracy": r["mean_accuracy"],
+                "peak_accuracy": r["peak_accuracy"],
+                "sources": r["sources"] or [],
+                "first_seen": r["first_seen"].isoformat() if r["first_seen"] else None,
+                "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+            })
+        return JSONResponse({"hours": hours, "min_frames": min_frames, "species": out})
+
+    @app.get("/api/species/habitat_matrix")
+    async def species_habitat_matrix(
+        hours: int = Query(168, ge=1, le=24 * 30),
+        top_n: int = Query(15, ge=1, le=50),
+    ) -> Response:
+        """Top-N species × camera (used as the 'habitat' dimension since we
+        don't yet have a per-detection habitat label). Powers the heatmap
+        on the Fish Explorer tab."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            WITH top AS (
+              SELECT species_id, MIN(name) AS name, SUM(frame_count)::bigint AS total
+                FROM species_sightings_mat
+               WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
+                 AND frame_count >= 3
+               GROUP BY species_id
+               ORDER BY total DESC
+               LIMIT %s
+            )
+            SELECT m.species_id,
+                   t.name,
+                   t.total,
+                   m.source_name,
+                   COUNT(*)::int AS sightings
+              FROM species_sightings_mat m
+              JOIN top t USING (species_id)
+             WHERE m.last_seen >= NOW() - (%s::int || ' hours')::interval
+               AND m.frame_count >= 3
+             GROUP BY m.species_id, t.name, t.total, m.source_name
+             ORDER BY t.total DESC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours, top_n, hours))
+                rows = await cur.fetchall()
+
+        # Pivot to species × source matrix; keep species ordering by total.
+        by_species: dict = {}
+        sources: list = []
+        for r in rows:
+            sid = r["species_id"]
+            if sid not in by_species:
+                by_species[sid] = {
+                    "species_id": sid,
+                    "latin": r["name"],
+                    "common": common_name(r["name"]),
+                    "counts": {},
+                }
+            by_species[sid]["counts"][r["source_name"]] = r["sightings"]
+            if r["source_name"] not in sources:
+                sources.append(r["source_name"])
+        return JSONResponse({
+            "hours": hours,
+            "sources": sources,
+            "species": list(by_species.values()),
+        })
+
+    @app.get("/api/species/{species_id}/profile")
+    async def species_profile(
+        species_id: str,
+        hours: int = Query(168, ge=1, le=24 * 30),
+    ) -> Response:
+        """Per-species drill-through: lifetime + windowed stats, activity
+        by hour-of-day, top-K accuracy distribution, recent saved-frame
+        crops the dashboard can link to."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                # Summary card
+                await cur.execute(
+                    """
+                    SELECT MIN(name)              AS latin,
+                           COUNT(*)::int          AS sightings,
+                           SUM(frame_count)::bigint AS total_frames,
+                           AVG(mean_accuracy)::real AS mean_accuracy,
+                           MAX(peak_accuracy)::real AS peak_accuracy,
+                           MIN(first_seen)        AS first_seen,
+                           MAX(last_seen)         AS last_seen,
+                           array_agg(DISTINCT source_name) AS sources
+                      FROM species_sightings_mat
+                     WHERE species_id = %s
+                       AND last_seen >= NOW() - (%s::int || ' hours')::interval
+                    """,
+                    (species_id, hours),
+                )
+                summary = await cur.fetchone() or {}
+
+                # Activity by local hour of day (Eastern; same convention as
+                # the visitor_stats hourly chart)
+                await cur.execute(
+                    """
+                    SELECT extract(hour FROM (first_seen AT TIME ZONE 'America/New_York'))::int AS hod,
+                           COUNT(*)::int AS sightings
+                      FROM species_sightings_mat
+                     WHERE species_id = %s
+                       AND last_seen >= NOW() - (%s::int || ' hours')::interval
+                     GROUP BY 1
+                     ORDER BY 1
+                    """,
+                    (species_id, hours),
+                )
+                hod_rows = await cur.fetchall()
+
+                # Top-K accuracy distribution (when this species was the top-1)
+                await cur.execute(
+                    """
+                    SELECT
+                      CASE
+                        WHEN best_accuracy < 0.30 THEN '0.0–0.3'
+                        WHEN best_accuracy < 0.50 THEN '0.3–0.5'
+                        WHEN best_accuracy < 0.70 THEN '0.5–0.7'
+                        WHEN best_accuracy < 0.85 THEN '0.7–0.85'
+                        ELSE                          '0.85+'
+                      END AS bucket,
+                      COUNT(*)::int AS n
+                    FROM detection_events
+                    WHERE best_species_id = %s
+                      AND ts >= NOW() - (%s::int || ' hours')::interval
+                    GROUP BY 1
+                    ORDER BY 1
+                    """,
+                    (species_id, hours),
+                )
+                acc_rows = await cur.fetchall()
+
+                # A handful of recent saved-frame crops (so the UI can show
+                # actual images of this species). Pull saved_frames that
+                # contain at least one detection_event for the species.
+                await cur.execute(
+                    """
+                    SELECT sf.image_path, sf.ts, sf.source_name, sf.num_fish
+                      FROM saved_frames sf
+                      JOIN detection_events e ON e.frame_id = sf.frame_id
+                                              AND e.source_name = sf.source_name
+                     WHERE e.best_species_id = %s
+                       AND sf.ts >= NOW() - (%s::int || ' hours')::interval
+                       AND sf.image_path IS NOT NULL
+                     GROUP BY sf.image_path, sf.ts, sf.source_name, sf.num_fish
+                     ORDER BY sf.ts DESC
+                     LIMIT 12
+                    """,
+                    (species_id, hours),
+                )
+                frame_rows = await cur.fetchall()
+
+        # Fill hour-of-day buckets so the UI gets all 24 values
+        hod = {i: 0 for i in range(24)}
+        for r in hod_rows:
+            if r["hod"] is not None:
+                hod[int(r["hod"])] = r["sightings"]
+
+        return JSONResponse({
+            "species_id": species_id,
+            "hours": hours,
+            "latin": summary.get("latin"),
+            "common": common_name(summary.get("latin") or ""),
+            "sightings": summary.get("sightings") or 0,
+            "total_frames": int(summary.get("total_frames") or 0),
+            "mean_accuracy": summary.get("mean_accuracy"),
+            "peak_accuracy": summary.get("peak_accuracy"),
+            "first_seen": summary["first_seen"].isoformat() if summary.get("first_seen") else None,
+            "last_seen": summary["last_seen"].isoformat() if summary.get("last_seen") else None,
+            "sources": summary.get("sources") or [],
+            "hour_of_day": [{"hour": h, "sightings": hod[h]} for h in range(24)],
+            "accuracy_bins": [{"bucket": r["bucket"], "n": r["n"]} for r in acc_rows],
+            "recent_frames": [
+                {
+                    "image_path": r["image_path"],
+                    "ts": r["ts"].isoformat() if r["ts"] else None,
+                    "source_name": r["source_name"],
+                    "num_fish": r["num_fish"],
+                }
+                for r in frame_rows
             ],
         })
 

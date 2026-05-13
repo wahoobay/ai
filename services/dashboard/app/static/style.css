@@ -486,3 +486,295 @@ li.empty { color: var(--muted); font-style: italic; }
 @media (max-width: 700px) {
   .trends-grid { grid-template-columns: 1fr; }
 }
+
+/* ----- Reports panel: tabs + KPI tiles + content grids ----- */
+.reports-panel h2 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.reports-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.reports-body { display: block; }
+.reports-body.collapsed { display: none; }
+
+.reports-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin: 8px 0 12px;
+}
+.reports-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 80ms, border-color 80ms;
+}
+.reports-tab:hover { color: #cbd9e3; }
+.reports-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.reports-tab-panel { display: none; }
+.reports-tab-panel.active { display: block; }
+
+.reports-placeholder {
+  background: var(--bg);
+  border-radius: 5px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.reports-placeholder p { margin: 4px 0; }
+.reports-placeholder-meta { font-size: 11px; opacity: 0.7; }
+
+.reports-hint {
+  margin-top: 10px;
+  background: var(--bg);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border-radius: 3px;
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.kpi-tile {
+  background: var(--bg);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+.kpi-tile .kpi-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.kpi-tile .kpi-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 2px 0;
+}
+.kpi-tile .kpi-sub {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.reports-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 10px;
+}
+.reports-grid-notes { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+
+.notes-list {
+  list-style: disc;
+  padding-left: 18px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #cbd9e3;
+}
+.notes-list li { margin: 4px 0; }
+.notes-list code {
+  background: var(--panel);
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.ov-map {
+  background: #0e2a3d;
+  border-radius: 4px;
+  height: 260px;
+  position: relative;
+  overflow: hidden;
+}
+/* Leaflet styling — keep it consistent with our dark theme. */
+.ov-map .leaflet-container { background: #0e2a3d; height: 100%; width: 100%; }
+.ov-map .leaflet-popup-content-wrapper {
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 4px;
+}
+.ov-map .leaflet-popup-tip { background: var(--panel); }
+.ov-map .leaflet-control-attribution {
+  background: rgba(11, 26, 36, 0.75);
+  color: var(--muted);
+  font-size: 9px;
+}
+.ov-map .leaflet-control-attribution a { color: var(--accent); }
+
+@media (max-width: 700px) {
+  .reports-grid { grid-template-columns: 1fr; }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ----- camera toggle (live stream) ----- */
+.camera-toggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  overflow: hidden;
+  backdrop-filter: blur(4px);
+}
+.camera-toggle .cam-btn {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.camera-toggle .cam-btn:hover { color: var(--ink); }
+.camera-toggle .cam-btn.active { color: var(--accent); background: rgba(79, 193, 255, 0.12); }
+
+/* ----- Fish Explorer specific bits ----- */
+.species-table-wrap {
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 4px;
+}
+.species-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.species-table th,
+.species-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-variant-numeric: tabular-nums;
+}
+.species-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.species-table th.sortable { cursor: pointer; user-select: none; }
+.species-table th.sortable:hover { color: var(--ink); }
+.species-table th.sort-active { color: var(--accent); }
+.species-table th.num,
+.species-table td.num { text-align: right; }
+.species-table tbody tr { cursor: pointer; }
+.species-table tbody tr:hover td { background: rgba(79, 193, 255, 0.08); }
+.species-table tbody td.empty { color: var(--muted); font-style: italic; text-align: center; }
+.species-table em { color: var(--muted); font-style: italic; }
+
+/* habitat (species × camera) matrix */
+.habitat-matrix {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.habitat-matrix .hm-row { display: contents; }
+.habitat-matrix .hm-header,
+.habitat-matrix .hm-name,
+.habitat-matrix .hm-cell {
+  padding: 4px 6px;
+}
+.habitat-matrix .hm-header { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.habitat-matrix .hm-name { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.habitat-matrix .hm-name em { color: var(--muted); font-style: italic; }
+.habitat-matrix .hm-cell {
+  background: rgba(79, 193, 255, 0.04);
+  border-radius: 3px;
+  text-align: right;
+}
+
+/* chart-card width modifier (used by Fish Explorer + Insights) */
+.chart-card.chart-wide { grid-column: 1 / -1; }
+
+/* ----- Species profile modal ----- */
+.species-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.species-modal.hidden { display: none; }
+.species-modal-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+.species-modal-card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 18px 22px;
+  width: min(820px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.species-modal-x {
+  position: absolute;
+  top: 10px; right: 12px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+.species-modal-x:hover { color: var(--ink); }
+.sm-summary { margin: 4px 0 16px; }
+.sm-name { font-size: 18px; font-weight: 600; color: var(--accent); }
+.sm-name em { color: var(--muted); font-weight: 400; font-size: 14px; }
+.sm-stats { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.sm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.sm-card { background: var(--bg); border-radius: 5px; padding: 10px 12px; }
+.sm-card h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.sm-frames {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+}
+.sm-frame {
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.sm-frame img { width: 100%; height: auto; display: block; border-radius: 3px; }

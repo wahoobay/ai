@@ -93,6 +93,64 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 CREATE INDEX IF NOT EXISTS sensor_readings_ts_desc ON sensor_readings (ts DESC);
 CREATE INDEX IF NOT EXISTS sensor_readings_uri_ts_desc ON sensor_readings (deployment_uri, ts DESC);
 
+
+-- Local weather readings from the SenseStream weather station co-located
+-- with the sonde at Wahoo Bay. SenseStream exposes two feeds:
+--   1. weatherLatest1 — on-site weather station's real measurements
+--      (barometric pressure, wind, air temp, humidity, rain, solar, water level)
+--   2. weatherLatest2 — supplementary forecast layer (cloud cover, weather code,
+--      apparent temperature, UV index, precipitation probability)
+-- Both are upserted into this single table; columns originating from feed 2
+-- are nullable since they're not always present.
+--
+-- Units stored in SI / native sensor units (Celsius, m/s, mm, hPa); the
+-- dashboard converts to user-friendly units (°F, mph, in, mmHg) at render
+-- time, same pattern as water_temp_c. Sensor-diagnostic channels
+-- (internal_temp_c, heating_temp_c, heating_volt, supply_volt, ref_voltage)
+-- are intentionally NOT stored — they're operational telemetry, not science.
+CREATE TABLE IF NOT EXISTS weather_readings (
+    id                  BIGSERIAL PRIMARY KEY,
+    ts                  TIMESTAMPTZ NOT NULL,
+    deployment_uri      TEXT        NOT NULL,
+    -- ---- feed 1: on-site station ----
+    bar_press_hpa       REAL,      -- barometric pressure (hPa)
+    wind_dir_avg_deg    REAL,      -- avg wind direction (degrees, 0=N, 90=E)
+    wind_dir_min_deg    REAL,
+    wind_dir_max_deg    REAL,
+    wind_speed_avg_ms   REAL,      -- avg wind speed (m/s)
+    wind_speed_min_ms   REAL,
+    wind_speed_max_ms   REAL,
+    air_temp_c          REAL,      -- air temperature (°C)
+    rel_humidity_pct    REAL,      -- relative humidity (%)
+    rain_accum_mm       REAL,      -- rainfall accumulation in interval (mm)
+    rain_dur_frac_hr    REAL,      -- rain duration (fraction of hour)
+    rain_int_mm_hr      REAL,      -- rain intensity (mm/hr)
+    rain_peak_int_mm_hr REAL,
+    hail_accum          REAL,      -- hail accumulation (count)
+    hail_dur            REAL,
+    hail_int            REAL,
+    hail_peak_int       REAL,
+    water_level_mm      REAL,      -- water-level sensor (mm)
+    solar_rad_wm2       REAL,      -- solar radiation (W/m²)
+    -- ---- feed 2: supplementary forecast ----
+    cloud_cover_pct     REAL,      -- cloud cover (%)
+    dew_point_c         REAL,      -- dew point (°C)
+    forecast_humidity_pct REAL,    -- humidity from forecast (% — usually redundant with rel_humidity_pct)
+    precip_intensity_mm_hr REAL,   -- precipitation intensity from forecast (mm/hr)
+    precip_prob_pct     REAL,      -- precipitation probability (%)
+    press_sea_level_hpa REAL,      -- sea-level pressure (hPa)
+    press_surface_hpa   REAL,      -- surface pressure (hPa)
+    temp_apparent_c     REAL,      -- apparent ("feels like") temperature (°C)
+    uv_index            REAL,
+    weather_code        INTEGER,   -- numeric weather code (icon dispatch)
+    -- ---- bookkeeping ----
+    source              TEXT NOT NULL DEFAULT 'live',  -- 'live' | 'synthetic'
+    UNIQUE (deployment_uri, ts)
+);
+
+CREATE INDEX IF NOT EXISTS weather_readings_ts_desc ON weather_readings (ts DESC);
+CREATE INDEX IF NOT EXISTS weather_readings_uri_ts_desc ON weather_readings (deployment_uri, ts DESC);
+
 -- Frame-level stats, sampled below the full frame rate, for input-drift
 -- monitoring: brightness, per-channel colour balance, detection rate.
 -- Intended cadence is ~1 Hz (see FRAME_STATS_EVERY_N_FRAMES in the worker).
