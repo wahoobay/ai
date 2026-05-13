@@ -114,6 +114,182 @@
         </div>
       </section>
 
+      <section class="reports-panel" id="reports-panel">
+        <h2>
+          <span>Reports</span>
+          <span class="reports-header-right">
+            <select id="reports-window" class="trends-window">
+              <option value="24" selected>24h</option>
+              <option value="72">72h</option>
+              <option value="168">7d</option>
+              <option value="720">30d</option>
+            </select>
+            <button id="reports-toggle" class="reef-toggle">hide</button>
+          </span>
+        </h2>
+        <div id="reports-body" class="reports-body">
+          <div class="reports-tabs" role="tablist">
+            <button class="reports-tab active" data-tab="overview"        role="tab">Overview</button>
+            <button class="reports-tab"        data-tab="fish-explorer"   role="tab">Fish Explorer</button>
+            <button class="reports-tab"        data-tab="water-weather"   role="tab">Water &amp; Weather</button>
+            <button class="reports-tab"        data-tab="insights"        role="tab">Insights</button>
+            <button class="reports-tab"        data-tab="data-notes"      role="tab">Data Notes</button>
+          </div>
+
+          <!-- Overview tab — Katie's mockup page 1 layout, real-time-fed -->
+          <div class="reports-tab-panel active" id="tab-overview" role="tabpanel">
+            <div class="kpi-row">
+              <div class="kpi-tile"><div class="kpi-label">Fish Sightings</div><div class="kpi-value" id="ov-kpi-sightings">—</div><div class="kpi-sub">selected period</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Species Found</div><div class="kpi-value" id="ov-kpi-species">—</div><div class="kpi-sub">unique species</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Avg Water Temp</div><div class="kpi-value" id="ov-kpi-temp">—</div><div class="kpi-sub">°F</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Avg Oxygen</div><div class="kpi-value" id="ov-kpi-do">—</div><div class="kpi-sub">% sat</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Water Clarity</div><div class="kpi-value" id="ov-kpi-clarity">—</div><div class="kpi-sub">turbidity</div></div>
+            </div>
+            <div class="reports-grid">
+              <section class="chart-card">
+                <h2>Fish observations over time</h2>
+                <div class="chart-svg-wrap"><svg id="ov-chart-obs" viewBox="0 0 480 160" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Monitoring sites</h2>
+                <div id="ov-map" class="ov-map"></div>
+                <div id="ov-map-legend" class="chart-legend"></div>
+              </section>
+              <section class="chart-card">
+                <h2>Top species observed</h2>
+                <div id="ov-top-species" class="reef-top-species"></div>
+              </section>
+              <section class="chart-card">
+                <h2>Water quality snapshot trend</h2>
+                <div class="chart-svg-wrap"><svg id="ov-wq-trend" viewBox="0 0 480 160" preserveAspectRatio="none"></svg></div>
+              </section>
+            </div>
+          </div>
+
+          <!-- Fish Explorer tab — placeholder; populated in a follow-up branch -->
+          <div class="reports-tab-panel" id="tab-fish-explorer" role="tabpanel">
+            <div class="reports-placeholder">
+              <p>Fish Explorer — species-detail table, top-species ranking,
+                 habitat matrix, species profile drill-through.</p>
+              <p class="reports-placeholder-meta">In progress — landing in the next branch.</p>
+            </div>
+          </div>
+
+          <!-- Water &amp; Weather tab — deep panel for sonde + weather KPIs and history -->
+          <div class="reports-tab-panel" id="tab-water-weather" role="tabpanel">
+            <div class="kpi-row">
+              <div class="kpi-tile"><div class="kpi-label">Air Temp</div><div class="kpi-value" id="ww-kpi-air">—</div><div class="kpi-sub">°F</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Wind</div><div class="kpi-value" id="ww-kpi-wind">—</div><div class="kpi-sub">mph avg</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Rain total</div><div class="kpi-value" id="ww-kpi-rain">—</div><div class="kpi-sub">in (window)</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Solar</div><div class="kpi-value" id="ww-kpi-solar">—</div><div class="kpi-sub">W/m²</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Pressure</div><div class="kpi-value" id="ww-kpi-pressure">—</div><div class="kpi-sub">mmHg</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Cloud cover</div><div class="kpi-value" id="ww-kpi-cloud">—</div><div class="kpi-sub">% / weather</div></div>
+            </div>
+            <div class="reports-grid">
+              <section class="chart-card">
+                <h2>Water temperature</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-wtemp" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Dissolved oxygen</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-do" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>pH</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-ph" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Turbidity</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-turb" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Air temp &amp; wind</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-air" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Rain &amp; solar</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-rain" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+            </div>
+          </div>
+
+          <!-- Insights tab — correlation scatters between fish activity and environment -->
+          <div class="reports-tab-panel" id="tab-insights" role="tabpanel">
+            <div class="kpi-row">
+              <div class="kpi-tile"><div class="kpi-label">Species Richness</div><div class="kpi-value" id="in-kpi-richness">—</div><div class="kpi-sub">in window</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Fish Count</div><div class="kpi-value" id="in-kpi-count">—</div><div class="kpi-sub">selected period</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Rainfall</div><div class="kpi-value" id="in-kpi-rain">—</div><div class="kpi-sub">in total</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Data completeness</div><div class="kpi-value" id="in-kpi-completeness">—</div><div class="kpi-sub">valid hourly buckets</div></div>
+            </div>
+            <div class="reports-grid">
+              <section class="chart-card">
+                <h2>Rainfall vs fish activity</h2>
+                <div class="chart-svg-wrap"><svg id="in-scatter-rain" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Barometric pressure vs fish activity</h2>
+                <div class="chart-svg-wrap"><svg id="in-scatter-pressure" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Water temperature vs fish count</h2>
+                <div class="chart-svg-wrap"><svg id="in-scatter-temp" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Dissolved oxygen vs species richness</h2>
+                <div class="chart-svg-wrap"><svg id="in-scatter-do" viewBox="0 0 480 200" preserveAspectRatio="none"></svg></div>
+              </section>
+            </div>
+            <p class="reports-hint">Guided question: what changes when water clarity, oxygen, or rainfall changes?</p>
+          </div>
+
+          <!-- Data Notes tab — transparency, definitions, limitations -->
+          <div class="reports-tab-panel" id="tab-data-notes" role="tabpanel">
+            <div class="reports-grid reports-grid-notes">
+              <section class="chart-card">
+                <h2>Data sources</h2>
+                <ul class="notes-list">
+                  <li><strong>Live camera feed:</strong> SEAHIVECAM (Wahoo Bay) primary, City of Pompano Beach pier cam fallback, recorded clips for visual continuity overnight.</li>
+                  <li><strong>Fish detections:</strong> YOLOv26-nano + DINOv2/ViT classifier (Fishial.ai, MIT). Currently the stock 866-class model — fine-tuning on Wahoo Bay-specific species is pending the volunteer-annotated dataset.</li>
+                  <li><strong>Water quality:</strong> SenseStream <code>wahoo_2</code> deployment (EXO2 sonde). Source-tagged <code>live</code> when an auth token is configured, <code>synthetic</code> while one is pending from the SenseStream contact.</li>
+                  <li><strong>Weather:</strong> SenseStream co-located weather station + supplementary forecast layer. Same source-tagging as the sonde.</li>
+                  <li><strong>Reviewer corrections:</strong> opened via the <em>correct</em> button on Recent events; written to <code>detection_corrections</code> with reviewer email, confidence, and notes.</li>
+                </ul>
+              </section>
+              <section class="chart-card">
+                <h2>Refresh &amp; ownership</h2>
+                <ul class="notes-list">
+                  <li><strong>Last refreshed:</strong> <span id="dn-refresh-ts">—</span></li>
+                  <li><strong>Live cadence:</strong> raw stream at the camera's native fps (~15 fps when light); inferred frames at the rate the GPU sustains.</li>
+                  <li><strong>Stewardship:</strong> Wahoo Bay by Shipwreck Park, Inc. + FAU (Dan Zimmerman).</li>
+                  <li><strong>Public URL:</strong> ephemeral Cloudflare tunnel today; persistent <code>wahoobay.org</code> subdomain when DNS lands.</li>
+                </ul>
+              </section>
+              <section class="chart-card">
+                <h2>Metric definitions</h2>
+                <ul class="notes-list">
+                  <li><strong>Fish Sightings:</strong> count of distinct persistent tracks (<em>not</em> count of per-frame bbox events) — a fish lingering in front of the camera is one sighting.</li>
+                  <li><strong>Species Found:</strong> distinct species IDs across sightings in the window.</li>
+                  <li><strong>Species Richness:</strong> the same count, scoped to a specific time bucket or site.</li>
+                  <li><strong>Water Clarity:</strong> qualitative banding of <code>turbidity_fnu</code> (lower is clearer); thresholds are <em>indicative</em> until reviewed by the marine-biology stakeholders.</li>
+                  <li><strong>Inference fps:</strong> rate at which the detector + classifier process frames (typically &lt; live grab rate when the scene is busy).</li>
+                </ul>
+              </section>
+              <section class="chart-card">
+                <h2>Known limitations</h2>
+                <ul class="notes-list">
+                  <li>The classifier was trained on a globally-mixed fish dataset; confident mislabels on Atlantic-reef species are routine and the most valuable thing reviewers can correct.</li>
+                  <li>Fallback periods (camera dark, autoswitch on) emit no new sightings or sensor writes — gaps in the time series are intentional, not missing-data bugs.</li>
+                  <li>Sensor data is currently <code>synthetic</code> stub readings (deterministic per-day seed); live data flips on as soon as the SenseStream token is provided.</li>
+                  <li>Habitat dimension (reef vs sand vs wreck) is not yet attached to detections; habitat-by-species views are deferred until habitat is hand-labelled per camera/zone.</li>
+                </ul>
+              </section>
+            </div>
+            <p class="reports-hint">This dashboard is built for education, conservation, and community access. Treat values as a learning &amp; exploration tool; review assumptions before any public-release decisions.</p>
+          </div>
+
+        </div>
+      </section>
+
       <section class="downloads-panel">
         <h2>Download data
           <span class="dl-window-line">window:

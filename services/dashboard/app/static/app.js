@@ -1055,11 +1055,391 @@ function initTrendsToggle() {
   document.getElementById("chart-sxw-param")?.addEventListener("change", tickSxwParamOnly);
 }
 
+// ====================================================================
+// Reports panel — Katie's Power BI mockup pages rendered live.
+// Tabs: Overview · Fish Explorer (placeholder) · Water & Weather ·
+// Insights · Data Notes. Each tab fetches what it needs lazily; the
+// fetches use the same SWR cache as the rest of the dashboard.
+// ====================================================================
+
+function reportsActive() {
+  const body = document.getElementById("reports-body");
+  return body && !body.classList.contains("collapsed");
+}
+
+function activeReportsTab() {
+  return document.querySelector(".reports-tab.active")?.dataset.tab || "overview";
+}
+
+function reportsHours() {
+  return parseInt(document.getElementById("reports-window")?.value || "24", 10);
+}
+
+// ---------- shared helpers ----------
+
+function _scatterChart(svg, points, opts) {
+  if (!svg) return;
+  const W = 480, H = 200, padL = 36, padR = 10, padT = 8, padB = 22;
+  const pts = points.filter(p => p.x != null && p.y != null);
+  if (pts.length < 2) {
+    svg.innerHTML = `<text x="240" y="100" font-size="11" fill="var(--muted)" text-anchor="middle">not enough data yet</text>`;
+    return;
+  }
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const xLo = Math.min(...xs), xHi = Math.max(...xs);
+  const yHi = Math.max(...ys, 1);
+  const xRange = (xHi - xLo) || 1;
+  const xS = v => padL + ((v - xLo) / xRange) * (W - padL - padR);
+  const yS = v => H - padB - (v / yHi) * (H - padT - padB);
+
+  const dots = pts.map(p =>
+    `<circle cx="${xS(p.x).toFixed(1)}" cy="${yS(p.y).toFixed(1)}" r="2.2" fill="var(--accent)" opacity="0.7"/>`
+  ).join("");
+
+  const yTicks = [0, Math.round(yHi / 2), yHi].map(v => {
+    const y = yS(v);
+    return `<line x1="${padL}" x2="${W - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--muted)" stroke-width="0.3" opacity="0.35"/>
+            <text x="${(padL - 4).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">${v}</text>`;
+  }).join("");
+
+  const xTickVals = [xLo, (xLo + xHi) / 2, xHi];
+  const xTicks = xTickVals.map(v => {
+    const x = xS(v);
+    return `<text x="${x.toFixed(1)}" y="${(H - 8).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${(opts?.xfmt || (n => n.toFixed(1)))(v)}</text>`;
+  }).join("");
+
+  const axisLabels = `
+    <text x="${(W / 2).toFixed(1)}" y="${(H - 1).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${opts?.xlabel || ""}</text>
+    <text x="10" y="${(padT + 8).toFixed(1)}" font-size="9" fill="var(--muted)">${opts?.ylabel || ""}</text>
+  `;
+
+  svg.innerHTML = `${yTicks}${xTicks}${dots}${axisLabels}`;
+}
+
+function _miniLine(svg, points, opts) {
+  if (!svg) return;
+  const W = 480, H = 140, padL = 36, padR = 10, padT = 8, padB = 18;
+  const pts = points.filter(p => p.y != null);
+  if (pts.length < 2) {
+    svg.innerHTML = `<text x="240" y="70" font-size="11" fill="var(--muted)" text-anchor="middle">collecting…</text>`;
+    return;
+  }
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const xLo = Math.min(...xs), xHi = Math.max(...xs);
+  const yLo = Math.min(...ys), yHi = Math.max(...ys);
+  const xRange = (xHi - xLo) || 1;
+  const yRange = (yHi - yLo) || 1;
+  const xS = v => padL + ((v - xLo) / xRange) * (W - padL - padR);
+  const yS = v => H - padB - ((v - yLo) / yRange) * (H - padT - padB);
+
+  const path = "M " + pts.map(p => `${xS(p.x).toFixed(1)},${yS(p.y).toFixed(1)}`).join(" L ");
+  const fmt = opts?.fmt || (n => n.toFixed(1));
+  const yLabels = `
+    <text x="${(padL - 4).toFixed(1)}" y="${(padT + 8).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">${fmt(yHi)}</text>
+    <text x="${(padL - 4).toFixed(1)}" y="${(H - padB + 3).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">${fmt(yLo)}</text>
+  `;
+  const last = ys[ys.length - 1];
+  const lastLabel = `<text x="${(W - padR - 1).toFixed(1)}" y="${(padT + 8).toFixed(1)}" font-size="10" fill="var(--accent)" text-anchor="end" font-weight="600">${fmt(last)}${opts?.unit ? " " + opts.unit : ""}</text>`;
+
+  svg.innerHTML = `${yLabels}${lastLabel}
+    <path d="${path}" stroke="var(--accent)" stroke-width="1.4" fill="none"/>`;
+}
+
+// ---------- Tab switching ----------
+
+function initReportsToggle() {
+  const btn = document.getElementById("reports-toggle");
+  const body = document.getElementById("reports-body");
+  if (btn && body) {
+    const saved = localStorage.getItem("wb_reports_hidden") === "1";
+    if (saved) { body.classList.add("collapsed"); btn.textContent = "show"; }
+    btn.addEventListener("click", () => {
+      const collapsed = body.classList.toggle("collapsed");
+      btn.textContent = collapsed ? "show" : "hide";
+      localStorage.setItem("wb_reports_hidden", collapsed ? "1" : "0");
+      if (!collapsed) tickReports();
+    });
+  }
+
+  // Tab switching
+  document.querySelectorAll(".reports-tab").forEach(t => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".reports-tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".reports-tab-panel").forEach(x => x.classList.remove("active"));
+      t.classList.add("active");
+      document.getElementById("tab-" + t.dataset.tab)?.classList.add("active");
+      localStorage.setItem("wb_reports_tab", t.dataset.tab);
+      tickReports();
+    });
+  });
+  // Restore active tab
+  const saved = localStorage.getItem("wb_reports_tab");
+  if (saved) {
+    const target = document.querySelector(`.reports-tab[data-tab="${saved}"]`);
+    if (target) target.click();
+  }
+
+  document.getElementById("reports-window")?.addEventListener("change", tickReports);
+}
+
+// ---------- Render: Overview ----------
+
+let _cameraMeta = null;
+async function _loadCameraMeta() {
+  if (_cameraMeta) return _cameraMeta;
+  try {
+    const r = await fetch("/api/export/camera_metadata.json", { cache: "force-cache" });
+    if (!r.ok) return null;
+    _cameraMeta = await r.json();
+    return _cameraMeta;
+  } catch { return null; }
+}
+
+function _renderMap(sources) {
+  const el = document.getElementById("ov-map");
+  if (!el) return;
+  if (!sources || !Object.keys(sources).length) {
+    el.innerHTML = `<div style="padding:20px;color:var(--muted);font-size:12px;text-align:center">no camera metadata</div>`;
+    return;
+  }
+  const pts = Object.entries(sources)
+    .filter(([_, v]) => v.lat != null && v.lng != null)
+    .map(([k, v]) => ({ key: k, name: v.display_name || k, lat: v.lat, lng: v.lng }));
+  if (pts.length === 0) { el.innerHTML = ""; return; }
+  // Tight bbox around the points with a margin.
+  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng);
+  const latMin = Math.min(...lats), latMax = Math.max(...lats);
+  const lngMin = Math.min(...lngs), lngMax = Math.max(...lngs);
+  const latPad = Math.max(0.005, (latMax - latMin) * 0.4);
+  const lngPad = Math.max(0.005, (lngMax - lngMin) * 0.4);
+  const W = 480, H = 200, padX = 30, padY = 22;
+  const xS = lng => padX + ((lng - (lngMin - lngPad)) / ((lngMax + lngPad) - (lngMin - lngPad))) * (W - 2 * padX);
+  // y inverted (north up)
+  const yS = lat => padY + (1 - ((lat - (latMin - latPad)) / ((latMax + latPad) - (latMin - latPad)))) * (H - 2 * padY);
+
+  const pins = pts.map(p => `
+    <circle class="ov-map-pin" cx="${xS(p.lng).toFixed(1)}" cy="${yS(p.lat).toFixed(1)}" r="5"/>
+    <text class="ov-map-label" x="${(xS(p.lng) + 8).toFixed(1)}" y="${(yS(p.lat) + 3).toFixed(1)}">${p.name}</text>
+  `).join("");
+
+  // North arrow + scale ticks
+  const compass = `
+    <text x="14" y="18" font-size="10" fill="var(--muted)" font-weight="600">N ▲</text>
+    <text x="${(W - 8).toFixed(1)}" y="${(H - 6).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="end">Pompano Beach, FL</text>
+  `;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${compass}${pins}</svg>`;
+}
+
+async function renderOverviewTab(hours) {
+  // KPI tiles + fish-over-time chart + map + top species + WQ snapshot.
+  const [visitor, detRate, wqLatest, wqHist] = await Promise.all([
+    pollWithCache(`/api/visitor_stats?hours=${hours}`).catch(() => null),
+    pollWithCache(`/api/charts/detection_rate?hours=${hours}`).catch(() => null),
+    pollWithCache("/api/water_quality/latest").catch(() => null),
+    pollWithCache(`/api/water_quality/history?hours=${hours}&max_points=120`).catch(() => null),
+  ]);
+  const camMeta = await _loadCameraMeta();
+
+  // KPIs
+  const totals = visitor?.totals || {};
+  const wq = wqLatest || visitor?.water_quality || {};
+  const setText = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+  setText("ov-kpi-sightings", totals.sightings ?? "—");
+  setText("ov-kpi-species", totals.unique_species ?? "—");
+  setText("ov-kpi-temp", wq.water_temp_c != null ? (wq.water_temp_c * 9/5 + 32).toFixed(1) + "°F" : "—");
+  setText("ov-kpi-do", wq.do_pct != null ? wq.do_pct.toFixed(0) + "%" : "—");
+  setText("ov-kpi-clarity", wq.turbidity_fnu != null ? classifyTurbidity(wq.turbidity_fnu)[0] : "—");
+
+  // Fish observations over time (single line)
+  const obsSvg = document.getElementById("ov-chart-obs");
+  if (obsSvg && detRate?.series?.length) {
+    const points = detRate.series.map(p => ({
+      x: new Date(p.hour).getTime(),
+      y: p.sightings,
+    }));
+    _miniLine(obsSvg, points, { unit: "fish/hr", fmt: n => n.toFixed(0) });
+  } else if (obsSvg) {
+    obsSvg.innerHTML = `<text x="240" y="70" font-size="11" fill="var(--muted)" text-anchor="middle">collecting…</text>`;
+  }
+
+  // Map of camera sites
+  _renderMap(camMeta?.sources);
+
+  // Top species (reuse the reef explorer's renderer signature)
+  const topEl = document.getElementById("ov-top-species");
+  if (topEl) {
+    const rows = (visitor?.top_species || []).slice(0, 6).map(s => ({
+      latin: s.latin,
+      common: s.common,
+      sightings: s.sightings,
+    }));
+    if (rows.length === 0) {
+      topEl.innerHTML = `<div class="empty" style="font-size:12px">no sightings yet</div>`;
+    } else {
+      const max = Math.max(...rows.map(r => r.sightings), 1);
+      topEl.innerHTML = rows.map(r => {
+        const pct = (100 * r.sightings / max).toFixed(1);
+        const display = r.common ? `${r.common} <em>(${r.latin})</em>` : `<em>${r.latin}</em>`;
+        return `<div class="reef-top-row">
+          <div class="reef-bar-wrap"><div class="reef-bar" style="width:${pct}%"></div><div class="reef-name">${display}</div></div>
+          <div class="reef-count">${r.sightings}</div>
+        </div>`;
+      }).join("");
+    }
+  }
+
+  // Water quality snapshot trend — water temp line in °F
+  const wqSvg = document.getElementById("ov-wq-trend");
+  if (wqSvg && wqHist?.series?.length) {
+    const points = wqHist.series
+      .filter(r => r.water_temp_c != null)
+      .map(r => ({ x: new Date(r.bucket).getTime(), y: r.water_temp_c * 9/5 + 32 }));
+    _miniLine(wqSvg, points, { unit: "°F", fmt: n => n.toFixed(1) });
+  }
+}
+
+// ---------- Render: Water & Weather ----------
+
+async function renderWaterWeatherTab(hours) {
+  const [wqLatest, wqHist, wxLatest, wxHist] = await Promise.all([
+    pollWithCache("/api/water_quality/latest").catch(() => null),
+    pollWithCache(`/api/water_quality/history?hours=${hours}&max_points=120`).catch(() => null),
+    pollWithCache("/api/weather/latest").catch(() => null),
+    pollWithCache(`/api/weather/history?hours=${hours}&max_points=120`).catch(() => null),
+  ]);
+
+  const setText = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+  const f = (v, n=1) => v == null ? "—" : v.toFixed(n);
+
+  // KPIs (latest weather + sonde)
+  if (wxLatest) {
+    setText("ww-kpi-air",      wxLatest.air_temp_c != null ? f(wxLatest.air_temp_c * 9/5 + 32, 1) + " °F" : "—");
+    setText("ww-kpi-wind",     wxLatest.wind_speed_avg_ms != null ? f(wxLatest.wind_speed_avg_ms * 2.23694, 1) + " mph" : "—");
+    setText("ww-kpi-solar",    f(wxLatest.solar_rad_wm2, 0));
+    setText("ww-kpi-pressure", wxLatest.bar_press_hpa != null ? f(wxLatest.bar_press_hpa * 0.750064, 1) : "—");
+    setText("ww-kpi-cloud",    wxLatest.cloud_cover_pct != null ? f(wxLatest.cloud_cover_pct, 0) + "%" : "—");
+  }
+  // Rain total summed over the window from the history series
+  if (wxHist?.series?.length) {
+    const rainTotalMm = wxHist.series.reduce((s, r) => s + (r.rain_accum_mm || 0), 0);
+    setText("ww-kpi-rain", (rainTotalMm * 0.0393701).toFixed(2) + " in");
+  } else {
+    setText("ww-kpi-rain", "—");
+  }
+
+  // Sparklines — water quality
+  const mkLine = (id, points, opts) => _miniLine(document.getElementById(id), points, opts);
+  if (wqHist?.series?.length) {
+    const ts = wqHist.series.map(r => new Date(r.bucket).getTime());
+    mkLine("ww-chart-wtemp", wqHist.series.map((r, i) => ({ x: ts[i], y: r.water_temp_c != null ? r.water_temp_c * 9/5 + 32 : null })), { unit: "°F", fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-do",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.do_pct })),                                                          { unit: "%",  fmt: n => n.toFixed(0) });
+    mkLine("ww-chart-ph",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.ph })),                                                              { fmt: n => n.toFixed(2) });
+    mkLine("ww-chart-turb",  wqHist.series.map((r, i) => ({ x: ts[i], y: r.turbidity_fnu })),                                                   { unit: "FNU", fmt: n => n.toFixed(1) });
+  }
+  // Sparklines — weather (air/wind combo and rain/solar combo, simplified to single-line per panel)
+  if (wxHist?.series?.length) {
+    const ts = wxHist.series.map(r => new Date(r.bucket).getTime());
+    mkLine("ww-chart-air",  wxHist.series.map((r, i) => ({ x: ts[i], y: r.air_temp_c != null ? r.air_temp_c * 9/5 + 32 : null })), { unit: "°F", fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-rain", wxHist.series.map((r, i) => ({ x: ts[i], y: r.rain_accum_mm != null ? r.rain_accum_mm * 0.0393701 : null })), { unit: "in", fmt: n => n.toFixed(2) });
+  }
+}
+
+// ---------- Render: Insights ----------
+
+async function renderInsightsTab(hours) {
+  const [sxw, sxweather, visitor] = await Promise.all([
+    pollWithCache(`/api/charts/sightings_x_water?hours=${hours}`).catch(() => null),
+    pollWithCache(`/api/charts/sightings_x_weather?hours=${hours}`).catch(() => null),
+    pollWithCache(`/api/visitor_stats?hours=${hours}`).catch(() => null),
+  ]);
+
+  const setText = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+  const totals = visitor?.totals || {};
+  setText("in-kpi-richness", totals.unique_species ?? "—");
+  setText("in-kpi-count",    totals.sightings ?? "—");
+
+  let rainTotalIn = null;
+  if (sxweather?.series?.length) {
+    const totalMm = sxweather.series.reduce((s, r) => s + (r.rain_accum_mm || 0), 0);
+    rainTotalIn = totalMm * 0.0393701;
+  }
+  setText("in-kpi-rain", rainTotalIn != null ? rainTotalIn.toFixed(2) + " in" : "—");
+
+  // Data completeness: fraction of hourly buckets in the window that have both fish + WQ data
+  if (sxw?.series?.length) {
+    const expected = hours; // hourly buckets
+    const filled = sxw.series.filter(r => r.sightings != null && r.water_temp_c != null).length;
+    const pct = Math.min(100, Math.round(100 * filled / Math.max(1, expected)));
+    setText("in-kpi-completeness", pct + "%");
+  } else {
+    setText("in-kpi-completeness", "—");
+  }
+
+  // Scatter: rainfall (in) vs sightings
+  _scatterChart(
+    document.getElementById("in-scatter-rain"),
+    (sxweather?.series || []).map(r => ({ x: (r.rain_accum_mm || 0) * 0.0393701, y: r.sightings || 0 })),
+    { xlabel: "rain (in) per hour", ylabel: "sightings", xfmt: n => n.toFixed(2) },
+  );
+
+  // Scatter: pressure (mmHg) vs sightings
+  _scatterChart(
+    document.getElementById("in-scatter-pressure"),
+    (sxweather?.series || [])
+      .filter(r => r.bar_press_hpa != null)
+      .map(r => ({ x: r.bar_press_hpa * 0.750064, y: r.sightings || 0 })),
+    { xlabel: "barometric pressure (mmHg)", ylabel: "sightings", xfmt: n => n.toFixed(1) },
+  );
+
+  // Scatter: water temp (°F) vs sightings
+  _scatterChart(
+    document.getElementById("in-scatter-temp"),
+    (sxw?.series || [])
+      .filter(r => r.water_temp_c != null)
+      .map(r => ({ x: r.water_temp_c * 9/5 + 32, y: r.sightings || 0 })),
+    { xlabel: "water temperature (°F)", ylabel: "sightings", xfmt: n => n.toFixed(1) },
+  );
+
+  // Scatter: DO vs sightings (proxy for species richness with what we already export)
+  _scatterChart(
+    document.getElementById("in-scatter-do"),
+    (sxw?.series || [])
+      .filter(r => r.do_pct != null)
+      .map(r => ({ x: r.do_pct, y: r.sightings || 0 })),
+    { xlabel: "dissolved O₂ (% sat)", ylabel: "sightings", xfmt: n => n.toFixed(0) },
+  );
+}
+
+// ---------- Render: Data Notes ----------
+
+function renderDataNotesTab() {
+  const el = document.getElementById("dn-refresh-ts");
+  if (el) el.textContent = new Date().toLocaleString();
+}
+
+// ---------- Master tick ----------
+
+async function tickReports() {
+  if (!reportsActive()) return;
+  const tab = activeReportsTab();
+  const hours = reportsHours();
+  try {
+    if (tab === "overview")        await renderOverviewTab(hours);
+    else if (tab === "water-weather") await renderWaterWeatherTab(hours);
+    else if (tab === "insights")   await renderInsightsTab(hours);
+    else if (tab === "data-notes") renderDataNotesTab();
+    // fish-explorer is a placeholder for now
+  } catch (e) {
+    // intentionally silent; cached UI stays as last successful render
+  }
+}
+
 initReviewer();
 initDownloads();
 initReefToggle();
 initBboxToggle();
 initTrendsToggle();
+initReportsToggle();
 refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
@@ -1069,6 +1449,7 @@ setInterval(tickAlerts, 15000);
 setInterval(tickCorrectionStats, 10000);
 setInterval(tickReef, 30000);
 setInterval(tickTrends, 60000);
+setInterval(tickReports, 60000);
 tick();
 tickHistory();
 tickWaterQuality();
@@ -1077,3 +1458,4 @@ tickAlerts();
 tickCorrectionStats();
 tickReef();
 tickTrends();
+tickReports();

@@ -441,6 +441,86 @@ def build_app() -> FastAPI:
         return JSONResponse(row)
 
     # ------------------------------------------------------------------
+    # Weather (weather_readings table; fed by the same poller as the
+    # sonde, in synthetic stub mode until the SenseStream auth token
+    # arrives)
+    # ------------------------------------------------------------------
+    WEATHER_COLUMNS = (
+        "bar_press_hpa",
+        "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
+        "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
+        "air_temp_c", "rel_humidity_pct",
+        "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
+        "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
+        "water_level_mm", "solar_rad_wm2",
+        "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
+        "precip_intensity_mm_hr", "precip_prob_pct",
+        "press_sea_level_hpa", "press_surface_hpa",
+        "temp_apparent_c", "uv_index", "weather_code",
+    )
+
+    @app.get("/api/weather/latest")
+    async def weather_latest(deployment: str = Query("wahoo_2")) -> Response:
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        cols = ", ".join(WEATHER_COLUMNS)
+        sql = f"""
+            SELECT ts, deployment_uri, source, {cols}
+              FROM weather_readings
+             WHERE deployment_uri = %s
+             ORDER BY ts DESC
+             LIMIT 1
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (deployment,))
+                row = await cur.fetchone()
+        if not row:
+            return JSONResponse({"error": "no weather readings for deployment"}, status_code=404)
+        row["ts"] = row["ts"].isoformat() if row["ts"] else None
+        return JSONResponse(row)
+
+    @app.get("/api/weather/history")
+    async def weather_history(
+        deployment: str = Query("wahoo_2"),
+        hours: int = Query(24, ge=1, le=24 * 30),
+        max_points: int = Query(200, ge=10, le=2000),
+    ) -> Response:
+        """Bucket-averaged weather history. weather_code is mode-bucketed
+        (taking the most-recent value per bucket) since it's categorical."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        bucket_s = max(60, (hours * 3600) // max_points)
+        numeric_cols = tuple(c for c in WEATHER_COLUMNS if c != "weather_code")
+        aggs = ",\n              ".join(
+            f"avg({c})::real AS {c}" for c in numeric_cols
+        )
+        sql = f"""
+            SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
+                   {aggs},
+                   (array_agg(weather_code ORDER BY ts DESC))[1] AS weather_code
+              FROM weather_readings
+             WHERE deployment_uri = %s
+               AND ts >= NOW() - (%s::int || ' hours')::interval
+             GROUP BY 1
+             ORDER BY 1 ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (bucket_s, bucket_s, deployment, hours))
+                rows = await cur.fetchall()
+        for r in rows:
+            r["bucket"] = r["bucket"].isoformat() if r.get("bucket") else None
+        return JSONResponse({
+            "deployment": deployment,
+            "hours": hours,
+            "bucket_seconds": bucket_s,
+            "series": rows,
+        })
+
+    # ------------------------------------------------------------------
     # Drift monitor (input drift on the video feed)
     # ------------------------------------------------------------------
 
@@ -838,6 +918,77 @@ def build_app() -> FastAPI:
                     "turbidity_fnu": r["turbidity_fnu"],
                     "chlorophyll_rfu": r["chlorophyll_rfu"],
                     "spcond_ms_cm": r["spcond_ms_cm"],
+                }
+                for r in rows
+            ],
+        })
+
+    @app.get("/api/charts/sightings_x_weather")
+    async def chart_sightings_x_weather(
+        hours: int = Query(24, ge=1, le=24 * 30),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        """Hourly sightings joined with hourly weather. Lets the client
+        overlay fish activity against air temp, wind, rain, pressure,
+        solar, or cloud cover."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        sql = """
+            WITH s AS (
+              SELECT hour, SUM(sightings)::int AS sightings
+                FROM species_sightings_hourly_mat
+               WHERE hour >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+            ),
+            w AS (
+              SELECT date_trunc('hour', ts)               AS hour,
+                     avg(air_temp_c)::real                AS air_temp_c,
+                     avg(wind_speed_avg_ms)::real         AS wind_speed_avg_ms,
+                     avg(rain_accum_mm)::real             AS rain_accum_mm,
+                     avg(rain_int_mm_hr)::real            AS rain_int_mm_hr,
+                     sum(rain_accum_mm)::real             AS rain_total_mm,
+                     avg(bar_press_hpa)::real             AS bar_press_hpa,
+                     avg(solar_rad_wm2)::real             AS solar_rad_wm2,
+                     avg(cloud_cover_pct)::real           AS cloud_cover_pct,
+                     avg(rel_humidity_pct)::real          AS rel_humidity_pct,
+                     avg(uv_index)::real                  AS uv_index
+                FROM weather_readings
+               WHERE deployment_uri = %s
+                 AND ts >= NOW() - (%s::int || ' hours')::interval
+               GROUP BY 1
+            )
+            SELECT COALESCE(s.hour, w.hour) AS hour,
+                   s.sightings,
+                   w.air_temp_c, w.wind_speed_avg_ms,
+                   w.rain_accum_mm, w.rain_int_mm_hr, w.rain_total_mm,
+                   w.bar_press_hpa, w.solar_rad_wm2, w.cloud_cover_pct,
+                   w.rel_humidity_pct, w.uv_index
+              FROM s
+              FULL OUTER JOIN w ON s.hour = w.hour
+             ORDER BY hour ASC
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql, (hours, deployment, hours))
+                rows = await cur.fetchall()
+        return JSONResponse({
+            "hours": hours,
+            "deployment": deployment,
+            "series": [
+                {
+                    "hour": r["hour"].isoformat(),
+                    "sightings": r["sightings"],
+                    "air_temp_c": r["air_temp_c"],
+                    "wind_speed_avg_ms": r["wind_speed_avg_ms"],
+                    "rain_accum_mm": r["rain_accum_mm"],
+                    "rain_int_mm_hr": r["rain_int_mm_hr"],
+                    "rain_total_mm": r["rain_total_mm"],
+                    "bar_press_hpa": r["bar_press_hpa"],
+                    "solar_rad_wm2": r["solar_rad_wm2"],
+                    "cloud_cover_pct": r["cloud_cover_pct"],
+                    "rel_humidity_pct": r["rel_humidity_pct"],
+                    "uv_index": r["uv_index"],
                 }
                 for r in rows
             ],

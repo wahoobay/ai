@@ -250,8 +250,10 @@ class PollerStats:
     last_probe_ok_at: datetime | None = None
     last_fetch_attempt_at: datetime | None = None
     last_insert_at: datetime | None = None
+    last_weather_insert_at: datetime | None = None
     last_error: str = ""
     total_inserted: int = 0
+    weather_inserted_total: int = 0
     running: bool = False
     token_configured: bool = False
     deployment_active: bool | None = None
@@ -317,30 +319,72 @@ class Poller:
         # Deterministic seed per-day so replays produce a consistent series.
         seed = int(end.strftime("%Y%m%d"))
         rng = _np.random.default_rng(seed)
+        rng_w = _np.random.default_rng(seed + 1)  # independent draw for weather
+        start_naive = start.replace(tzinfo=None)
+        end_naive = end.replace(tzinfo=None)
+
+        # ---- sonde readings ----
         try:
-            arrays = _synth.synthesize(
-                start.replace(tzinfo=None), end.replace(tzinfo=None), rng,
-            )
+            arrays = _synth.synthesize(start_naive, end_naive, rng)
         except Exception:
-            log.exception("synthetic generation failed")
-            return
-        n = len(arrays["ts"])
-        rows: list[tuple[datetime, dict]] = []
-        keys = ("water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
-                "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm")
-        for i in range(n):
-            t = datetime.utcfromtimestamp(int(arrays["ts"][i].astype("int64"))).replace(tzinfo=UTC)
-            rows.append((t, {k: float(arrays[k][i]) for k in keys}))
+            log.exception("synthetic sonde generation failed")
+            arrays = None
+
+        if arrays is not None:
+            n = len(arrays["ts"])
+            rows: list[tuple[datetime, dict]] = []
+            keys = ("water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
+                    "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm")
+            for i in range(n):
+                t = datetime.utcfromtimestamp(int(arrays["ts"][i].astype("int64"))).replace(tzinfo=UTC)
+                rows.append((t, {k: float(arrays[k][i]) for k in keys}))
+            try:
+                inserted = self._upsert(rows, source="synthetic")
+            except Exception:
+                log.exception("synthetic sonde upsert failed")
+                inserted = 0
+            self.stats.total_inserted += inserted
+            if inserted:
+                self.stats.last_insert_at = datetime.now(UTC)
+            log.info("synthetic stub (sonde): upserted %d row(s) over %d %s window (total=%d)",
+                     inserted, days_or_hours[0], days_or_hours[1], self.stats.total_inserted)
+
+        # ---- weather readings ----
+        if not hasattr(_synth, "synthesize_weather"):
+            return  # older generator; weather support not yet present
         try:
-            inserted = self._upsert(rows, source="synthetic")
+            w_arrays = _synth.synthesize_weather(start_naive, end_naive, rng_w)
         except Exception:
-            log.exception("synthetic upsert failed")
+            log.exception("synthetic weather generation failed")
             return
-        self.stats.total_inserted += inserted
-        if inserted:
-            self.stats.last_insert_at = datetime.now(UTC)
-        log.info("synthetic stub: upserted %d row(s) over %d %s window (total=%d)",
-                 inserted, days_or_hours[0], days_or_hours[1], self.stats.total_inserted)
+        w_n = len(w_arrays["ts"])
+        w_rows: list[tuple[datetime, dict]] = []
+        w_keys = (
+            "bar_press_hpa", "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
+            "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
+            "air_temp_c", "rel_humidity_pct",
+            "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
+            "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
+            "water_level_mm", "solar_rad_wm2",
+            "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
+            "precip_intensity_mm_hr", "precip_prob_pct",
+            "press_sea_level_hpa", "press_surface_hpa", "temp_apparent_c", "uv_index",
+        )
+        for i in range(w_n):
+            t = datetime.utcfromtimestamp(int(w_arrays["ts"][i].astype("int64"))).replace(tzinfo=UTC)
+            vals: dict = {k: float(w_arrays[k][i]) for k in w_keys}
+            vals["weather_code"] = int(w_arrays["weather_code"][i])
+            w_rows.append((t, vals))
+        try:
+            w_inserted = self._upsert_weather(w_rows, source="synthetic")
+        except Exception:
+            log.exception("synthetic weather upsert failed")
+            return
+        self.stats.weather_inserted_total += w_inserted
+        if w_inserted:
+            self.stats.last_weather_insert_at = datetime.now(UTC)
+        log.info("synthetic stub (weather): upserted %d row(s) (total=%d)",
+                 w_inserted, self.stats.weather_inserted_total)
 
     async def _probe_deployment(self, client: httpx.AsyncClient) -> None:
         url = f"{self.cfg.base_url}/manager/deployments/by-uri/{self.cfg.deployment_uri}"
@@ -425,6 +469,48 @@ class Poller:
                 """,
                 payload,
             )
+            conn.commit()
+        return len(payload)
+
+    # Column order in the INSERT must match this tuple exactly.
+    _WEATHER_INSERT_COLS = (
+        "bar_press_hpa",
+        "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
+        "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
+        "air_temp_c", "rel_humidity_pct",
+        "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
+        "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
+        "water_level_mm", "solar_rad_wm2",
+        "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
+        "precip_intensity_mm_hr", "precip_prob_pct",
+        "press_sea_level_hpa", "press_surface_hpa",
+        "temp_apparent_c", "uv_index", "weather_code",
+    )
+
+    def _upsert_weather(
+        self,
+        rows: Iterable[tuple[datetime, dict]],
+        source: str | None = None,
+    ) -> int:
+        cfg = self.cfg
+        src = source if source is not None else cfg.source_tag
+        payload = []
+        for ts, values in rows:
+            row = [ts, cfg.deployment_uri]
+            row.extend(values.get(c) for c in self._WEATHER_INSERT_COLS)
+            row.append(src)
+            payload.append(tuple(row))
+        if not payload:
+            return 0
+        col_list = ", ".join(("ts", "deployment_uri", *self._WEATHER_INSERT_COLS, "source"))
+        placeholders = ",".join(["%s"] * (2 + len(self._WEATHER_INSERT_COLS) + 1))
+        sql = (
+            f"INSERT INTO weather_readings ({col_list}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT (deployment_uri, ts) DO NOTHING"
+        )
+        with psycopg.connect(cfg.database_url) as conn, conn.cursor() as cur:
+            cur.executemany(sql, payload)
             conn.commit()
         return len(payload)
 
