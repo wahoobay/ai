@@ -289,13 +289,21 @@ def parse_observations(payload: Any) -> list[tuple[datetime, dict]]:
 
 
 def _parse_readings_payload(payload: Any) -> list[tuple[datetime, list]]:
-    """Pull (ts, readings[]) tuples out of a Wahoo Bay API payload.
+    """Pull (ts, readings[]) tuples out of a Wahoo Bay or SenseStream payload.
 
-    Accepts both the single-record (``/latest``) and range (``[{time, readings}, ...]``)
-    shapes.
+    Accepts:
+      - Wahoo Bay /latest:       ``{"time": <ms>, "readings": [...]}``
+      - Wahoo Bay range:         ``[{"time": ..., "readings": ...}, ...]``
+      - SenseStream observations: ``{"errorCode": 0, "errorMessage": "success",
+                                     "result": [{"time": ..., "readings": ...}, ...]}``
     """
     if payload is None:
         return []
+    # Unwrap SenseStream's {"errorCode", "errorMessage", "result"} envelope.
+    if isinstance(payload, dict) and "result" in payload and "readings" not in payload:
+        payload = payload["result"]
+        if payload is None:
+            return []
     items = payload if isinstance(payload, list) else [payload]
     out: list[tuple[datetime, list]] = []
     for item in items:
@@ -526,7 +534,8 @@ class Poller:
         self._stop.set()
 
     async def _tick(self, client: httpx.AsyncClient) -> None:
-        # Wahoo Bay public API is the preferred path (no auth needed).
+        # Wahoo Bay public API is the preferred path (single proxy hop, includes
+        # the Tomorrow.io forecast layer).
         if self.stats.wahoobay_enabled:
             ok = await self._tick_wahoobay(client)
             if ok:
@@ -534,16 +543,102 @@ class Poller:
                 return
             log.warning("Wahoo Bay API tick failed; falling back to next source")
 
-        # Legacy direct-SenseStream path (auth token required).
+        # SenseStream-direct path. /observations/measurements/<uri>/0 is
+        # unauthenticated when called with start/end params, so we can use it
+        # whenever the Wahoo Bay proxy is flaky. We lose the Tomorrow.io
+        # forecast layer here, but the on-site sonde + weather station
+        # numbers come straight from the source of truth.
         await self._probe_deployment(client)
+        ok = await self._tick_sensestream_direct(client)
+        if ok:
+            self.stats.last_data_source = "sensestream"
+            return
+        log.warning("SenseStream direct tick failed; falling back to next source")
+
+        # Legacy authenticated direct-SenseStream path (only useful if a token
+        # is configured; otherwise behaves the same as the path above).
         if self.cfg.auth_token:
             await self._fetch_and_store(client)
-            self.stats.last_data_source = "sensestream"
+            self.stats.last_data_source = "sensestream_auth"
             return
 
         # Last resort: synthetic stub generator.
         await asyncio.get_running_loop().run_in_executor(None, self._upsert_synthetic_window)
         self.stats.last_data_source = "synthetic"
+
+    # ---- SenseStream-direct path (unauthenticated) -----------------------
+
+    async def _tick_sensestream_direct(self, client: httpx.AsyncClient) -> bool:
+        """Pull sonde + weather-station directly from api.sensestream.org.
+
+        Same positional readings shape as the Wahoo Bay API (Wahoo Bay's
+        backend just proxies these), so our existing parsers apply. The
+        Tomorrow.io forecast layer is not available on this path — those
+        columns will be NULL in the resulting weather_readings rows.
+
+        Returns True if at least one feed returned usable rows.
+        """
+        cfg = self.cfg
+        end = datetime.now(UTC).replace(microsecond=0, second=0)
+        first_run = (
+            self.stats.total_inserted == 0
+            and self.stats.weather_inserted_total == 0
+        )
+        if first_run:
+            start = end - timedelta(days=cfg.initial_backfill_days)
+        else:
+            start = end - timedelta(minutes=cfg.backfill_minutes)
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        base = cfg.base_url
+        any_ok = False
+
+        # Sonde (wahoo_2) → sensor_readings
+        try:
+            r = await client.get(
+                f"{base}/observations/measurements/{cfg.deployment_uri}/0",
+                params={"start": start_ms, "end": end_ms},
+            )
+            if r.status_code == 200:
+                rows = parse_wahoobay_sonde(r.json())
+                inserted = self._upsert(rows, source=cfg.source_tag, uri=cfg.deployment_uri)
+                self.stats.total_inserted += inserted
+                if inserted:
+                    self.stats.last_insert_at = datetime.now(UTC)
+                log.info("sensestream-direct sonde: %d row(s), %d inserted (%s..%s)",
+                         len(rows), inserted, start.isoformat(timespec="minutes"),
+                         end.isoformat(timespec="minutes"))
+                any_ok = True
+            else:
+                log.warning("sensestream-direct sonde HTTP %s", r.status_code)
+        except Exception as e:
+            log.warning("sensestream-direct sonde failed: %s", e)
+
+        # Weather station (wahoo_1) → weather_readings (on-site columns only;
+        # forecast layer columns stay NULL on this path)
+        try:
+            uri = _env("SENSESTREAM_WEATHER_FETCH_URI", "wahoo_1")
+            r = await client.get(
+                f"{base}/observations/measurements/{uri}/0",
+                params={"start": start_ms, "end": end_ms},
+            )
+            if r.status_code == 200:
+                station_rows = parse_wahoobay_weather_station(r.json())
+                if station_rows:
+                    inserted = self._upsert_weather(station_rows, source=cfg.source_tag,
+                                                    uri=cfg.weather_deployment_uri)
+                    self.stats.weather_inserted_total += inserted
+                    if inserted:
+                        self.stats.last_weather_insert_at = datetime.now(UTC)
+                    log.info("sensestream-direct weather: %d row(s), %d inserted",
+                             len(station_rows), inserted)
+                any_ok = True
+            else:
+                log.warning("sensestream-direct weather HTTP %s", r.status_code)
+        except Exception as e:
+            log.warning("sensestream-direct weather failed: %s", e)
+
+        return any_ok
 
     # ---- Wahoo Bay public API path ----------------------------------------
 

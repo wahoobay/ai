@@ -426,7 +426,7 @@ function renderWaterQuality(latest, history) {
   }).join("");
 
   const banner = src === "synthetic"
-    ? `<div class="wq-synthetic-banner">Synthetic placeholder data (generator) — will switch to live SenseStream feed once credentials are configured.</div>`
+    ? `<div class="wq-synthetic-banner">Live SenseStream feed temporarily unreachable — showing synthetic placeholder readings. Auto-recovers on the next successful poll.</div>`
     : "";
   grid.innerHTML = banner + cells;
 }
@@ -731,7 +731,7 @@ function renderConditions(wq) {
   const [oStatus, oCls] = classifyDO(wq.do_pct);
   const [trStatus, trCls] = classifyTurbidity(wq.turbidity_fnu);
   const note = wq.source === "synthetic"
-    ? `<div class="reef-axis-label">synthetic placeholder data — live SenseStream feed pending credentials</div>`
+    ? `<div class="reef-axis-label">live SenseStream feed temporarily unreachable — showing synthetic placeholder</div>`
     : "";
   el.innerHTML = `
     <div class="reef-cond-tile">

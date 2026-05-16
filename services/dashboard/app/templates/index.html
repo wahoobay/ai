@@ -290,8 +290,8 @@
                 <ul class="notes-list">
                   <li><strong>Live camera feed:</strong> SEAHIVECAM (Wahoo Bay) primary, City of Pompano Beach pier cam fallback, recorded clips for visual continuity overnight.</li>
                   <li><strong>Fish detections:</strong> YOLOv26-nano + DINOv2/ViT classifier (Fishial.ai, MIT). Currently the stock 866-class model — fine-tuning on Wahoo Bay-specific species is pending the volunteer-annotated dataset.</li>
-                  <li><strong>Water quality:</strong> SenseStream <code>wahoo_2</code> deployment (EXO2 sonde). Source-tagged <code>live</code> when an auth token is configured, <code>synthetic</code> while one is pending from the SenseStream contact.</li>
-                  <li><strong>Weather:</strong> SenseStream co-located weather station + supplementary forecast layer. Same source-tagging as the sonde.</li>
+                  <li><strong>Water quality:</strong> SenseStream <code>wahoo_2</code> EXO2 sonde, pulled from <code>api.wahoobay.net</code> (primary) with a direct <code>api.sensestream.org</code> fallback. Rows are tagged <code>live</code> when either source responds; <code>synthetic</code> is a last-resort placeholder shown only when both are unreachable.</li>
+                  <li><strong>Weather:</strong> SenseStream co-located <code>wahoo_1</code> weather station (on-site measurements) + Tomorrow.io forecast layer via the Wahoo Bay API. Same source-tagging as the sonde.</li>
                   <li><strong>Reviewer corrections:</strong> opened via the <em>correct</em> button on Recent events; written to <code>detection_corrections</code> with reviewer email, confidence, and notes.</li>
                 </ul>
               </section>
@@ -319,7 +319,7 @@
                 <ul class="notes-list">
                   <li>The classifier was trained on a globally-mixed fish dataset; confident mislabels on Atlantic-reef species are routine and the most valuable thing reviewers can correct.</li>
                   <li>Fallback periods (camera dark, autoswitch on) emit no new sightings or sensor writes — gaps in the time series are intentional, not missing-data bugs.</li>
-                  <li>Sensor data is currently <code>synthetic</code> stub readings (deterministic per-day seed); live data flips on as soon as the SenseStream token is provided.</li>
+                  <li>Sensor + weather rows are <code>live</code> whenever <code>api.wahoobay.net</code> or <code>api.sensestream.org</code> is reachable; the <code>synthetic</code> stub (deterministic per-day seed) only kicks in when both upstream sources are unavailable, and a banner flags the fallback.</li>
                   <li>Habitat dimension (reef vs sand vs wreck) is not yet attached to detections; habitat-by-species views are deferred until habitat is hand-labelled per camera/zone.</li>
                 </ul>
               </section>
