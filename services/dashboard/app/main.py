@@ -548,6 +548,7 @@ def build_app() -> FastAPI:
         "precip_intensity_mm_hr", "precip_prob_pct",
         "press_sea_level_hpa", "press_surface_hpa",
         "temp_apparent_c", "uv_index", "weather_code",
+        "weather_description",
     )
 
     @app.get("/api/weather/latest")
@@ -584,14 +585,19 @@ def build_app() -> FastAPI:
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         bucket_s = max(60, (hours * 3600) // max_points)
-        numeric_cols = tuple(c for c in WEATHER_COLUMNS if c != "weather_code")
+        # Categorical columns (weather_code, weather_description) can't be
+        # averaged — we take the most-recent value per bucket via array_agg.
+        categorical = {"weather_code", "weather_description"}
+        numeric_cols = tuple(c for c in WEATHER_COLUMNS if c not in categorical)
         aggs = ",\n              ".join(
             f"avg({c})::real AS {c}" for c in numeric_cols
         )
         sql = f"""
             SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
                    {aggs},
-                   (array_agg(weather_code ORDER BY ts DESC))[1] AS weather_code
+                   (array_agg(weather_code ORDER BY ts DESC))[1] AS weather_code,
+                   (array_agg(weather_description ORDER BY ts DESC)
+                    FILTER (WHERE weather_description IS NOT NULL))[1] AS weather_description
               FROM weather_readings
              WHERE deployment_uri = %s
                AND ts >= NOW() - (%s::int || ' hours')::interval

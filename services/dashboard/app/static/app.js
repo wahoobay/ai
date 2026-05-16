@@ -18,6 +18,52 @@ async function poll(url) {
 const SWR_TTL_MS = 60 * 60 * 1000;       // 1 hour
 const SWR_PREFIX = "wb_swr_";
 
+// WMO weather codes (Open-Meteo). See https://open-meteo.com/en/docs.
+// Used when an NWS METAR text description isn't available — the codes are a
+// coarser categorical signal than NWS's plain-English "Clear" / "Partly
+// Cloudy" / "Light Rain" labels, but they cover the same conceptual space.
+const WMO_WX = {
+  0:  ["Clear",                 "☀️"],
+  1:  ["Mainly clear",          "🌤️"],
+  2:  ["Partly cloudy",         "⛅"],
+  3:  ["Overcast",              "☁️"],
+  45: ["Fog",                   "🌫️"],
+  48: ["Depositing rime fog",   "🌫️"],
+  51: ["Light drizzle",         "🌦️"],
+  53: ["Moderate drizzle",      "🌦️"],
+  55: ["Dense drizzle",         "🌧️"],
+  56: ["Light freezing drizzle","🌧️"],
+  57: ["Dense freezing drizzle","🌧️"],
+  61: ["Light rain",            "🌧️"],
+  63: ["Moderate rain",         "🌧️"],
+  65: ["Heavy rain",            "🌧️"],
+  66: ["Light freezing rain",   "🌧️"],
+  67: ["Heavy freezing rain",   "🌧️"],
+  71: ["Light snow",            "🌨️"],
+  73: ["Moderate snow",         "🌨️"],
+  75: ["Heavy snow",            "🌨️"],
+  77: ["Snow grains",           "🌨️"],
+  80: ["Light rain showers",    "🌦️"],
+  81: ["Moderate rain showers", "🌧️"],
+  82: ["Violent rain showers",  "⛈️"],
+  85: ["Light snow showers",    "🌨️"],
+  86: ["Heavy snow showers",    "🌨️"],
+  95: ["Thunderstorm",          "⛈️"],
+  96: ["Thunderstorm w/ light hail",  "⛈️"],
+  99: ["Thunderstorm w/ heavy hail",  "⛈️"],
+};
+
+// Prefer the NWS METAR text description when available — it's a real-world
+// observation from KPMP (Pompano Beach Air Park, ~2 mi from Wahoo Bay).
+// Fall back to the WMO weather code from Open-Meteo, which is a forecast-
+// model categorical, when no METAR description has landed yet.
+function conditionsText(row) {
+  if (row?.weather_description) return row.weather_description;
+  const code = row?.weather_code;
+  const entry = code != null ? WMO_WX[code] : null;
+  return entry ? `${entry[1]} ${entry[0]}` : "—";
+}
+
 function readCached(url) {
   try {
     const raw = localStorage.getItem(SWR_PREFIX + url);
@@ -1343,6 +1389,7 @@ async function renderWaterWeatherTab(hours) {
     setText("ww-kpi-solar",    f(wxLatest.solar_rad_wm2, 0));
     setText("ww-kpi-pressure", wxLatest.bar_press_hpa != null ? f(wxLatest.bar_press_hpa * 0.750064, 1) : "—");
     setText("ww-kpi-cloud",    wxLatest.cloud_cover_pct != null ? f(wxLatest.cloud_cover_pct, 0) + "%" : "—");
+    setText("ww-kpi-cond",     conditionsText(wxLatest));
   }
   // Rain total summed over the window from the history series
   if (wxHist?.series?.length) {

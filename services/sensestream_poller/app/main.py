@@ -111,6 +111,11 @@ class Config:
     wahoobay_site_sonde: int                  # /api/v1/sitedata site id for the EXO2 sonde
     wahoobay_site_weather: int                # /api/v1/sitedata site id for the weather station
     wahoobay_enabled: bool
+    open_meteo_url: str                       # base URL for Open-Meteo forecast layer
+    nws_metar_station: str                    # ICAO station id for NWS text observations
+    nws_user_agent: str                       # required by api.weather.gov (rejects empty UAs)
+    site_latitude: float                      # Wahoo Bay location for Open-Meteo / NWS lookups
+    site_longitude: float
     database_url: str
     http_host: str
     http_port: int
@@ -140,6 +145,11 @@ class Config:
             wahoobay_site_sonde=_int("WAHOOBAY_SITE_SONDE", 3),
             wahoobay_site_weather=_int("WAHOOBAY_SITE_WEATHER", 1),
             wahoobay_enabled=_env("WAHOOBAY_API_ENABLED", "1").lower() not in ("0", "false", "no", ""),
+            open_meteo_url=_env("OPEN_METEO_URL", "https://api.open-meteo.com").rstrip("/"),
+            nws_metar_station=_env("NWS_METAR_STATION", "KPMP"),
+            nws_user_agent=_env("NWS_USER_AGENT", "wahoobay-dashboard (scoopnisker@gmail.com)"),
+            site_latitude=float(_env("WAHOOBAY_LAT", "26.2603")),
+            site_longitude=float(_env("WAHOOBAY_LON", "-80.0834")),
             database_url=_env(
                 "DATABASE_URL",
                 "postgresql://wahoobay:wahoobay@localhost:5432/wahoobay",
@@ -534,64 +544,88 @@ class Poller:
         self._stop.set()
 
     async def _tick(self, client: httpx.AsyncClient) -> None:
-        # Wahoo Bay public API is the preferred path (single proxy hop, includes
-        # the Tomorrow.io forecast layer).
-        if self.stats.wahoobay_enabled:
-            ok = await self._tick_wahoobay(client)
-            if ok:
-                self.stats.last_data_source = "wahoobay"
-                return
-            log.warning("Wahoo Bay API tick failed; falling back to next source")
-
-        # SenseStream-direct path. /observations/measurements/<uri>/0 is
-        # unauthenticated when called with start/end params, so we can use it
-        # whenever the Wahoo Bay proxy is flaky. We lose the Tomorrow.io
-        # forecast layer here, but the on-site sonde + weather station
-        # numbers come straight from the source of truth.
-        await self._probe_deployment(client)
-        ok = await self._tick_sensestream_direct(client)
-        if ok:
-            self.stats.last_data_source = "sensestream"
-            return
-        log.warning("SenseStream direct tick failed; falling back to next source")
-
-        # Legacy authenticated direct-SenseStream path (only useful if a token
-        # is configured; otherwise behaves the same as the path above).
-        if self.cfg.auth_token:
-            await self._fetch_and_store(client)
-            self.stats.last_data_source = "sensestream_auth"
-            return
-
-        # Last resort: synthetic stub generator.
-        await asyncio.get_running_loop().run_in_executor(None, self._upsert_synthetic_window)
-        self.stats.last_data_source = "synthetic"
-
-    # ---- SenseStream-direct path (unauthenticated) -----------------------
-
-    async def _tick_sensestream_direct(self, client: httpx.AsyncClient) -> bool:
-        """Pull sonde + weather-station directly from api.sensestream.org.
-
-        Same positional readings shape as the Wahoo Bay API (Wahoo Bay's
-        backend just proxies these), so our existing parsers apply. The
-        Tomorrow.io forecast layer is not available on this path — those
-        columns will be NULL in the resulting weather_readings rows.
-
-        Returns True if at least one feed returned usable rows.
-        """
         cfg = self.cfg
         end = datetime.now(UTC).replace(microsecond=0, second=0)
         first_run = (
             self.stats.total_inserted == 0
             and self.stats.weather_inserted_total == 0
         )
-        if first_run:
-            start = end - timedelta(days=cfg.initial_backfill_days)
-        else:
-            start = end - timedelta(minutes=cfg.backfill_minutes)
+        start = end - (
+            timedelta(days=cfg.initial_backfill_days) if first_run
+            else timedelta(minutes=cfg.backfill_minutes)
+        )
+
+        # Stage 1: sonde + weather station observations. Try Wahoo Bay's
+        # proxy first, then api.sensestream.org direct. Both return the same
+        # SenseStream readings (Wahoo Bay just proxies); we keep two paths so
+        # one outage doesn't take us offline.
+        prev_sonde = self.stats.total_inserted
+        station_rows: list[tuple[datetime, dict]] = []
+        data_source = ""
+        if self.stats.wahoobay_enabled:
+            station_rows = await self._tick_wahoobay(client, start, end)
+            if station_rows or self.stats.total_inserted > prev_sonde:
+                data_source = "wahoobay"
+            else:
+                log.warning("Wahoo Bay API tick produced no rows; falling back to next source")
+
+        if not data_source:
+            prev_sonde = self.stats.total_inserted
+            await self._probe_deployment(client)
+            station_rows = await self._tick_sensestream_direct(client, start, end)
+            if station_rows or self.stats.total_inserted > prev_sonde:
+                data_source = "sensestream"
+            else:
+                log.warning("SenseStream direct tick produced no rows; falling back to next source")
+
+        # Stage 2: forecast layer. Open-Meteo (no key, no rate limit) supplies
+        # the cloud-cover / dew-point / apparent-temp / UV / weather-code
+        # columns; NWS METAR from KPMP (2 mi from Wahoo Bay) supplies a
+        # human-readable text description. Both run on every tick, regardless
+        # of which Stage 1 path supplied station data — they're independent.
+        if data_source:
+            try:
+                await self._apply_forecast_layer(client, start, end, station_rows)
+            except Exception:
+                log.exception("forecast-layer step failed (continuing)")
+            self.stats.last_data_source = data_source
+            return
+
+        # Legacy authenticated direct-SenseStream path (only useful if a token
+        # is configured; otherwise behaves the same as the unauthenticated one
+        # above).
+        if cfg.auth_token:
+            await self._fetch_and_store(client)
+            try:
+                await self._apply_forecast_layer(client, start, end, [])
+            except Exception:
+                log.exception("forecast-layer step failed (continuing)")
+            self.stats.last_data_source = "sensestream_auth"
+            return
+
+        # Last resort: synthetic stub generator (no live source reachable).
+        await asyncio.get_running_loop().run_in_executor(None, self._upsert_synthetic_window)
+        self.stats.last_data_source = "synthetic"
+
+    # ---- SenseStream-direct path (unauthenticated) -----------------------
+
+    async def _tick_sensestream_direct(
+        self,
+        client: httpx.AsyncClient,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, dict]]:
+        """Pull sonde + weather-station directly from api.sensestream.org.
+
+        Same positional readings shape as the Wahoo Bay API (Wahoo Bay's
+        backend just proxies these), so our existing parsers apply. Sonde
+        rows are upserted to ``sensor_readings`` here. Weather-station rows
+        are RETURNED for merging with the forecast layer downstream.
+        """
+        cfg = self.cfg
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
         base = cfg.base_url
-        any_ok = False
 
         # Sonde (wahoo_2) → sensor_readings
         try:
@@ -608,14 +642,13 @@ class Poller:
                 log.info("sensestream-direct sonde: %d row(s), %d inserted (%s..%s)",
                          len(rows), inserted, start.isoformat(timespec="minutes"),
                          end.isoformat(timespec="minutes"))
-                any_ok = True
             else:
                 log.warning("sensestream-direct sonde HTTP %s", r.status_code)
         except Exception as e:
             log.warning("sensestream-direct sonde failed: %s", e)
 
-        # Weather station (wahoo_1) → weather_readings (on-site columns only;
-        # forecast layer columns stay NULL on this path)
+        # Weather station (wahoo_1) — returned, not upserted yet
+        station_rows: list[tuple[datetime, dict]] = []
         try:
             uri = _env("SENSESTREAM_WEATHER_FETCH_URI", "wahoo_1")
             r = await client.get(
@@ -624,44 +657,35 @@ class Poller:
             )
             if r.status_code == 200:
                 station_rows = parse_wahoobay_weather_station(r.json())
-                if station_rows:
-                    inserted = self._upsert_weather(station_rows, source=cfg.source_tag,
-                                                    uri=cfg.weather_deployment_uri)
-                    self.stats.weather_inserted_total += inserted
-                    if inserted:
-                        self.stats.last_weather_insert_at = datetime.now(UTC)
-                    log.info("sensestream-direct weather: %d row(s), %d inserted",
-                             len(station_rows), inserted)
-                any_ok = True
+                log.info("sensestream-direct weather station: %d row(s) fetched", len(station_rows))
             else:
                 log.warning("sensestream-direct weather HTTP %s", r.status_code)
         except Exception as e:
             log.warning("sensestream-direct weather failed: %s", e)
 
-        return any_ok
+        return station_rows
 
     # ---- Wahoo Bay public API path ----------------------------------------
 
-    async def _tick_wahoobay(self, client: httpx.AsyncClient) -> bool:
-        """Pull from api.wahoobay.net for sonde + weather + forecast.
+    async def _tick_wahoobay(
+        self,
+        client: httpx.AsyncClient,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, dict]]:
+        """Pull sonde + weather-station observations from api.wahoobay.net.
 
-        Returns True if at least one of the three feeds returned usable rows.
-        Failures on individual feeds are logged but don't abort the tick.
+        Sonde rows are upserted to ``sensor_readings`` here. Weather-station
+        rows are RETURNED (not upserted yet) so the caller can merge them
+        with the forecast layer before writing to ``weather_readings``. The
+        Tomorrow.io feed Wahoo Bay used to bundle here is dropped — we get
+        the same fields more reliably from Open-Meteo in the forecast layer
+        step.
         """
         cfg = self.cfg
-        end = datetime.now(UTC).replace(microsecond=0, second=0)
-        first_run = (
-            self.stats.wahoobay_sonde_inserted_total == 0
-            and self.stats.wahoobay_weather_inserted_total == 0
-        )
-        if first_run:
-            start = end - timedelta(days=cfg.initial_backfill_days)
-        else:
-            start = end - timedelta(minutes=cfg.backfill_minutes)
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
         base = cfg.wahoobay_api_url
-        any_ok = False
 
         # Sonde (wahoo_2) → sensor_readings
         try:
@@ -678,7 +702,7 @@ class Poller:
                 log.info("wahoobay sonde: %d row(s), %d inserted (%s..%s)",
                          len(rows), inserted, start.isoformat(timespec="minutes"),
                          end.isoformat(timespec="minutes"))
-                any_ok = True
+                self.stats.wahoobay_last_ok_at = datetime.now(UTC)
             else:
                 self.stats.wahoobay_last_error = f"sonde HTTP {r.status_code}"
                 log.warning("wahoobay sonde fetch HTTP %s", r.status_code)
@@ -686,15 +710,15 @@ class Poller:
             self.stats.wahoobay_last_error = f"sonde: {e}"
             log.warning("wahoobay sonde fetch failed: %s", e)
 
-        # Weather station (wahoo_1) → weather_readings (on-site columns)
-        weather_station_rows: list[tuple[datetime, dict]] = []
+        # Weather station (wahoo_1) — returned, not upserted yet
+        station_rows: list[tuple[datetime, dict]] = []
         try:
             r = await client.get(f"{base}/api/v1/sitedata", params={
                 "site": cfg.wahoobay_site_weather, "start": start_ms, "end": end_ms,
             })
             if r.status_code == 200:
-                weather_station_rows = parse_wahoobay_weather_station(r.json())
-                any_ok = True
+                station_rows = parse_wahoobay_weather_station(r.json())
+                self.stats.wahoobay_last_ok_at = datetime.now(UTC)
             else:
                 self.stats.wahoobay_last_error = f"weather HTTP {r.status_code}"
                 log.warning("wahoobay weather fetch HTTP %s", r.status_code)
@@ -702,77 +726,225 @@ class Poller:
             self.stats.wahoobay_last_error = f"weather: {e}"
             log.warning("wahoobay weather fetch failed: %s", e)
 
-        # Tomorrow.io forecast layer → merged into the same weather_readings row
-        forecast_rows: list[tuple[datetime, dict]] = []
+        return station_rows
+
+    # ---- Forecast layer (Open-Meteo + NWS METAR) -------------------------
+
+    async def _fetch_open_meteo(
+        self,
+        client: httpx.AsyncClient,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, dict]]:
+        """Fetch the forecast layer from Open-Meteo.
+
+        Open-Meteo is free, no API key, no rate limits — fills all the
+        columns Tomorrow.io used to provide (cloud cover, dew point,
+        apparent temp, precipitation probability, surface + sea-level
+        pressure, UV index, weather code). Weather codes follow the WMO
+        spec (0=clear, 3=overcast, 95=thunderstorm, ...) — different
+        numbering from Tomorrow.io, mapping handled in the dashboard.
+
+        Returns hourly rows in our weather_readings forecast-column shape.
+        """
+        cfg = self.cfg
+        # past_days caps at 92; we cap initial backfill at 30d via config.
+        days_back = max(1, (datetime.now(UTC) - start).days + 1)
+        days_back = min(days_back, 92)
         try:
-            r = await client.get(f"{base}/api/v1/weatherdata", params={
-                "start": start_ms, "end": end_ms,
-            })
-            if r.status_code == 200:
-                forecast_rows = parse_wahoobay_forecast(r.json())
-                any_ok = True
-            else:
-                self.stats.wahoobay_last_error = f"forecast HTTP {r.status_code}"
-                log.warning("wahoobay forecast fetch HTTP %s", r.status_code)
+            r = await client.get(
+                f"{cfg.open_meteo_url}/v1/forecast",
+                params={
+                    "latitude": cfg.site_latitude,
+                    "longitude": cfg.site_longitude,
+                    "past_days": days_back,
+                    "forecast_days": 1,
+                    "hourly": ",".join((
+                        "cloud_cover", "weather_code", "apparent_temperature",
+                        "dew_point_2m", "precipitation",
+                        "precipitation_probability", "pressure_msl",
+                        "surface_pressure", "uv_index", "relative_humidity_2m",
+                    )),
+                    "timezone": "UTC",
+                },
+            )
+            if r.status_code != 200:
+                log.warning("open-meteo HTTP %s: %s", r.status_code, (r.text or "")[:160])
+                return []
+            j = r.json()
         except Exception as e:
-            self.stats.wahoobay_last_error = f"forecast: {e}"
-            log.warning("wahoobay forecast fetch failed: %s", e)
+            log.warning("open-meteo fetch failed: %s", e)
+            return []
 
-        merged = self._merge_weather_rows(weather_station_rows, forecast_rows)
-        if merged:
-            inserted = self._upsert_weather(merged, source=cfg.source_tag,
-                                            uri=cfg.weather_deployment_uri)
-            self.stats.wahoobay_weather_inserted_total += inserted
-            self.stats.weather_inserted_total += inserted
-            if inserted:
-                self.stats.last_weather_insert_at = datetime.now(UTC)
-            log.info("wahoobay weather: station=%d forecast=%d merged=%d (%s..%s)",
-                     len(weather_station_rows), len(forecast_rows), inserted,
-                     start.isoformat(timespec="minutes"), end.isoformat(timespec="minutes"))
+        hourly = j.get("hourly") or {}
+        times = hourly.get("time") or []
+        if not times:
+            return []
+        # Clip strictly to "now". Open-Meteo returns the rest of today's
+        # forecast hours by default; we don't want future-hour rows inserted
+        # with all station columns NULL — they'd beat the most-recent station
+        # observation in ORDER BY ts DESC LIMIT 1 queries.
+        rows: list[tuple[datetime, dict]] = []
+        for i, t in enumerate(times):
+            try:
+                ts = datetime.fromisoformat(t).replace(tzinfo=UTC)
+            except Exception:
+                continue
+            if ts < start - timedelta(hours=1) or ts > end:
+                continue
+            wc = _get(hourly.get("weather_code") or [], i)
+            values = {
+                "cloud_cover_pct":        _get(hourly.get("cloud_cover") or [], i),
+                "dew_point_c":            _get(hourly.get("dew_point_2m") or [], i),
+                "forecast_humidity_pct":  _get(hourly.get("relative_humidity_2m") or [], i),
+                "precip_intensity_mm_hr": _get(hourly.get("precipitation") or [], i),
+                "precip_prob_pct":        _get(hourly.get("precipitation_probability") or [], i),
+                "press_sea_level_hpa":    _get(hourly.get("pressure_msl") or [], i),
+                "press_surface_hpa":      _get(hourly.get("surface_pressure") or [], i),
+                "temp_apparent_c":        _get(hourly.get("apparent_temperature") or [], i),
+                "uv_index":               _get(hourly.get("uv_index") or [], i),
+                "weather_code":           int(wc) if wc is not None else None,
+            }
+            if any(v is not None for v in values.values()):
+                rows.append((ts, values))
+        return rows
 
-        if any_ok:
-            self.stats.wahoobay_last_ok_at = datetime.now(UTC)
-        return any_ok
+    async def _fetch_nws_metar(
+        self,
+        client: httpx.AsyncClient,
+        station: str,
+    ) -> tuple[datetime, str] | None:
+        """Fetch the latest METAR observation from NWS api.weather.gov.
+
+        Returns (observation_ts, text_description) or None. KPMP (Pompano
+        Beach Air Park) is ~2 miles from Wahoo Bay; the textDescription
+        field is what the dashboard surfaces as "current conditions".
+        """
+        try:
+            r = await client.get(
+                f"https://api.weather.gov/stations/{station}/observations/latest",
+                headers={"User-Agent": self.cfg.nws_user_agent},
+            )
+            if r.status_code != 200:
+                log.warning("NWS METAR HTTP %s for %s", r.status_code, station)
+                return None
+            props = (r.json() or {}).get("properties") or {}
+            desc = props.get("textDescription")
+            ts_str = props.get("timestamp")
+            if not desc or not ts_str:
+                return None
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            return (ts, str(desc))
+        except Exception as e:
+            log.warning("NWS METAR fetch failed: %s", e)
+            return None
+
+    async def _apply_forecast_layer(
+        self,
+        client: httpx.AsyncClient,
+        start: datetime,
+        end: datetime,
+        station_rows: list[tuple[datetime, dict]],
+    ) -> None:
+        """Merge station observations with Open-Meteo + NWS into one upsert.
+
+        Open-Meteo runs hourly, the on-site station every ~10 min; each
+        forecast row snaps to the nearest station timestamp within 30 min.
+        NWS METAR provides a single latest text description, attached to
+        the most recent merged row. Station-only rows pass through unchanged
+        so a Wahoo Bay outage doesn't suppress on-site readings.
+        """
+        cfg = self.cfg
+        forecast_rows = await self._fetch_open_meteo(client, start, end)
+        metar = await self._fetch_nws_metar(client, cfg.nws_metar_station)
+
+        # Open-Meteo is hourly; the closest forecast hour to any station row
+        # is at most ~30 min away under perfect alignment, but station ticks
+        # land on arbitrary seconds. 3600s covers the full hour either side
+        # so every station row gets the forecast values from whichever hour
+        # is nearest in time.
+        merged = self._merge_weather_rows(station_rows, forecast_rows, snap_seconds=3600)
+        if metar and merged:
+            metar_ts, desc = metar
+            # Attach text description to the row closest to the METAR observation
+            # timestamp (NWS updates roughly hourly, so it propagates to one row
+            # per tick — older rows keep their previous description).
+            nearest_idx = min(
+                range(len(merged)),
+                key=lambda i: abs((merged[i][0] - metar_ts).total_seconds()),
+            )
+            merged[nearest_idx][1]["weather_description"] = desc
+        if not merged:
+            return
+        inserted = self._upsert_weather(merged, source=cfg.source_tag,
+                                        uri=cfg.weather_deployment_uri)
+        self.stats.weather_inserted_total += inserted
+        if inserted:
+            self.stats.last_weather_insert_at = datetime.now(UTC)
+        log.info("forecast layer: station=%d open-meteo=%d nws=%s upserted=%d",
+                 len(station_rows), len(forecast_rows),
+                 "ok" if metar else "—", inserted)
 
     @staticmethod
     def _merge_weather_rows(
         station: list[tuple[datetime, dict]],
         forecast: list[tuple[datetime, dict]],
+        snap_seconds: int = 600,
     ) -> list[tuple[datetime, dict]]:
-        """Combine on-site station rows with Tomorrow.io forecast rows.
+        """Combine on-site station rows with forecast-layer rows.
 
-        The two feeds cadence differently: the station is on a strict 10-min
-        boundary; the forecast layer is ~3-min. Each forecast row is snapped
-        to the nearest station timestamp (within 10 minutes) and merged.
-        Forecast-only rows beyond that window are passed through unchanged so
-        the forecast layer remains visible if the station goes offline.
+        The station runs every ~10 min; the forecast layer is hourly. We
+        broadcast each forecast value onto EVERY station row within
+        ``snap_seconds`` of the forecast timestamp by inverting the join:
+        for each station row, look up the closest forecast row. That way
+        the dashboard's "latest weather" query (ORDER BY ts DESC LIMIT 1)
+        sees forecast columns regardless of which 10-min slot the latest
+        station ping landed in.
+
+        Forecast rows with no station row in range pass through unchanged so
+        the forecast layer remains visible during station outages.
         """
         if not station and not forecast:
             return []
         if not station:
             return [(ts, dict(v)) for ts, v in forecast]
 
-        # Sort once, bisect per forecast row → O((N+M) log N).
         by_ts: dict[datetime, dict] = {ts: dict(vals) for ts, vals in station}
-        station_keys = sorted(by_ts.keys())
-        n = len(station_keys)
+        if not forecast:
+            return sorted(by_ts.items(), key=lambda kv: kv[0])
 
-        for ts, vals in forecast:
-            i = bisect.bisect_left(station_keys, ts)
-            # Compare ts to keys at i-1 and i; pick the closer one.
-            candidates: list[datetime] = []
+        forecast_sorted = sorted(forecast, key=lambda kv: kv[0])
+        forecast_keys = [ts for ts, _ in forecast_sorted]
+        forecast_vals = [vals for _, vals in forecast_sorted]
+        fn = len(forecast_keys)
+        matched_forecasts: set[int] = set()
+
+        # Bisect each station row's ts into forecast_keys to find the nearest
+        # forecast within snap_seconds.
+        for s_ts in by_ts:
+            i = bisect.bisect_left(forecast_keys, s_ts)
+            cand_idx: list[int] = []
             if i > 0:
-                candidates.append(station_keys[i - 1])
-            if i < n:
-                candidates.append(station_keys[i])
-            nearest = min(candidates, key=lambda k: abs((ts - k).total_seconds()))
-            if abs((ts - nearest).total_seconds()) <= 600:
-                row = by_ts.setdefault(nearest, {})
-                for k, v in vals.items():
+                cand_idx.append(i - 1)
+            if i < fn:
+                cand_idx.append(i)
+            if not cand_idx:
+                continue
+            nearest_idx = min(cand_idx, key=lambda j: abs((s_ts - forecast_keys[j]).total_seconds()))
+            if abs((s_ts - forecast_keys[nearest_idx]).total_seconds()) <= snap_seconds:
+                for k, v in forecast_vals[nearest_idx].items():
                     if v is not None:
-                        row[k] = v
-            else:
-                by_ts[ts] = dict(vals)
+                        by_ts[s_ts][k] = v
+                matched_forecasts.add(nearest_idx)
+
+        # Forecast rows that didn't get matched to any station row pass through
+        # as forecast-only rows (e.g., during a station outage).
+        for j in range(fn):
+            if j not in matched_forecasts and forecast_keys[j] not in by_ts:
+                by_ts[forecast_keys[j]] = dict(forecast_vals[j])
+
         return sorted(by_ts.items(), key=lambda kv: kv[0])
 
     def _upsert_synthetic_window(self) -> None:
@@ -963,6 +1135,7 @@ class Poller:
         "precip_intensity_mm_hr", "precip_prob_pct",
         "press_sea_level_hpa", "press_surface_hpa",
         "temp_apparent_c", "uv_index", "weather_code",
+        "weather_description",
     )
 
     def _upsert_weather(
@@ -984,10 +1157,18 @@ class Poller:
             return 0
         col_list = ", ".join(("ts", "deployment_uri", *self._WEATHER_INSERT_COLS, "source"))
         placeholders = ",".join(["%s"] * (2 + len(self._WEATHER_INSERT_COLS) + 1))
+        # On conflict, fill in any missing columns from the new payload (e.g.,
+        # back-filling forecast values onto rows the station wrote earlier).
+        # COALESCE preserves the existing value when the new one is NULL so a
+        # forecast-only update can't wipe a station-only column.
+        update_clause = ", ".join(
+            f"{c} = COALESCE(EXCLUDED.{c}, weather_readings.{c})"
+            for c in self._WEATHER_INSERT_COLS
+        )
         sql = (
             f"INSERT INTO weather_readings ({col_list}) "
             f"VALUES ({placeholders}) "
-            f"ON CONFLICT (deployment_uri, ts) DO NOTHING"
+            f"ON CONFLICT (deployment_uri, ts) DO UPDATE SET {update_clause}"
         )
         with psycopg.connect(cfg.database_url) as conn, conn.cursor() as cur:
             cur.executemany(sql, payload)

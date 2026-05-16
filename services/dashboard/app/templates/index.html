@@ -223,7 +223,7 @@
               <div class="kpi-tile"><div class="kpi-label">Rain total</div><div class="kpi-value" id="ww-kpi-rain">—</div><div class="kpi-sub">in (window)</div></div>
               <div class="kpi-tile"><div class="kpi-label">Solar</div><div class="kpi-value" id="ww-kpi-solar">—</div><div class="kpi-sub">W/m²</div></div>
               <div class="kpi-tile"><div class="kpi-label">Pressure</div><div class="kpi-value" id="ww-kpi-pressure">—</div><div class="kpi-sub">mmHg</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Cloud cover</div><div class="kpi-value" id="ww-kpi-cloud">—</div><div class="kpi-sub">% / weather</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Cloud cover</div><div class="kpi-value" id="ww-kpi-cloud">—</div><div class="kpi-sub" id="ww-kpi-cond">—</div></div>
             </div>
             <div class="reports-grid">
               <section class="chart-card">
@@ -291,7 +291,7 @@
                   <li><strong>Live camera feed:</strong> SEAHIVECAM (Wahoo Bay) primary, City of Pompano Beach pier cam fallback, recorded clips for visual continuity overnight.</li>
                   <li><strong>Fish detections:</strong> YOLOv26-nano + DINOv2/ViT classifier (Fishial.ai, MIT). Currently the stock 866-class model — fine-tuning on Wahoo Bay-specific species is pending the volunteer-annotated dataset.</li>
                   <li><strong>Water quality:</strong> SenseStream <code>wahoo_2</code> EXO2 sonde, pulled from <code>api.wahoobay.net</code> (primary) with a direct <code>api.sensestream.org</code> fallback. Rows are tagged <code>live</code> when either source responds; <code>synthetic</code> is a last-resort placeholder shown only when both are unreachable.</li>
-                  <li><strong>Weather:</strong> SenseStream co-located <code>wahoo_1</code> weather station (on-site measurements) + Tomorrow.io forecast layer via the Wahoo Bay API. Same source-tagging as the sonde.</li>
+                  <li><strong>Weather:</strong> SenseStream co-located <code>wahoo_1</code> weather station for on-site measurements (pressure, wind, air temp, humidity, rain, hail, water level, solar radiation). Forecast layer (cloud cover, dew point, apparent temp, UV index, precipitation probability, WMO weather code) from <code>api.open-meteo.com</code> — free, no API key. Current conditions text comes from the NWS METAR at <code>KPMP</code> (Pompano Beach Air Park, ~2 mi from Wahoo Bay).</li>
                   <li><strong>Reviewer corrections:</strong> opened via the <em>correct</em> button on Recent events; written to <code>detection_corrections</code> with reviewer email, confidence, and notes.</li>
                 </ul>
               </section>

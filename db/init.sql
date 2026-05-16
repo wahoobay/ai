@@ -142,7 +142,8 @@ CREATE TABLE IF NOT EXISTS weather_readings (
     press_surface_hpa   REAL,      -- surface pressure (hPa)
     temp_apparent_c     REAL,      -- apparent ("feels like") temperature (°C)
     uv_index            REAL,
-    weather_code        INTEGER,   -- numeric weather code (icon dispatch)
+    weather_code        INTEGER,   -- WMO weather code (0=clear, 3=overcast, 95=thunderstorm, ...)
+    weather_description TEXT,      -- human-readable observation from nearest NWS METAR (KPMP)
     -- ---- bookkeeping ----
     source              TEXT NOT NULL DEFAULT 'live',  -- 'live' | 'synthetic'
     UNIQUE (deployment_uri, ts)
