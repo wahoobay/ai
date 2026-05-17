@@ -253,11 +253,6 @@ function renderEventCard(r) {
     ? `<img class="event-thumb" src="/api/detections/${r.id}/roi.jpg?size=160" alt="" loading="lazy" onclick="openRoiModal(${r.id})" title="click to enlarge" onerror="this.style.display='none'">`
     : `<div class="event-thumb event-thumb-empty" title="no saved frame on disk for this detection (worker saves frames selectively)">no frame</div>`;
   const meta = `${new Date(r.ts).toLocaleTimeString()} · ${short(r.source_name)} · frame ${r.frame_id}`;
-  const canEndorse = hasImage && !!r.best_name;
-  const endorseBtn = canEndorse
-    ? `<button class="ev-btn ev-btn-ok"   onclick="endorseEvent(${r.id})" title="confirm the model got it right">✓ Looks right</button>`
-    : "";
-  const correctBtn = `<button class="ev-btn ev-btn-edit" onclick="toggleCorrection(${r.id})" title="correct or reject this prediction">✏️ Correct</button>`;
   return `
     <li class="event-item" data-event-id="${r.id}">
       <div class="event-row">
@@ -268,11 +263,25 @@ function renderEventCard(r) {
             <span class="acc">${acc}</span>
           </div>
           <div class="meta">${meta}</div>
-          <div class="event-actions">${endorseBtn}${correctBtn}</div>
+          ${eventActionsHtml(r.id)}
         </div>
       </div>
       <div class="correction-slot"></div>
     </li>`;
+}
+
+// Shared action-button HTML — rendered both in the list card and inside the
+// ROI lightbox so a reviewer can accept / correct / reject from whichever
+// view they're focused on. EVENT_CACHE drives the per-event eligibility
+// checks (e.g. only show "Looks right" when the model produced a best_name).
+function eventActionsHtml(eventId) {
+  const r = EVENT_CACHE.get(eventId);
+  const canEndorse = !!r?.best_name;
+  const endorse = canEndorse
+    ? `<button class="ev-btn ev-btn-ok"   onclick="endorseEvent(${eventId})" title="confirm the model got it right">✓ Looks right</button>`
+    : "";
+  const correct = `<button class="ev-btn ev-btn-edit" onclick="toggleCorrection(${eventId})" title="correct or reject this prediction">✏️ Correct</button>`;
+  return `<div class="event-actions">${endorse}${correct}</div>`;
 }
 
 function correctionFormHtml(eventId) {
@@ -333,10 +342,25 @@ function correctionFormHtml(eventId) {
 function escAttr(s) { return String(s ?? "").replace(/'/g, "&#39;").replace(/"/g, "&quot;"); }
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
+// Find the *active* container for an event's correction UI. When the ROI
+// modal is open on this event, the modal wins (it's the focused surface);
+// otherwise we fall back to the inline list card. Centralises this lookup
+// so toggleCorrection / postCorrection / pickTopK all agree on where the
+// form lives — and the cf-*-${eventId} IDs stay unique in the DOM.
+function _activeEventContainer(eventId) {
+  const modal = document.getElementById("roi-modal");
+  const modalActions = document.getElementById("roi-modal-actions");
+  if (
+    modal && !modal.classList.contains("hidden")
+    && modalActions?.dataset.eventId === String(eventId)
+  ) return modalActions;
+  return document.querySelector(`li[data-event-id="${eventId}"]`);
+}
+
 function toggleCorrection(eventId) {
-  const li = document.querySelector(`li[data-event-id="${eventId}"]`);
-  if (!li) return;
-  const slot = li.querySelector(".correction-slot");
+  const el = _activeEventContainer(eventId);
+  if (!el) return;
+  const slot = el.querySelector(".correction-slot");
   if (slot.innerHTML.trim()) {
     slot.innerHTML = "";
   } else {
@@ -347,9 +371,10 @@ function toggleCorrection(eventId) {
 }
 
 function closeCorrection(eventId) {
-  const li = document.querySelector(`li[data-event-id="${eventId}"]`);
-  if (!li) return;
-  li.querySelector(".correction-slot").innerHTML = "";
+  const el = _activeEventContainer(eventId);
+  if (!el) return;
+  const slot = el.querySelector(".correction-slot");
+  if (slot) slot.innerHTML = "";
 }
 
 function pickTopK(eventId, name, speciesId) {
@@ -471,12 +496,19 @@ async function postCorrection(eventId, body, label) {
       return;
     }
     if (!resp.ok) throw new Error(`${resp.status}`);
-    const li = document.querySelector(`li[data-event-id="${eventId}"]`);
-    if (li) {
-      const slot = li.querySelector(".correction-slot");
-      slot.innerHTML = `<div class="correction-ok">✓ ${label}</div>`;
-      // Disable the action buttons so reviewers don't double-submit.
-      for (const b of li.querySelectorAll(".ev-btn")) b.disabled = true;
+    // Reflect the save on BOTH surfaces (list card + modal action panel) so
+    // the reviewer sees the same "✓ saved" state whichever one they look at,
+    // and can't double-submit by switching between them.
+    const containers = [
+      document.querySelector(`li[data-event-id="${eventId}"]`),
+      document.getElementById("roi-modal-actions")?.dataset?.eventId === String(eventId)
+        ? document.getElementById("roi-modal-actions")
+        : null,
+    ].filter(Boolean);
+    for (const c of containers) {
+      const slot = c.querySelector(".correction-slot");
+      if (slot) slot.innerHTML = `<div class="correction-ok">✓ ${label}</div>`;
+      for (const b of c.querySelectorAll(".ev-btn")) b.disabled = true;
     }
     tickCorrectionStats();
   } catch (e) {
@@ -1976,6 +2008,19 @@ function openRoiModal(eventId) {
     if (r?.source_name) parts.push(r.source_name);
     if (r?.frame_id != null) parts.push(`frame ${r.frame_id}`);
     meta.textContent = parts.join(" · ") || "—";
+  }
+  // Mirror the list-card action panel inside the modal so reviewers can
+  // accept / correct / reject without closing the lightbox. Closing the
+  // inline list slot for this event first avoids cf-*-${eventId} ID
+  // collisions if it happened to be expanded.
+  const listSlot = document.querySelector(
+    `li[data-event-id="${eventId}"] .correction-slot`,
+  );
+  if (listSlot) listSlot.innerHTML = "";
+  const actions = document.getElementById("roi-modal-actions");
+  if (actions) {
+    actions.dataset.eventId = String(eventId);
+    actions.innerHTML = `${eventActionsHtml(eventId)}<div class="correction-slot"></div>`;
   }
   switchRoiView("roi");
   modal.classList.remove("hidden");

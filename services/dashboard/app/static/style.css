@@ -922,6 +922,17 @@ li.empty { color: var(--muted); font-style: italic; }
   display: block;
 }
 .roi-modal-meta { font-size: 11px; color: var(--muted); text-align: center; }
+/* Mirror of the list-card action panel; lets a reviewer act on the
+   prediction directly from the lightbox. Slightly larger hit targets than
+   the inline list controls since the modal has the real estate. */
+.roi-modal-actions {
+  padding: 6px 4px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.roi-modal-actions .event-actions { justify-content: center; gap: 6px; }
+.roi-modal-actions .ev-btn { font-size: 12px; padding: 6px 14px; }
+.roi-modal-actions .correction-form { background: rgba(79, 193, 255, 0.07); }
+.roi-modal-actions:empty { display: none; }
 .sm-summary { margin: 4px 0 16px; }
 .sm-name { font-size: 18px; font-weight: 600; color: var(--accent); }
 .sm-name em { color: var(--muted); font-weight: 400; font-size: 14px; }
