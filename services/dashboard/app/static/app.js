@@ -1444,12 +1444,12 @@ function _windRose(svg, samples, opts = {}) {
     counts[sec][band >= 0 ? band : BANDS.length - 1] += 1;
   }
 
-  // Nested (overlapping) wedges, not stacked. Each band's radius represents
-  // its OWN absolute sample count, so a rare band (moderate, strong) shows
-  // as a short wedge even when it sits in the busiest sector. The earlier
-  // stacked-band convention made rare bands appear to reach the outer ring
-  // simply because they were drawn on top of a tall calm/light stack —
-  // visually overstating their frequency.
+  // Side-by-side spokes per band: each sector hosts up to one narrow wedge
+  // per speed band, drawn side-by-side rather than nested or stacked. Each
+  // spoke's length is its OWN absolute count, so the "moderate winds reach
+  // the outer ring" reading from the stacked version is no longer possible
+  // — moderate and strong bands occupy their own dedicated angular slots
+  // and only extend as far as their actual count warrants.
   let maxBandCount = 0;
   for (let i = 0; i < N_SECTORS; i++) {
     for (let b = 0; b < BANDS.length; b++) {
@@ -1463,64 +1463,73 @@ function _windRose(svg, samples, opts = {}) {
   const toRad = (deg) => (deg - 90) * Math.PI / 180;
   const pointOnCircle = (r, deg) => [cx + r * Math.cos(toRad(deg)), cy + r * Math.sin(toRad(deg))];
 
-  // Concentric reference rings at 25 / 50 / 75 / 100 % of maxBandCount, with
-  // count labels along the N axis so the radial scale is unambiguous —
-  // "outer ring = N samples" rather than an opaque relative scale.
+  // Concentric reference rings at 25/50/75/100% of maxBandCount. Labels
+  // sit just OUTSIDE each ring along the sector-boundary angle between N
+  // and NNE (11.25°) — that boundary line is empty of wedges, so the
+  // numbers don't overlap any data. "outer = N samples" annotation lives
+  // top-left, out of the wedge field entirely.
   const ringPieces = [];
   for (let k = 1; k <= 4; k++) {
     const frac = k / 4;
     const r = maxR * frac;
     ringPieces.push(`<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`);
-    const labelCount = Math.round(maxBandCount * frac);
-    ringPieces.push(`<text x="${(cx + 6).toFixed(1)}" y="${(cy - r + 2).toFixed(1)}" font-size="9" fill="var(--muted)">${labelCount}</text>`);
+    if (k > 0 && k < 4) {
+      // Inner ring count labels along the N–NNE boundary (no wedges there).
+      const [lx, ly] = pointOnCircle(r, 11.25);
+      ringPieces.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="start" dx="2" dy="3">${Math.round(maxBandCount * frac)}</text>`);
+    }
   }
   const rings = ringPieces.join("");
 
-  // Cardinal-direction labels
-  const labels = [
+  // Cardinal-direction labels (N/E/S/W) + a top-left scale annotation
+  const cardLabels = [
     { deg: 0,   text: "N" }, { deg: 90,  text: "E" },
     { deg: 180, text: "S" }, { deg: 270, text: "W" },
   ].map(({ deg, text }) => {
     const [x, y] = pointOnCircle(maxR + 14, deg);
     return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="12" fill="var(--muted)">${text}</text>`;
   }).join("");
+  const scaleNote = `<text x="8" y="14" font-size="10" fill="var(--muted)">outer ring = ${maxBandCount} samples</text>`;
 
-  // One wedge per non-empty (sector, band). Sort descending by count so the
-  // smaller wedges render LAST (on top) — that way every band stays visible
-  // even when fully nested inside a larger band's wedge for the same sector.
-  const wedges = [];
-  for (let b = 0; b < BANDS.length; b++) {
-    for (let i = 0; i < N_SECTORS; i++) {
+  // Build side-by-side spokes. Each sector's 22.5° span is split into 4
+  // band-slots (~5.625° each); spokes get a small gap (0.4°) so adjacent
+  // bands stay visually distinct.
+  const bandSpan = sectorDeg / BANDS.length;
+  const gap = 0.4;
+  const spokes = [];
+  for (let i = 0; i < N_SECTORS; i++) {
+    for (let b = 0; b < BANDS.length; b++) {
       const n = counts[i][b];
       if (!n) continue;
       const bandR = (n / maxBandCount) * maxR;
-      const a1 = i * sectorDeg - sectorDeg / 2;
-      const a2 = i * sectorDeg + sectorDeg / 2;
+      const sectorCenter = i * sectorDeg;
+      const spokeCenter = sectorCenter + (b - (BANDS.length - 1) / 2) * bandSpan;
+      const a1 = spokeCenter - bandSpan / 2 + gap;
+      const a2 = spokeCenter + bandSpan / 2 - gap;
       const [p4x, p4y] = pointOnCircle(bandR, a1);
       const [p3x, p3y] = pointOnCircle(bandR, a2);
       const largeArc = (a2 - a1) > 180 ? 1 : 0;
       const d = `M ${cx} ${cy} L ${p4x.toFixed(1)} ${p4y.toFixed(1)} ` +
                 `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 1 ${p3x.toFixed(1)} ${p3y.toFixed(1)} Z`;
       const tip = `${labels16(i)} · ${BANDS[b].label} · ${n} sample${n === 1 ? "" : "s"}`;
-      wedges.push({ count: n, fill: BANDS[b].fill, d, tip });
+      spokes.push(`<path class="wr-slice" d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.5)" stroke-width="0.4" data-tip="${tip.replace(/"/g, "&quot;")}"></path>`);
     }
   }
-  wedges.sort((a, b) => b.count - a.count);
-  const slices = wedges.map(w =>
-    `<path class="wr-slice" d="${w.d}" fill="${w.fill}" stroke="rgba(11,26,36,0.5)" stroke-width="0.5" data-tip="${w.tip.replace(/"/g, "&quot;")}"></path>`,
-  );
 
-  // Legend (compact, bottom). Right side carries the radial-scale annotation.
-  const legendY = H - 6;
-  const legendX0 = 8;
+  // Two-row legend so the band labels don't collide with each other or with
+  // the chart edge. Tighter spacing than the previous single-row layout.
+  const legendY = H - 4;
+  const legendRow1Y = legendY - 18;
   const legendItems = BANDS.map((b, i) => {
-    const x = legendX0 + i * 84;
-    return `<rect x="${x}" y="${legendY - 9}" width="10" height="10" rx="2" fill="${b.fill}"/>` +
-           `<text x="${x + 14}" y="${legendY}" font-size="10" fill="var(--muted)">${b.label.split(" (")[0]}</text>`;
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const x = 12 + col * 180;
+    const y = row === 0 ? legendRow1Y : legendY;
+    return `<rect x="${x}" y="${y - 9}" width="10" height="10" rx="2" fill="${b.fill}"/>` +
+           `<text x="${x + 14}" y="${y}" font-size="10" fill="var(--muted)">${b.label}</text>`;
   }).join("");
-  const scaleNote = `<text x="${W - 8}" y="${legendY}" font-size="9" fill="var(--muted)" text-anchor="end">rings = sample count</text>`;
 
-  svg.innerHTML = `${rings}${labels}${slices.join("")}${legendItems}${scaleNote}`;
+  svg.innerHTML = `${rings}${cardLabels}${scaleNote}${spokes.join("")}${legendItems}`;
   _attachWindRoseTooltip(svg);
 }
 
