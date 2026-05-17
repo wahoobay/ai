@@ -16,6 +16,12 @@ assets/species_manifest.csv
 # image/clip downloads. The download_species_clips.py script reproduces them.
 assets/community_clips/
 
+# iNaturalist photo pull (download_inat_photos.py). ~2.6k photos, ~600 MB.
+# Track the manifest (small, useful as a provenance record) but not the
+# image binaries — they're reproducible from the iNat API any time.
+assets/inat_photos/
+assets/inat_manifest.json
+
 # Generated fine-tuning dataset (crops + manifests). Reproducible from
 # assets/species.xlsx + community_clips + the detector via
 # scripts/build_finetune_dataset_from_clips.py.

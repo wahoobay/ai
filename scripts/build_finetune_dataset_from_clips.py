@@ -49,11 +49,24 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "assets" / "species_manifest.json"
 DOWNLOADS_DIR = REPO_ROOT / "assets" / "community_clips"
 DOWNLOAD_REPORT = DOWNLOADS_DIR / "_download_report.json"
+INAT_MANIFEST = REPO_ROOT / "assets" / "inat_manifest.json"
 OUT_DIR = REPO_ROOT / "data" / "fine_tune"
 DETECTOR_DEFAULT = REPO_ROOT / "data" / "models" / "detector_v26" / "model.pt"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+
+
+def _build_display_label(common: str | None, genus: str | None, species: str | None) -> str:
+    """Reproduce the manifest's display-label convention so iNat records
+    (which don't carry a pre-baked display_label) get the same on-screen
+    format as Drive records."""
+    name = (common or "").strip() or "(unnamed)"
+    if genus and species:
+        return f"{name} ({genus[0].upper()}. {species})"
+    if genus:
+        return f"{name} ({genus} sp.)"
+    return name
 
 
 @dataclass
@@ -242,10 +255,50 @@ def build_dataset(
         if prev is None or len(r.get("common_name", "")) > len(prev.get("common_name", "")):
             by_drive[d] = r
 
+    # Two parallel source streams feed the cropper:
+    #   1. Drive files from species.xlsx, downloaded via download_species_clips
+    #   2. iNat photos from download_inat_photos, providing the independent-
+    #      observation source data needed for honest cross-individual eval.
+    # We assemble a uniform list of (local_path, rec, origin) so the rest of
+    # the pipeline doesn't have to know where a given image came from.
     report = json.loads(DOWNLOAD_REPORT.read_text())
-    downloads = [x for x in report["results"] if x.get("status") in ("ok", "skipped")]
+    sources: list[tuple[str, dict, str]] = []
+    for x in report["results"]:
+        if x.get("status") not in ("ok", "skipped"):
+            continue
+        drive_id = x.get("drive_id")
+        rec = by_drive.get(drive_id) if drive_id else None
+        if rec is None or not rec.get("binomial"):
+            continue
+        sources.append((x["local_path"], dict(rec, **{
+            "source_id": drive_id,
+            "source_origin": "drive",
+        }), "drive"))
+
+    if INAT_MANIFEST.exists():
+        for r in json.loads(INAT_MANIFEST.read_text()):
+            if not r.get("binomial") or not r.get("local_path"):
+                continue
+            rec = {
+                "binomial": r["binomial"],
+                "common_name": r.get("common_name"),
+                "family": r.get("family"),
+                "genus": r.get("genus"),
+                "species": r.get("species"),
+                "display_label": _build_display_label(
+                    r.get("common_name"), r.get("genus"), r.get("species"),
+                ),
+                "source_id": r.get("source_id") or f"inat_{r.get('photo_id')}",
+                "source_origin": "inat",
+                "license": r.get("license"),
+                "attribution": r.get("attribution"),
+                "observer": r.get("observer"),
+                "original_url": r.get("original_url"),
+            }
+            sources.append((r["local_path"], rec, "inat"))
+
     if limit:
-        downloads = downloads[:limit]
+        sources = sources[:limit]
 
     print(f"loading detector: {detector_path}")
     detector = YOLO(str(detector_path))
@@ -263,36 +316,39 @@ def build_dataset(
     failed = []
 
     t0 = time.monotonic()
-    for i, dl in enumerate(downloads):
-        local = dl.get("local_path")
-        drive_id = dl.get("drive_id")
-        if not local or not drive_id:
-            continue
-        rec = by_drive.get(drive_id)
-        if not rec or not rec.get("binomial"):
-            skipped_no_label += 1
-            continue
+    for i, (local, rec, origin) in enumerate(sources):
         src = REPO_ROOT / local
+        source_id = rec.get("source_id", "unknown")
         if not src.exists():
-            failed.append((drive_id, "missing local file"))
+            failed.append((source_id, "missing local file"))
             continue
         ext = src.suffix.lower()
         binomial = rec["binomial"]
         class_dir = OUT_DIR / slugify(binomial)
         class_dir.mkdir(parents=True, exist_ok=True)
 
+        # process_image/process_video want a `drive_id` field on the rec to
+        # build the crop_id. iNat records use source_id ("inat_<photo>") in
+        # the same slot — same string semantics, different namespace.
+        rec_for_processor = dict(rec, drive_id=source_id)
+
         try:
             if ext in IMAGE_EXTS:
-                crops = process_image(detector, src, rec, class_dir, imgsz, conf, device)
+                crops = process_image(detector, src, rec_for_processor, class_dir, imgsz, conf, device)
             elif ext in VIDEO_EXTS:
-                crops = process_video(detector, src, rec, class_dir, sample_hz, max_crops, imgsz, conf, device)
+                crops = process_video(detector, src, rec_for_processor, class_dir, sample_hz, max_crops, imgsz, conf, device)
             else:
                 skipped_unsupported += 1
                 continue
         except Exception as e:
-            failed.append((drive_id, f"{type(e).__name__}: {e}"))
+            failed.append((source_id, f"{type(e).__name__}: {e}"))
             continue
 
+        # Stamp origin onto every crop so downstream can split / weight by
+        # source distribution (e.g. weight iNat lower if it's lower-quality
+        # in some respect, or hold out all iNat for the val split).
+        for c in crops:
+            c.source_kind = f"{origin}:{c.source_kind}"
         all_crops.extend(crops)
         # Only register taxonomy for classes that actually produced crops —
         # otherwise the manifest claims a class exists that has zero training
@@ -314,9 +370,9 @@ def build_dataset(
             except OSError:
                 pass
 
-        if (i + 1) % 10 == 0 or i + 1 == len(downloads):
+        if (i + 1) % 20 == 0 or i + 1 == len(sources):
             elapsed = time.monotonic() - t0
-            print(f"  [{i+1:3d}/{len(downloads)}] crops so far: {len(all_crops)}  elapsed: {elapsed:.0f}s")
+            print(f"  [{i+1:4d}/{len(sources)}] crops so far: {len(all_crops)}  elapsed: {elapsed:.0f}s")
 
     # Write manifest + taxonomy
     manifest_path = OUT_DIR / "_dataset_manifest.json"
