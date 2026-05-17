@@ -427,15 +427,26 @@ def build_app() -> FastAPI:
         limit: int = Query(50, ge=1, le=500),
         species_id: str | None = None,
         min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
+        include_reviewed: bool = Query(False),
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        where = ["best_name IS NOT NULL", "best_accuracy >= %s"]
+        # Each predicate is already fully qualified with its table alias
+        # (de.*) — no string-mangling on the join side.
+        where = ["de.best_name IS NOT NULL", "de.best_accuracy >= %s"]
         params: list = [min_accuracy]
         if species_id:
-            where.append("best_species_id = %s")
+            where.append("de.best_species_id = %s")
             params.append(species_id)
+        # Hide events a reviewer already corrected or endorsed — once anyone
+        # has acted on a detection it shouldn't keep clogging the queue.
+        # Pass include_reviewed=true to see the full stream (e.g. for audits).
+        if not include_reviewed:
+            where.append(
+                "NOT EXISTS (SELECT 1 FROM detection_corrections dc "
+                "WHERE dc.event_id = de.id)"
+            )
         params.append(limit)
         # detection_events.image_path is legacy / always NULL — the worker
         # writes interesting frames to saved_frames (keyed by frame_id +
@@ -445,7 +456,7 @@ def build_app() -> FastAPI:
         # duplicate-event-row problem when saved_frames has multiple rows for
         # the same key (which happens — same frame can be saved under several
         # reasons). Newest matching saved_frame wins.
-        where_q = " AND ".join("de." + w for w in where)
+        where_q = " AND ".join(where)
         sql = f"""
             SELECT de.id, de.ts, de.frame_id, de.source_name, de.det_conf,
                    de.bbox, de.topk, de.best_name, de.best_species_id,

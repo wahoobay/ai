@@ -254,7 +254,22 @@ li.empty { color: var(--muted); font-style: italic; }
 .reviewer-chip a:hover { text-decoration: underline; }
 .corrections-stats { margin-top: 8px; padding-top: 6px; border-top: 1px solid #1f3b4f; font-size: 11px; color: var(--muted); }
 
-.event-item { position: relative; padding: 6px 4px; }
+.event-item {
+  position: relative;
+  padding: 6px 4px;
+  transition: opacity 280ms ease-out, max-height 280ms ease-out,
+              padding 280ms ease-out, margin 280ms ease-out;
+  max-height: 200px;
+  overflow: hidden;
+}
+.event-item.event-removing {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  border: 0;
+}
 .event-row { display: flex; gap: 8px; align-items: flex-start; }
 .event-thumb {
   width: 80px;

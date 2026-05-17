@@ -499,18 +499,33 @@ async function postCorrection(eventId, body, label) {
     // Reflect the save on BOTH surfaces (list card + modal action panel) so
     // the reviewer sees the same "✓ saved" state whichever one they look at,
     // and can't double-submit by switching between them.
-    const containers = [
-      document.querySelector(`li[data-event-id="${eventId}"]`),
-      document.getElementById("roi-modal-actions")?.dataset?.eventId === String(eventId)
-        ? document.getElementById("roi-modal-actions")
-        : null,
-    ].filter(Boolean);
+    const li = document.querySelector(`li[data-event-id="${eventId}"]`);
+    const modalActions = document.getElementById("roi-modal-actions");
+    const modalIsForThisEvent = modalActions?.dataset?.eventId === String(eventId);
+    const containers = [li, modalIsForThisEvent ? modalActions : null].filter(Boolean);
     for (const c of containers) {
       const slot = c.querySelector(".correction-slot");
       if (slot) slot.innerHTML = `<div class="correction-ok">✓ ${label}</div>`;
       for (const b of c.querySelectorAll(".ev-btn")) b.disabled = true;
     }
     tickCorrectionStats();
+    // Once an event has been reviewed it should drop out of the queue.
+    // Let the "✓ saved" indicator linger briefly for visual confirmation,
+    // then fade the list card out and close the modal (if it's open on
+    // this event). EVENT_CACHE eviction keeps the next tickEvents() in
+    // sync — the server now filters reviewed events out of /api/events
+    // by default, so refreshes also see the cleaner queue.
+    EVENT_CACHE.delete(eventId);
+    setTimeout(() => {
+      if (li) {
+        li.classList.add("event-removing");
+        setTimeout(() => li.remove(), 320);
+      }
+      if (modalIsForThisEvent) {
+        const modal = document.getElementById("roi-modal");
+        if (modal) modal.classList.add("hidden");
+      }
+    }, 700);
   } catch (e) {
     alert(`save failed: ${e}`);
   }
