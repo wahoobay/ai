@@ -1459,8 +1459,14 @@ function initReportsToggle() {
       tickReports();
     });
   });
-  // Restore active tab
-  const saved = localStorage.getItem("wb_reports_tab");
+  // Restore active tab. Migrate the legacy "water-weather" tab key for
+  // anyone who had it saved before we split it in two — land them on the
+  // Water tab, which is the closer mental match for the previous content.
+  let saved = localStorage.getItem("wb_reports_tab");
+  if (saved === "water-weather") {
+    saved = "water";
+    localStorage.setItem("wb_reports_tab", saved);
+  }
   if (saved) {
     const target = document.querySelector(`.reports-tab[data-tab="${saved}"]`);
     if (target) target.click();
@@ -1602,12 +1608,40 @@ async function renderOverviewTab(hours) {
   }
 }
 
-// ---------- Render: Water & Weather ----------
+// ---------- Render: Water tab (sonde) ----------
 
-async function renderWaterWeatherTab(hours) {
-  const [wqLatest, wqHist, wxLatest, wxHist] = await Promise.all([
+async function renderWaterTab(hours) {
+  const [wqLatest, wqHist] = await Promise.all([
     pollWithCache("/api/water_quality/latest").catch(() => null),
     pollWithCache(`/api/water_quality/history?hours=${hours}&max_points=120`).catch(() => null),
+  ]);
+
+  const setText = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+  const f = (v, n=1) => v == null ? "—" : v.toFixed(n);
+
+  if (wqLatest) {
+    setText("wt-kpi-temp",   wqLatest.water_temp_c != null ? f(wqLatest.water_temp_c * 9/5 + 32, 1) : "—");
+    setText("wt-kpi-do",     f(wqLatest.do_pct, 0));
+    setText("wt-kpi-ph",     f(wqLatest.ph, 2));
+    setText("wt-kpi-turb",   f(wqLatest.turbidity_fnu, 1));
+    setText("wt-kpi-chl",    f(wqLatest.chlorophyll_rfu, 1));
+    setText("wt-kpi-spcond", f(wqLatest.spcond_ms_cm, 1));
+  }
+
+  const mkLine = (id, points, opts) => _miniLine(document.getElementById(id), points, opts);
+  if (wqHist?.series?.length) {
+    const ts = wqHist.series.map(r => new Date(r.bucket).getTime());
+    mkLine("ww-chart-wtemp", wqHist.series.map((r, i) => ({ x: ts[i], y: r.water_temp_c != null ? r.water_temp_c * 9/5 + 32 : null })), { unit: "°F", fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-do",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.do_pct })),                                                  { unit: "%",  fmt: n => n.toFixed(0) });
+    mkLine("ww-chart-ph",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.ph })),                                                      { fmt: n => n.toFixed(2) });
+    mkLine("ww-chart-turb",  wqHist.series.map((r, i) => ({ x: ts[i], y: r.turbidity_fnu })),                                           { unit: "FNU", fmt: n => n.toFixed(1) });
+  }
+}
+
+// ---------- Render: Weather tab (Vaisala + Open-Meteo + NWS) ----------
+
+async function renderWeatherTab(hours) {
+  const [wxLatest, wxHist] = await Promise.all([
     pollWithCache("/api/weather/latest").catch(() => null),
     pollWithCache(`/api/weather/history?hours=${hours}&max_points=120`).catch(() => null),
   ]);
@@ -1615,7 +1649,6 @@ async function renderWaterWeatherTab(hours) {
   const setText = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
   const f = (v, n=1) => v == null ? "—" : v.toFixed(n);
 
-  // KPIs (latest weather + sonde)
   if (wxLatest) {
     setText("ww-kpi-air",      wxLatest.air_temp_c != null ? f(wxLatest.air_temp_c * 9/5 + 32, 1) + " °F" : "—");
     setText("ww-kpi-wind",     wxLatest.wind_speed_avg_ms != null ? f(wxLatest.wind_speed_avg_ms * 2.23694, 1) + " mph" : "—");
@@ -1624,7 +1657,6 @@ async function renderWaterWeatherTab(hours) {
     setText("ww-kpi-cloud",    wxLatest.cloud_cover_pct != null ? f(wxLatest.cloud_cover_pct, 0) + "%" : "—");
     setText("ww-kpi-cond",     conditionsText(wxLatest));
   }
-  // Rain total summed over the window from the history series
   if (wxHist?.series?.length) {
     const rainTotalMm = wxHist.series.reduce((s, r) => s + (r.rain_accum_mm || 0), 0);
     setText("ww-kpi-rain", (rainTotalMm * 0.0393701).toFixed(2) + " in");
@@ -1632,26 +1664,20 @@ async function renderWaterWeatherTab(hours) {
     setText("ww-kpi-rain", "—");
   }
 
-  // Sparklines — water quality
+  // Six single-metric weather sparklines. Rain uses rain_int_mm_hr
+  // (instantaneous rate) rather than rain_accum_mm (cumulative counter —
+  // stays flat between rain events). Wind direction is plotted in raw
+  // degrees-from-north; vertical jumps at the 359°↔0° wraparound are an
+  // artifact of the angle representation, not real wind shifts.
   const mkLine = (id, points, opts) => _miniLine(document.getElementById(id), points, opts);
-  if (wqHist?.series?.length) {
-    const ts = wqHist.series.map(r => new Date(r.bucket).getTime());
-    mkLine("ww-chart-wtemp", wqHist.series.map((r, i) => ({ x: ts[i], y: r.water_temp_c != null ? r.water_temp_c * 9/5 + 32 : null })), { unit: "°F", fmt: n => n.toFixed(1) });
-    mkLine("ww-chart-do",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.do_pct })),                                                          { unit: "%",  fmt: n => n.toFixed(0) });
-    mkLine("ww-chart-ph",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.ph })),                                                              { fmt: n => n.toFixed(2) });
-    mkLine("ww-chart-turb",  wqHist.series.map((r, i) => ({ x: ts[i], y: r.turbidity_fnu })),                                                   { unit: "FNU", fmt: n => n.toFixed(1) });
-  }
-  // Sparklines — weather. Four single-metric panels with units that match
-  // what biologists / general visitors expect on a Florida-coast dashboard.
-  // Rain uses rain_int_mm_hr (instantaneous rate) rather than rain_accum_mm
-  // (cumulative-since-deployment counter — it stays flat between rain events
-  // and isn't meaningful as a time series).
   if (wxHist?.series?.length) {
     const ts = wxHist.series.map(r => new Date(r.bucket).getTime());
-    mkLine("ww-chart-air",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.air_temp_c != null ? r.air_temp_c * 9/5 + 32 : null })),                  { unit: "°F",  fmt: n => n.toFixed(1) });
-    mkLine("ww-chart-wind",  wxHist.series.map((r, i) => ({ x: ts[i], y: r.wind_speed_avg_ms != null ? r.wind_speed_avg_ms * 2.23694 : null })),    { unit: "mph", fmt: n => n.toFixed(1) });
-    mkLine("ww-chart-rain",  wxHist.series.map((r, i) => ({ x: ts[i], y: r.rain_int_mm_hr != null ? r.rain_int_mm_hr * 0.0393701 : null })),         { unit: "in/h", fmt: n => n.toFixed(2) });
-    mkLine("ww-chart-solar", wxHist.series.map((r, i) => ({ x: ts[i], y: r.solar_rad_wm2 })),                                                       { unit: "W/m²", fmt: n => n.toFixed(0) });
+    mkLine("ww-chart-air",     wxHist.series.map((r, i) => ({ x: ts[i], y: r.air_temp_c != null ? r.air_temp_c * 9/5 + 32 : null })),               { unit: "°F",   fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-wind",    wxHist.series.map((r, i) => ({ x: ts[i], y: r.wind_speed_avg_ms != null ? r.wind_speed_avg_ms * 2.23694 : null })), { unit: "mph",  fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-rain",    wxHist.series.map((r, i) => ({ x: ts[i], y: r.rain_int_mm_hr != null ? r.rain_int_mm_hr * 0.0393701 : null })),      { unit: "in/h", fmt: n => n.toFixed(2) });
+    mkLine("ww-chart-solar",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.solar_rad_wm2 })),                                                     { unit: "W/m²", fmt: n => n.toFixed(0) });
+    mkLine("ww-chart-winddir", wxHist.series.map((r, i) => ({ x: ts[i], y: r.wind_dir_avg_deg })),                                                  { unit: "°",    fmt: n => n.toFixed(0) });
+    mkLine("ww-chart-cloud",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.cloud_cover_pct })),                                                   { unit: "%",    fmt: n => n.toFixed(0) });
   }
 }
 
@@ -2142,7 +2168,8 @@ async function tickReports() {
   try {
     if (tab === "overview")            await renderOverviewTab(hours);
     else if (tab === "fish-explorer")  await renderFishExplorerTab(hours);
-    else if (tab === "water-weather")  await renderWaterWeatherTab(hours);
+    else if (tab === "water")          await renderWaterTab(hours);
+    else if (tab === "weather")        await renderWeatherTab(hours);
     else if (tab === "insights")       await renderInsightsTab(hours);
     else if (tab === "data-notes")     renderDataNotesTab();
   } catch (e) {

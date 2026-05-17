@@ -149,7 +149,8 @@
           <div class="reports-tabs" role="tablist">
             <button class="reports-tab active" data-tab="overview"        role="tab">Overview</button>
             <button class="reports-tab"        data-tab="fish-explorer"   role="tab">Fish Explorer</button>
-            <button class="reports-tab"        data-tab="water-weather"   role="tab">Water &amp; Weather</button>
+            <button class="reports-tab"        data-tab="water"           role="tab">Water</button>
+            <button class="reports-tab"        data-tab="weather"         role="tab">Weather</button>
             <button class="reports-tab"        data-tab="insights"        role="tab">Insights</button>
             <button class="reports-tab"        data-tab="data-notes"      role="tab">Data Notes</button>
           </div>
@@ -226,15 +227,28 @@
             </div>
           </div>
 
-          <!-- Water &amp; Weather tab — deep panel for sonde + weather KPIs and history -->
-          <div class="reports-tab-panel" id="tab-water-weather" role="tabpanel">
+          <!-- Water tab — EXO2 sonde KPIs + history. Surfaces what biologists care about: temp, DO, pH, turbidity. -->
+          <div class="reports-tab-panel" id="tab-water" role="tabpanel">
             <div class="kpi-row">
-              <div class="kpi-tile"><div class="kpi-label">Air Temp</div><div class="kpi-value" id="ww-kpi-air">—</div><div class="kpi-sub">°F</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Wind</div><div class="kpi-value" id="ww-kpi-wind">—</div><div class="kpi-sub">mph avg</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Rain total</div><div class="kpi-value" id="ww-kpi-rain">—</div><div class="kpi-sub">in (window)</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Solar</div><div class="kpi-value" id="ww-kpi-solar">—</div><div class="kpi-sub">W/m²</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Pressure</div><div class="kpi-value" id="ww-kpi-pressure">—</div><div class="kpi-sub">mmHg</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Cloud cover</div><div class="kpi-value" id="ww-kpi-cloud">—</div><div class="kpi-sub" id="ww-kpi-cond">—</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Water temp</div><div class="kpi-value" id="wt-kpi-temp">—</div><div class="kpi-sub">°F</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Dissolved O₂</div><div class="kpi-value" id="wt-kpi-do">—</div><div class="kpi-sub">% saturation</div></div>
+              <div class="kpi-tile"><div class="kpi-label">pH</div><div class="kpi-value" id="wt-kpi-ph">—</div><div class="kpi-sub">unitless</div></div>
+              <div class="kpi-tile">
+                <div class="kpi-label">
+                  Turbidity
+                  <span class="metric-hint" tabindex="0" role="button" aria-haspopup="true">
+                    ⓘ
+                    <span class="metric-hint-popover" role="tooltip">
+                      <strong>Turbidity (FNU)</strong>
+                      <p>Optical measure of how cloudy the water is — formazin nephelometric units. <em>Lower is clearer.</em></p>
+                      <p>Brief spikes (10s of seconds) are usually sensor wipe-cycle or debris transients, not a real water-quality shift. Sustained changes over many minutes are the meaningful signal.</p>
+                    </span>
+                  </span>
+                </div>
+                <div class="kpi-value" id="wt-kpi-turb">—</div><div class="kpi-sub">FNU</div>
+              </div>
+              <div class="kpi-tile"><div class="kpi-label">Chlorophyll</div><div class="kpi-value" id="wt-kpi-chl">—</div><div class="kpi-sub">RFU</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Salinity proxy</div><div class="kpi-value" id="wt-kpi-spcond">—</div><div class="kpi-sub">mS/cm</div></div>
             </div>
             <div class="reports-grid">
               <section class="chart-card">
@@ -253,6 +267,20 @@
                 <h2>Turbidity</h2>
                 <div class="chart-svg-wrap"><svg id="ww-chart-turb" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
               </section>
+            </div>
+          </div>
+
+          <!-- Weather tab — on-site Vaisala station + Open-Meteo + NWS METAR. -->
+          <div class="reports-tab-panel" id="tab-weather" role="tabpanel">
+            <div class="kpi-row">
+              <div class="kpi-tile"><div class="kpi-label">Air Temp</div><div class="kpi-value" id="ww-kpi-air">—</div><div class="kpi-sub">°F</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Wind</div><div class="kpi-value" id="ww-kpi-wind">—</div><div class="kpi-sub">mph avg</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Rain total</div><div class="kpi-value" id="ww-kpi-rain">—</div><div class="kpi-sub">in (window)</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Solar</div><div class="kpi-value" id="ww-kpi-solar">—</div><div class="kpi-sub">W/m²</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Pressure</div><div class="kpi-value" id="ww-kpi-pressure">—</div><div class="kpi-sub">mmHg</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Cloud cover</div><div class="kpi-value" id="ww-kpi-cloud">—</div><div class="kpi-sub" id="ww-kpi-cond">—</div></div>
+            </div>
+            <div class="reports-grid">
               <section class="chart-card">
                 <h2>Air temperature</h2>
                 <div class="chart-svg-wrap"><svg id="ww-chart-air" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
@@ -278,6 +306,23 @@
               <section class="chart-card">
                 <h2>Solar radiation</h2>
                 <div class="chart-svg-wrap"><svg id="ww-chart-solar" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>
+                  Wind direction
+                  <span class="metric-hint" tabindex="0" role="button" aria-haspopup="true">
+                    ⓘ
+                    <span class="metric-hint-popover" role="tooltip">
+                      <strong>Wind direction (degrees from N)</strong>
+                      <p>0° = wind from the north, 90° = from the east, 180° = from the south, 270° = from the west. Vertical jumps in the line are the 359° ↔ 0° wraparound, not a real shift.</p>
+                    </span>
+                  </span>
+                </h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-winddir" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Cloud cover</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-cloud" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
               </section>
             </div>
           </div>
