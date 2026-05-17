@@ -86,6 +86,12 @@ class ManifestRecord:
     source_sheet: str
     source_row: int
     raw_sci_name: str                # exactly what the volunteer typed, for audit
+    # Display-ready label used as the on-screen / dataset-review annotation.
+    # Plain-text and HTML variants so non-renderer consumers (CSV, terminal,
+    # JSON tools) still read cleanly while the dashboard / annotation UI
+    # gets the italicised binomial via display_label_html.
+    display_label: str               # e.g. "Blue Angelfish (H. bermudensis)"
+    display_label_html: str          # e.g. "Blue Angelfish <i>(H. bermudensis)</i>"
 
 
 # ---------- parsing helpers ----------
@@ -142,6 +148,37 @@ def iso_date(v) -> str | None:
     if isinstance(v, date):
         return v.isoformat()
     return None
+
+
+def format_display_label(
+    common: str | None, genus: str | None, species: str | None,
+) -> tuple[str, str]:
+    """Produce the dataset annotation string for a record.
+
+    Convention: ``Common name (G. species)`` with the parenthetical
+    (genus initial + period + space + species) shown in italics. The
+    italics matters for taxonomic clarity — binomial Latin names are
+    conventionally italicised in scientific writing, and a reviewer's
+    visual heuristic ("if it looks like a normal English phrase, it's a
+    common name; if it's italic Latin, it's the binomial") removes any
+    ambiguity at a glance.
+
+    Returns (plain_text, html). Plain text drops the italics so it
+    survives consumers that don't render markup (CSV, logs, terminal);
+    HTML wraps the parenthetical in <i>…</i> for the dashboard / any
+    rich-text annotation UI.
+
+    Falls back gracefully when genus or species is missing — keeps the
+    common name visible rather than emitting an empty annotation.
+    """
+    name = (common or "").strip() or "(unnamed)"
+    if genus and species:
+        paren = f"({genus[0].upper()}. {species})"
+    elif genus:
+        paren = f"({genus} sp.)"
+    else:
+        return name, name
+    return f"{name} {paren}", f"{name} <i>{paren}</i>"
 
 
 # ---------- main extraction ----------
@@ -202,6 +239,7 @@ def extract_records(wb) -> list[ManifestRecord]:
         url = link.target if link else None
         drive_id = parse_drive_id(url) if url and "drive.google.com" in url else None
         cams = pier_flags.get(binomial or "", {})
+        display_text, display_html = format_display_label(common, genus, species)
 
         records.append(ManifestRecord(
             family=str(fam).strip() if fam else None,
@@ -219,6 +257,8 @@ def extract_records(wb) -> list[ManifestRecord]:
             source_sheet="Species Log",
             source_row=row,
             raw_sci_name=sci.strip(),
+            display_label=display_text,
+            display_label_html=display_html,
         ))
     return records
 
