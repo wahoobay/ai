@@ -6,6 +6,11 @@ data/models/detector_v26/
 data/models/classifier_v0_10_2/
 data/synthetic/*.csv
 
+# Derived outputs of scripts/build_species_manifest.py — reproducible from
+# assets/species.xlsx, so we track the spreadsheet but not the manifest.
+assets/species_manifest.json
+assets/species_manifest.csv
+
 # Runtime artifacts
 frames/
 logs/
