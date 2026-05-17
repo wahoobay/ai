@@ -1,0 +1,232 @@
+species,genus,family,order,class,phylum,kingdom,lowest
+,Anamobaea,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,genus
+,Anilocra,Cymothoidae,Isopoda,Malacostraca,Arthropoda,Animalia,genus
+,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,genus
+,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,genus
+,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
+,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,genus
+,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,genus
+,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,genus
+acuminatus,Pareques,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+adustus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+alatus,Strombus,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
+albigutta,Paralichthys,Paralichthyidae,Pleuronectiformes,Teleostei,Chordata,Animalia,species
+americana,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+americanus,Octopus,Octopodidae,Octopoda,Cephalopoda,Mollusca,Animalia,species
+analis,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+anhinga,Anhinga,Anhingidae,Pelecaniformes,Aves,Chordata,Animalia,species
+antillarum,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+apodus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+arctifrons,Calamus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+arcuatus,Pomacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+argenteus,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+argus,Panulirus,Palinuridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+atlanticus,Megalops,Megalopidae,Elopiformes,Teleostei,Chordata,Animalia,species
+atomarium,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+aurita,Aurelia,Ulmaridae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
+aurofrenatum,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+aurolineatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+badionotus,Isostichopus,Stichopodidae,Synallactida,Holothuroidea,Echinodermata,Animalia,species
+bahianus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+barracuda,Sphyraena,Sphyraenidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
+bartholomaei,Carangoides,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+bermudensis,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+bermudensis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+bicaudalis,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+bifasciatum,Thalassoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+birostris,Mobula,Mobulidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+bivittatus,Halichoeres,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+bonaci,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+bonariense,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+borealis,Sphyraena,Sphyraenidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
+breviceps,Myrichthys,Ophichthidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+brevidactylus,Pagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+brevirostris,Negaprion,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+brevis,Lolliguncula,Loliginidae,Myopsida,Cephalopoda,Mollusca,Animalia,species
+capistratus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+capriscus,Balistes,Balistidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+carbonarium,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+caretta,Caretta,Cheloniidae,Testudines,,Chordata,Animalia,species
+carolinus,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+centroura,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+cephalus,Mugil,Mugilidae,Mugiliformes,Teleostei,Chordata,Animalia,species
+chirurgus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+chrysargyreum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+chrysoptera,Orthopristis,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+chrysopterum,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+chrysurus,Chloroscombrus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+chrysurus,Ocyurus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+ciliaris,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+ciliata,Pseudosquilla,Pseudosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
+cinctimanus,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,genus
+cinerascens,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
+cinereus,Gerres,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+cirratum,Ginglymostoma,Ginglymostomatidae,Orectolobiformes,Elasmobranchii,Chordata,Animalia,species
+clupeola,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+coeruleus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+coeruleus,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+complanata,Eurythoe,Amphinomidae,Amphinomida,Polychaeta,Annelida,Animalia,species
+coroides,Umbrina,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+cristata,Arenicola,Arenicolidae,,Polychaeta,Annelida,Animalia,species
+crocodilus,Tylosurus,Belonidae,Beloniformes,Teleostei,Chordata,Animalia,species
+crysos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+cubifrons,Ogcocephalus,Ogcocephalidae,Lophiiformes,Teleostei,Chordata,Animalia,species
+curema,Mugil,Mugilidae,Mugiliformes,Teleostei,Chordata,Animalia,species
+cyanea,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+cyanopterus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+depressa,Plagusia,Plagusiidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+diencaeus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+diogenes,Petrochirus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+dubia,Libinia,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+dumerili,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+faber,Chaetodipterus,Ephippidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+falcatus,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+flammea,Calappa,Calappidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+flavolineatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+floridanus,Achelous,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+forceps,Mithraculus,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+formosum,Diplectrum,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
+frondosa,Cassiopea,Cassiopeidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
+funebris,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+galloides,Calappa,Calappidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+gibbesi,Percnon,Percnidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+giganteus,Triplofusus,Fasciolariidae,Neogastropoda,Gastropoda,Mollusca,Animalia,species
+gigas,Aliger,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
+glaucofraenum,Coryphopterus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
+goodei,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+griseus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+guacamaia,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+hellerii,Charybdis,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+hians,Ablennes,Belonidae,Beloniformes,Teleostei,Chordata,Animalia,species
+hippos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+hispida,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+hispidus,Stenopus,Stenopodidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+histrio,Histrio,Antennariidae,Lophiiformes,Teleostei,Chordata,Animalia,species
+holbrookii,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+holocanthus,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+horsti,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
+humeralis,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+immaculata,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,genus
+inermis,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
+intermedius,Synodus,Synodontidae,Aulopiformes,Teleostei,Chordata,Animalia,species
+iseri,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+itajara,Epinephelus,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+jaguana,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+jamaicensis,Urobatis,Urotrygonidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+jocu,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+latus,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+leucas,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+leucostictus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+limbatus,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+lugubris,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+macarellus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+macclurei,Ophioblennius,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+macrostomum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+maculata,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,species
+maculatus,Apogon,Apogonidae,Apogoniformes,Teleostei,Chordata,Animalia,species
+maculatus,Aulostomus,Aulostomidae,Syngnathiformes,Teleostei,Chordata,Animalia,species
+maculatus,Pseudupeneus,Mullidae,Mulliformes,Teleostei,Chordata,Animalia,species
+maculipinna,Halichoeres,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+mahogoni,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+manatus,Trichechus,Trichechidae,Sirenia,Mammalia,Chordata,Animalia,species
+marmoreus,Parablennius,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+martinicus,Mulloidichthys,Mullidae,Mulliformes,Teleostei,Chordata,Animalia,species
+maximus,Lachnolaimus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+melanopterus,Eucinostomus,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+meleagris,Stomolophus,Stomolophidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
+mercenaria,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+mercenaria,Mercenaria,Veneridae,Venerida,Bivalvia,Mollusca,Animalia,species
+mexicana,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
+microlepis,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+mississippiensis,,Alligatoridae,,Crocodylia,Chordata,Animalia,family
+mitchilli,Anchoa,Engraulidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+mokorran,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+moringa,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+morio,Aplysia,Aplysiidae,Aplysiida,Gastropoda,Mollusca,Animalia,species
+multilineata,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+mydas,Chelonia,Cheloniidae,Testudines,,Chordata,Animalia,species
+narinari,Aetobatus,Aetobatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+naucrates,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
+neucratoides,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
+nigricinctus,Brockius,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+nigromaculatum,Branchiomma,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,species
+nodifrons,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+nuchipinnis,Labrisomus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+oceanops,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
+ocellatus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+ophryas,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
+ornatus,Callinectes,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+parra,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+paru,Pomacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+perversum,Sinistrofulgur,Busyconidae,Neogastropoda,Gastropoda,Mollusca,Animalia,species
+planifrons,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+plumbeus,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+plumieri,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
+plumierii,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+polyphemus,Limulus,Limulidae,Xiphosurida,Merostomata,Arthropoda,Animalia,species
+probatocephalus,Archosargus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+pseudoaequipinnis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+pullus,Cantherhines,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+punctatus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+quadricornis,Acanthostracion,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+quinquecirrha,Chrysaora,Pelagiidae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
+regalis,Scomberomorus,Scombridae,Scombriformes,Teleostei,Chordata,Animalia,species
+reticulatus,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+reticulatus,Iridopagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+retusa,Camposcia,Inachidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+rhomboidalis,Archosargus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+rhomboides,Lagodon,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+rivoliana,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+rostrata,Canthigaster,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+ruber,Carangoides,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+ruber,Cronius,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+rubripinne,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+rugosa,Trachycaris,Hippolytidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+saltatrix,Pomatomus,Pomatomidae,Scombriformes,Teleostei,Chordata,Animalia,species
+saponaceus,Rypticus,Grammistidae,Perciformes,Teleostei,Chordata,Animalia,species
+saurus,Elops,Elopidae,Elopiformes,Teleostei,Chordata,Animalia,species
+saurus,Oligoplites,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+saxatilis,Abudefduf,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+scabricauda,Lysiosquilla,Lysiosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
+schoepfi,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+schomburgkii,Pempheris,Pempheridae,Acropomatiformes,Teleostei,Chordata,Animalia,species
+scitulus,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
+sciurus,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+scriptus,Aluterus,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+secunda,Uraspis,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+sepioidea,Sepioteuthis,Loliginidae,Myopsida,Cephalopoda,Mollusca,Animalia,species
+seticornis,Stenorhynchus,Inachoididae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+setifer,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+sidneyi,Coryrhynchus,Inachidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+spengleri,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+spinosissimus,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+striatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+suensonii,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,species
+surinamensis,Anisotremus,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+synagris,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+taeniopterus,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+taurus,Abudefduf,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+testudineus,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+thomasi,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
+tiburo,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+tigrinus,Serranus,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
+townsendi,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,genus
+triangulatus,Malacoctenus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+triqueter,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+trispinosum,Macrocoeloma,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+tuckeri,Monacanthus,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+undecimalis,Centropomus,Centropomidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
+vaigiensis,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
+variegata,Charonia,Charoniidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
+venenosa,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+venosus,Dardanus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+vetula,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+vicinus,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+virginicus,Anisotremus,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+viride,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+volitans,Pterois,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
+vomer,Selene,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+xamachana,Cassiopea,Cassiopeidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
+xanthurus,Leiostomus,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+xanthurus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+zonata,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
