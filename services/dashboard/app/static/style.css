@@ -724,12 +724,62 @@ li.empty { color: var(--muted); font-style: italic; }
 .notes-blurb code { background: var(--panel); padding: 0 4px; border-radius: 2px; font-size: 11px; }
 
 .save-policy-hint {
+  position: relative;
   color: var(--muted);
   font-size: 11px;
   cursor: help;
   border-bottom: 1px dotted var(--muted);
+  outline: none;
 }
-.save-policy-hint:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.save-policy-hint:hover,
+.save-policy-hint:focus { color: var(--accent); border-bottom-color: var(--accent); }
+
+.save-policy-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: var(--panel);
+  color: #cbd9e3;
+  border: 1px solid #1f3b4f;
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  box-shadow: 0 8px 22px rgba(0,0,0,0.45);
+  z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0s linear 120ms;
+  pointer-events: none;
+  cursor: default;
+}
+.save-policy-hint:hover .save-policy-popover,
+.save-policy-hint:focus .save-policy-popover,
+.save-policy-hint:focus-within .save-policy-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+.save-policy-popover strong { color: var(--ink); display: block; margin-bottom: 6px; }
+.save-policy-popover p { margin: 4px 0 6px; }
+.save-policy-popover ul { padding-left: 18px; margin: 6px 0; }
+.save-policy-popover li { margin: 4px 0; }
+.save-policy-popover em { color: var(--muted); font-style: normal; }
+.save-policy-popover-cta {
+  display: block;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  color: var(--accent);
+  font-size: 11px;
+}
 
 .ov-map {
   background: #0e2a3d;

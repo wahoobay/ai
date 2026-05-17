@@ -2058,6 +2058,22 @@ function switchRoiView(view) {
   }
 }
 
+// Click handler for the "ⓘ why no thumbnail?" link next to Recent events:
+// expand the reports body if it's collapsed, switch to the Data Notes tab,
+// and scroll the Frame Save Policy section into view. Reviewers shouldn't
+// have to hunt for the explanation.
+function openFrameSavePolicy() {
+  const body = document.getElementById("reports-body");
+  if (body?.classList.contains("collapsed")) {
+    document.getElementById("reports-toggle")?.click();
+  }
+  document.querySelector('.reports-tab[data-tab="data-notes"]')?.click();
+  setTimeout(() => {
+    const target = document.getElementById("frame-save-policy");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 80);
+}
+
 function _initRoiModal() {
   const modal = document.getElementById("roi-modal");
   if (!modal) return;

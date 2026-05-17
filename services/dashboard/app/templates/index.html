@@ -314,7 +314,7 @@
                   <li><strong>Inference fps:</strong> rate at which the detector + classifier process frames (typically &lt; live grab rate when the scene is busy).</li>
                 </ul>
               </section>
-              <section class="chart-card">
+              <section class="chart-card" id="frame-save-policy">
                 <h2>Frame save policy</h2>
                 <p class="notes-blurb">The camera streams 24/7, but we don't keep every frame on disk — that would be terabytes per day with no review value. The worker writes a frame to <code>saved_frames</code> (and exposes it for reviewer ROI thumbnails) only when at least one of these is true:</p>
                 <ul class="notes-list">
@@ -395,7 +395,19 @@
               reviewer: <input id="reviewer-input" type="text" placeholder="your email">
               <input id="write-token-input" type="password" placeholder="write token (optional)">
             </span>
-            <span class="save-policy-hint" title="The worker saves frames selectively: new species today, high-confidence detections (≤1/sec/track), or a keepalive every 5 min. About 5% of events have a saved frame — the rest show '—'. See Data Notes → Frame save policy for the full rules.">ⓘ why no thumbnail?</span>
+            <span class="save-policy-hint" tabindex="0" role="button" aria-haspopup="true" onclick="openFrameSavePolicy()">
+              ⓘ why no thumbnail?
+              <span class="save-policy-popover" role="tooltip">
+                <strong>Frame save policy</strong>
+                <p>Only ~5% of events have a saved frame to crop a thumbnail from. The worker saves a frame only when:</p>
+                <ul>
+                  <li>It's the first time a species is seen today, <em>or</em></li>
+                  <li>A detection's confidence ≥ 0.5 <em>and</em> that fish's persistent track hasn't been saved in the last 1 s, <em>or</em></li>
+                  <li>5 minutes have passed since any save (keepalive)</li>
+                </ul>
+                <span class="save-policy-popover-cta">Click for full details in Data Notes →</span>
+              </span>
+            </span>
           </span>
         </h2>
         <ul id="events-list" class="half-height"><li class="empty">loading…</li></ul>
