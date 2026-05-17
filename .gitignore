@@ -11,6 +11,16 @@ data/synthetic/*.csv
 assets/species_manifest.json
 assets/species_manifest.csv
 
+# Bulk-downloaded community clips (assets/species.xlsx → Drive). Track the
+# manifest, the spreadsheet, and the extractor — but not the ~500 MB of
+# image/clip downloads. The download_species_clips.py script reproduces them.
+assets/community_clips/
+
+# Generated fine-tuning dataset (crops + manifests). Reproducible from
+# assets/species.xlsx + community_clips + the detector via
+# scripts/build_finetune_dataset_from_clips.py.
+data/fine_tune/
+
 # Runtime artifacts
 frames/
 logs/
