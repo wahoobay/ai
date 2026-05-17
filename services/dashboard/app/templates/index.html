@@ -254,12 +254,30 @@
                 <div class="chart-svg-wrap"><svg id="ww-chart-turb" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
               </section>
               <section class="chart-card">
-                <h2>Air temp &amp; wind</h2>
+                <h2>Air temperature</h2>
                 <div class="chart-svg-wrap"><svg id="ww-chart-air" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
               </section>
               <section class="chart-card">
-                <h2>Rain &amp; solar</h2>
+                <h2>Wind speed</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-wind" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>
+                  Rain rate
+                  <span class="metric-hint" tabindex="0" role="button" aria-haspopup="true">
+                    ⓘ
+                    <span class="metric-hint-popover" role="tooltip">
+                      <strong>Instantaneous rain rate</strong>
+                      <p>Reads <code>rain_int_mm_hr</code> from the Vaisala WXT-536 — what the sensor says it's raining <em>right now</em> in millimetres per hour, sampled every ~10 min. Zero except during rain events.</p>
+                      <p>The "Rain total" KPI above sums per-interval accumulation across the window.</p>
+                    </span>
+                  </span>
+                </h2>
                 <div class="chart-svg-wrap"><svg id="ww-chart-rain" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+              </section>
+              <section class="chart-card">
+                <h2>Solar radiation</h2>
+                <div class="chart-svg-wrap"><svg id="ww-chart-solar" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
               </section>
             </div>
           </div>

@@ -1641,11 +1641,17 @@ async function renderWaterWeatherTab(hours) {
     mkLine("ww-chart-ph",    wqHist.series.map((r, i) => ({ x: ts[i], y: r.ph })),                                                              { fmt: n => n.toFixed(2) });
     mkLine("ww-chart-turb",  wqHist.series.map((r, i) => ({ x: ts[i], y: r.turbidity_fnu })),                                                   { unit: "FNU", fmt: n => n.toFixed(1) });
   }
-  // Sparklines — weather (air/wind combo and rain/solar combo, simplified to single-line per panel)
+  // Sparklines — weather. Four single-metric panels with units that match
+  // what biologists / general visitors expect on a Florida-coast dashboard.
+  // Rain uses rain_int_mm_hr (instantaneous rate) rather than rain_accum_mm
+  // (cumulative-since-deployment counter — it stays flat between rain events
+  // and isn't meaningful as a time series).
   if (wxHist?.series?.length) {
     const ts = wxHist.series.map(r => new Date(r.bucket).getTime());
-    mkLine("ww-chart-air",  wxHist.series.map((r, i) => ({ x: ts[i], y: r.air_temp_c != null ? r.air_temp_c * 9/5 + 32 : null })), { unit: "°F", fmt: n => n.toFixed(1) });
-    mkLine("ww-chart-rain", wxHist.series.map((r, i) => ({ x: ts[i], y: r.rain_accum_mm != null ? r.rain_accum_mm * 0.0393701 : null })), { unit: "in", fmt: n => n.toFixed(2) });
+    mkLine("ww-chart-air",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.air_temp_c != null ? r.air_temp_c * 9/5 + 32 : null })),                  { unit: "°F",  fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-wind",  wxHist.series.map((r, i) => ({ x: ts[i], y: r.wind_speed_avg_ms != null ? r.wind_speed_avg_ms * 2.23694 : null })),    { unit: "mph", fmt: n => n.toFixed(1) });
+    mkLine("ww-chart-rain",  wxHist.series.map((r, i) => ({ x: ts[i], y: r.rain_int_mm_hr != null ? r.rain_int_mm_hr * 0.0393701 : null })),         { unit: "in/h", fmt: n => n.toFixed(2) });
+    mkLine("ww-chart-solar", wxHist.series.map((r, i) => ({ x: ts[i], y: r.solar_rad_wm2 })),                                                       { unit: "W/m²", fmt: n => n.toFixed(0) });
   }
 }
 
