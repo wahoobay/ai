@@ -1403,16 +1403,18 @@ function _scatterChart(svg, points, opts) {
   svg.innerHTML = `${yTicks}${xTicks}${dots}${axisLabels}`;
 }
 
-// Polar wind rose. `samples` is an array of {dir_deg, speed_mph} pairs over
-// the time window (typically the same wxHist rows used elsewhere). Bins by
-// 16 compass sectors × N speed bands and draws concentric ring-slices per
-// sector, sized by frequency. Direction convention is *meteorological*:
-// the wedge shows where the wind is coming FROM (0° = north, clockwise).
+// Classic meteorological wind rose. `samples` is an array of
+// {dir_deg, speed_mph} pairs over the time window. Renders stacked bands
+// per sector with a percentage radial scale (matches the canonical NOAA /
+// CHIWindrose style). Wind below 2 mph is treated as "Calm" and shown as
+// a labeled center disc rather than as a sector wedge — calm air has no
+// meaningful direction. Direction convention is *meteorological*: each
+// sector points to where the wind is coming FROM (0° = north, clockwise).
 function _windRose(svg, samples, opts = {}) {
   if (!svg) return;
-  const W = 360, H = 360;
+  const W = 420, H = 420;
   const cx = W / 2, cy = H / 2;
-  const maxR = Math.min(W, H) / 2 - 30;
+  const maxR = Math.min(W, H) / 2 - 44;   // outer wedge edge
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
 
   const cleaned = (samples || []).filter(s =>
@@ -1425,111 +1427,128 @@ function _windRose(svg, samples, opts = {}) {
 
   const N_SECTORS = 16;
   const sectorDeg = 360 / N_SECTORS;
-  // Beaufort-ish speed bands in mph. Thresholds align with Beaufort 0-1
-  // (calm), 2-3 (light breeze), 4-5 (moderate / fresh), 6+ (strong+). Tuned
-  // for Florida coastal winds — most days sit in light/moderate; "strong"
-  // is squall / pre-front territory.
+  // Cool-to-warm speed gradient (blue → cyan → green → yellow → orange → red)
+  // — matches the standard wind-rose color convention so anyone who's seen
+  // a Chicago / NOAA wind rose recognises this at a glance. "Calm" (< 2 mph)
+  // gets its own dedicated center disc rather than a band, since calm air
+  // has no meaningful direction.
+  const CALM_MAX = 2;
   const BANDS = [
-    { label: "< 5 mph (calm)",       max: 5,        fill: "#1e4a6e" },
-    { label: "5–12 mph (light)",     max: 12,       fill: "#3a8fc7" },
-    { label: "12–24 mph (moderate)", max: 24,       fill: "#f5b941" },
-    { label: "≥ 24 mph (strong)",    max: Infinity, fill: "#e0533d" },
+    { label: "2–5 mph",   max: 5,        fill: "#1f4ed8" }, // blue
+    { label: "5–7 mph",   max: 7,        fill: "#06b6d4" }, // cyan
+    { label: "7–10 mph",  max: 10,       fill: "#22c55e" }, // green
+    { label: "10–15 mph", max: 15,       fill: "#eab308" }, // yellow
+    { label: "15–20 mph", max: 20,       fill: "#f97316" }, // orange
+    { label: "20+ mph",   max: Infinity, fill: "#dc2626" }, // red
   ];
 
-  // counts[sector][band] = number of samples
+  // counts[sector][band] = number of non-calm samples
   const counts = Array.from({ length: N_SECTORS }, () => Array(BANDS.length).fill(0));
+  let calmCount = 0;
   for (const s of cleaned) {
+    if (s.speed_mph < CALM_MAX) { calmCount += 1; continue; }
     const sec = Math.floor(((s.dir_deg % 360 + 360) % 360 + sectorDeg / 2) / sectorDeg) % N_SECTORS;
     const band = BANDS.findIndex(b => s.speed_mph < b.max);
     counts[sec][band >= 0 ? band : BANDS.length - 1] += 1;
   }
 
-  // Side-by-side spokes per band: each sector hosts up to one narrow wedge
-  // per speed band, drawn side-by-side rather than nested or stacked. Each
-  // spoke's length is its OWN absolute count, so the "moderate winds reach
-  // the outer ring" reading from the stacked version is no longer possible
-  // — moderate and strong bands occupy their own dedicated angular slots
-  // and only extend as far as their actual count warrants.
-  let maxBandCount = 0;
-  for (let i = 0; i < N_SECTORS; i++) {
-    for (let b = 0; b < BANDS.length; b++) {
-      if (counts[i][b] > maxBandCount) maxBandCount = counts[i][b];
-    }
-  }
-  maxBandCount = Math.max(1, maxBandCount);
+  const total = cleaned.length;
+  const calmPct = (calmCount / total) * 100;
+  const sectorPct = counts.map(row => row.map(c => (c / total) * 100));
+  const sectorTotalPct = sectorPct.map(row => row.reduce((a, c) => a + c, 0));
+  const maxSectorPct = Math.max(0.5, ...sectorTotalPct);
+
+  // Pick a "nice" radial step (0.5% / 1% / 2% / 5%) so the rings carry
+  // round-number percentage labels. Aim for 4-5 rings within the scale.
+  const niceSteps = [0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25];
+  const ringStep = niceSteps.find(s => maxSectorPct / s <= 5) || 25;
+  const scaleMaxPct = Math.ceil(maxSectorPct / ringStep) * ringStep;
+  const nRings = Math.round(scaleMaxPct / ringStep);
 
   // SVG angle convention: 0° at 3 o'clock, clockwise positive. Convert
   // meteorological compass-degree (0° = N = 12 o'clock) by subtracting 90°.
   const toRad = (deg) => (deg - 90) * Math.PI / 180;
   const pointOnCircle = (r, deg) => [cx + r * Math.cos(toRad(deg)), cy + r * Math.sin(toRad(deg))];
 
-  // Concentric reference rings at 25/50/75/100% of maxBandCount. Labels
-  // sit just OUTSIDE each ring along the sector-boundary angle between N
-  // and NNE (11.25°) — that boundary line is empty of wedges, so the
-  // numbers don't overlap any data. "outer = N samples" annotation lives
-  // top-left, out of the wedge field entirely.
+  // Inner "Calm" disc — separate visual element with its own percentage.
+  // Sized to ~14% of maxR so it doesn't crowd the stacked rings.
+  const discR = maxR * 0.14;
+  const centerDisc = `
+    <circle cx="${cx}" cy="${cy}" r="${discR.toFixed(1)}" fill="rgba(31, 78, 216, 0.18)" stroke="#1f4ed8" stroke-width="1"/>
+    <text x="${cx}" y="${(cy - 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="var(--muted)">Calm</text>
+    <text x="${cx}" y="${(cy + 11).toFixed(1)}" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">${calmPct.toFixed(1)}%</text>
+  `;
+
+  // Concentric reference rings (every ringStep %) with percentage labels
+  // along the N–NNE boundary (11.25°) — empty of wedges by construction.
   const ringPieces = [];
-  for (let k = 1; k <= 4; k++) {
-    const frac = k / 4;
-    const r = maxR * frac;
-    ringPieces.push(`<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`);
-    if (k > 0 && k < 4) {
-      // Inner ring count labels along the N–NNE boundary (no wedges there).
-      const [lx, ly] = pointOnCircle(r, 11.25);
-      ringPieces.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="start" dx="2" dy="3">${Math.round(maxBandCount * frac)}</text>`);
-    }
+  for (let k = 1; k <= nRings; k++) {
+    const pct = k * ringStep;
+    const r = discR + (maxR - discR) * (pct / scaleMaxPct);
+    ringPieces.push(`<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>`);
+    const [lx, ly] = pointOnCircle(r, 11.25);
+    ringPieces.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="start" dx="2" dy="3">${pct.toFixed(ringStep < 1 ? 2 : (ringStep < 2 ? 1 : 0))}%</text>`);
   }
-  const rings = ringPieces.join("");
 
-  // Cardinal-direction labels (N/E/S/W) + a top-left scale annotation
+  // 8 cardinal direction labels (N/NE/E/SE/S/SW/W/NW). Skip the 16-point
+  // intermediate compass letters — too cluttered in a 360px-class chart.
   const cardLabels = [
-    { deg: 0,   text: "N" }, { deg: 90,  text: "E" },
-    { deg: 180, text: "S" }, { deg: 270, text: "W" },
+    { deg: 0,   text: "N"  }, { deg: 45,  text: "NE" },
+    { deg: 90,  text: "E"  }, { deg: 135, text: "SE" },
+    { deg: 180, text: "S"  }, { deg: 225, text: "SW" },
+    { deg: 270, text: "W"  }, { deg: 315, text: "NW" },
   ].map(({ deg, text }) => {
-    const [x, y] = pointOnCircle(maxR + 14, deg);
-    return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="12" fill="var(--muted)">${text}</text>`;
+    const [x, y] = pointOnCircle(maxR + 20, deg);
+    return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)">${text}</text>`;
   }).join("");
-  const scaleNote = `<text x="8" y="14" font-size="10" fill="var(--muted)">outer ring = ${maxBandCount} samples</text>`;
 
-  // Build side-by-side spokes. Each sector's 22.5° span is split into 4
-  // band-slots (~5.625° each); spokes get a small gap (0.4°) so adjacent
-  // bands stay visually distinct.
-  const bandSpan = sectorDeg / BANDS.length;
-  const gap = 0.4;
-  const spokes = [];
+  // Stacked bands per sector, starting from the calm-disc edge outward.
+  // Bands stack inside→out lightest→strongest, so the outermost band of a
+  // sector's stack is the fastest wind speed seen from that direction;
+  // the stack's total height is the sector's % of all samples, scaled to
+  // the same percentage axis as the reference rings (so "the moderate
+  // band reached the outer ring" can't happen — the outer ring is a
+  // fixed-percent cap above max sector total).
+  const wedges = [];
+  const tipLabels = [];
   for (let i = 0; i < N_SECTORS; i++) {
+    if (!sectorTotalPct[i]) continue;
+    const a1 = i * sectorDeg - sectorDeg / 2 + 0.4;
+    const a2 = i * sectorDeg + sectorDeg / 2 - 0.4;
+    let prevR = discR;
     for (let b = 0; b < BANDS.length; b++) {
-      const n = counts[i][b];
-      if (!n) continue;
-      const bandR = (n / maxBandCount) * maxR;
-      const sectorCenter = i * sectorDeg;
-      const spokeCenter = sectorCenter + (b - (BANDS.length - 1) / 2) * bandSpan;
-      const a1 = spokeCenter - bandSpan / 2 + gap;
-      const a2 = spokeCenter + bandSpan / 2 - gap;
-      const [p4x, p4y] = pointOnCircle(bandR, a1);
+      const p = sectorPct[i][b];
+      if (!p) continue;
+      const bandR = prevR + (maxR - discR) * (p / scaleMaxPct);
+      const [p1x, p1y] = pointOnCircle(prevR, a1);
+      const [p2x, p2y] = pointOnCircle(prevR, a2);
       const [p3x, p3y] = pointOnCircle(bandR, a2);
-      const largeArc = (a2 - a1) > 180 ? 1 : 0;
-      const d = `M ${cx} ${cy} L ${p4x.toFixed(1)} ${p4y.toFixed(1)} ` +
-                `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 1 ${p3x.toFixed(1)} ${p3y.toFixed(1)} Z`;
-      const tip = `${labels16(i)} · ${BANDS[b].label} · ${n} sample${n === 1 ? "" : "s"}`;
-      spokes.push(`<path class="wr-slice" d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.5)" stroke-width="0.4" data-tip="${tip.replace(/"/g, "&quot;")}"></path>`);
+      const [p4x, p4y] = pointOnCircle(bandR, a1);
+      const d = `M ${p1x.toFixed(1)} ${p1y.toFixed(1)} ` +
+                `A ${prevR.toFixed(1)} ${prevR.toFixed(1)} 0 0 1 ${p2x.toFixed(1)} ${p2y.toFixed(1)} ` +
+                `L ${p3x.toFixed(1)} ${p3y.toFixed(1)} ` +
+                `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 0 0 ${p4x.toFixed(1)} ${p4y.toFixed(1)} Z`;
+      const tip = `${labels16(i)} · ${BANDS[b].label} · ${p.toFixed(2)}% (${counts[i][b]} samples)`;
+      wedges.push(`<path class="wr-slice" d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.55)" stroke-width="0.4" data-tip="${tip.replace(/"/g, "&quot;")}"></path>`);
+      prevR = bandR;
+    }
+    // Per-sector tip label (sector total %), only for sectors with a meaningful share.
+    if (sectorTotalPct[i] >= ringStep) {
+      const [tx, ty] = pointOnCircle(prevR + 6, i * sectorDeg);
+      tipLabels.push(`<text x="${tx.toFixed(1)}" y="${(ty + 3).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${sectorTotalPct[i].toFixed(1)}%</text>`);
     }
   }
 
-  // Two-row legend so the band labels don't collide with each other or with
-  // the chart edge. Tighter spacing than the previous single-row layout.
-  const legendY = H - 4;
-  const legendRow1Y = legendY - 18;
+  // Six-band legend in a single row at the bottom. Each item is compact.
+  const legendY = H - 6;
+  const legendItemWidth = (W - 16) / BANDS.length;
   const legendItems = BANDS.map((b, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const x = 12 + col * 180;
-    const y = row === 0 ? legendRow1Y : legendY;
-    return `<rect x="${x}" y="${y - 9}" width="10" height="10" rx="2" fill="${b.fill}"/>` +
-           `<text x="${x + 14}" y="${y}" font-size="10" fill="var(--muted)">${b.label}</text>`;
+    const x = 8 + i * legendItemWidth;
+    return `<rect x="${x.toFixed(1)}" y="${legendY - 9}" width="10" height="10" rx="2" fill="${b.fill}"/>` +
+           `<text x="${(x + 13).toFixed(1)}" y="${legendY}" font-size="10" fill="var(--muted)">${b.label}</text>`;
   }).join("");
 
-  svg.innerHTML = `${rings}${cardLabels}${scaleNote}${spokes.join("")}${legendItems}`;
+  svg.innerHTML = `${ringPieces.join("")}${wedges.join("")}${centerDisc}${tipLabels.join("")}${cardLabels}${legendItems}`;
   _attachWindRoseTooltip(svg);
 }
 

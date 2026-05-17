@@ -583,7 +583,7 @@ li.empty { color: var(--muted); font-style: italic; }
 /* Wind rose / compass-style square charts — preserve 1:1 aspect so the
    rose stays circular regardless of card width. */
 .chart-svg-wrap--square { display: flex; justify-content: center; }
-.chart-svg-wrap--square svg { aspect-ratio: 1 / 1; max-width: 360px; }
+.chart-svg-wrap--square svg { aspect-ratio: 1 / 1; max-width: 420px; }
 .wr-slice { cursor: crosshair; transition: stroke 80ms; }
 .wr-slice:hover { stroke: var(--accent); stroke-width: 1.5; }
 .wb-barb { cursor: crosshair; }
