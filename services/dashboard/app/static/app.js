@@ -1403,6 +1403,122 @@ function _scatterChart(svg, points, opts) {
   svg.innerHTML = `${yTicks}${xTicks}${dots}${axisLabels}`;
 }
 
+// Polar wind rose. `samples` is an array of {dir_deg, speed_ms} pairs over
+// the time window (typically the same wxHist rows used elsewhere). Bins by
+// 16 compass sectors × N speed bands and draws concentric ring-slices per
+// sector, sized by frequency. Direction convention is *meteorological*:
+// the wedge shows where the wind is coming FROM (0° = north, clockwise).
+function _windRose(svg, samples, opts = {}) {
+  if (!svg) return;
+  const W = 360, H = 360;
+  const cx = W / 2, cy = H / 2;
+  const maxR = Math.min(W, H) / 2 - 30;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  const cleaned = (samples || []).filter(s =>
+    s && Number.isFinite(s.dir_deg) && Number.isFinite(s.speed_ms),
+  );
+  if (cleaned.length === 0) {
+    svg.innerHTML = `<text x="${cx}" y="${cy}" text-anchor="middle" fill="var(--muted)" font-size="12">no wind data</text>`;
+    return;
+  }
+
+  const N_SECTORS = 16;
+  const sectorDeg = 360 / N_SECTORS;
+  // Beaufort-ish speed bands (m/s). Tuned for Florida coastal winds —
+  // most days sit in light/moderate; "strong" is squall / pre-front territory.
+  const BANDS = [
+    { label: "< 2 m/s (calm)",       max: 2,  fill: "#1e4a6e" },
+    { label: "2–5 m/s (light)",      max: 5,  fill: "#3a8fc7" },
+    { label: "5–10 m/s (moderate)",  max: 10, fill: "#f5b941" },
+    { label: "≥ 10 m/s (strong)",    max: Infinity, fill: "#e0533d" },
+  ];
+
+  // counts[sector][band] = number of samples
+  const counts = Array.from({ length: N_SECTORS }, () => Array(BANDS.length).fill(0));
+  for (const s of cleaned) {
+    const sec = Math.floor(((s.dir_deg % 360 + 360) % 360 + sectorDeg / 2) / sectorDeg) % N_SECTORS;
+    const band = BANDS.findIndex(b => s.speed_ms < b.max);
+    counts[sec][band >= 0 ? band : BANDS.length - 1] += 1;
+  }
+
+  const sectorTotals = counts.map(b => b.reduce((a, c) => a + c, 0));
+  const maxTotal = Math.max(1, ...sectorTotals);
+
+  // SVG angle convention: 0° at 3 o'clock, clockwise positive. Convert
+  // meteorological compass-degree (0° = N = 12 o'clock) by subtracting 90°.
+  const toRad = (deg) => (deg - 90) * Math.PI / 180;
+  const pointOnCircle = (r, deg) => [cx + r * Math.cos(toRad(deg)), cy + r * Math.sin(toRad(deg))];
+
+  // Concentric reference rings (25/50/75/100% of max sector)
+  let rings = "";
+  for (const frac of [0.25, 0.5, 0.75, 1]) {
+    rings += `<circle cx="${cx}" cy="${cy}" r="${(maxR * frac).toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+  }
+
+  // Cardinal-direction labels
+  const labels = [
+    { deg: 0,   text: "N" }, { deg: 90,  text: "E" },
+    { deg: 180, text: "S" }, { deg: 270, text: "W" },
+  ].map(({ deg, text }) => {
+    const [x, y] = pointOnCircle(maxR + 14, deg);
+    return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="12" fill="var(--muted)">${text}</text>`;
+  }).join("");
+
+  // Per-sector stacked ring-slices
+  const slices = [];
+  for (let i = 0; i < N_SECTORS; i++) {
+    const total = sectorTotals[i];
+    if (!total) continue;
+    const outerR = maxR * (total / maxTotal);
+    const a1 = i * sectorDeg - sectorDeg / 2;
+    const a2 = i * sectorDeg + sectorDeg / 2;
+    let prevR = 0;
+    for (let b = 0; b < BANDS.length; b++) {
+      const n = counts[i][b];
+      if (!n) continue;
+      const bandR = prevR + outerR * (n / total);
+      // ring slice from prevR..bandR, angle a1..a2
+      const [p1x, p1y] = pointOnCircle(prevR, a1);
+      const [p2x, p2y] = pointOnCircle(prevR, a2);
+      const [p3x, p3y] = pointOnCircle(bandR, a2);
+      const [p4x, p4y] = pointOnCircle(bandR, a1);
+      const largeArc = (a2 - a1) > 180 ? 1 : 0;
+      let d;
+      if (prevR === 0) {
+        // inner radius is 0 → degenerate, just a wedge
+        d = `M ${cx} ${cy} L ${p4x.toFixed(1)} ${p4y.toFixed(1)} ` +
+            `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 1 ${p3x.toFixed(1)} ${p3y.toFixed(1)} Z`;
+      } else {
+        d = `M ${p1x.toFixed(1)} ${p1y.toFixed(1)} ` +
+            `A ${prevR.toFixed(1)} ${prevR.toFixed(1)} 0 ${largeArc} 1 ${p2x.toFixed(1)} ${p2y.toFixed(1)} ` +
+            `L ${p3x.toFixed(1)} ${p3y.toFixed(1)} ` +
+            `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 0 ${p4x.toFixed(1)} ${p4y.toFixed(1)} Z`;
+      }
+      slices.push(`<path d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.4)" stroke-width="0.5">
+        <title>${labels16(i)} · ${BANDS[b].label} · ${n} sample${n === 1 ? "" : "s"}</title>
+      </path>`);
+      prevR = bandR;
+    }
+  }
+
+  // Legend (compact, bottom of the SVG)
+  const legendY = H - 6;
+  const legendX0 = 8;
+  const legendItems = BANDS.map((b, i) => {
+    const x = legendX0 + i * 84;
+    return `<rect x="${x}" y="${legendY - 9}" width="10" height="10" rx="2" fill="${b.fill}"/>` +
+           `<text x="${x + 14}" y="${legendY}" font-size="10" fill="var(--muted)">${b.label.split(" (")[0]}</text>`;
+  }).join("");
+
+  svg.innerHTML = `${rings}${labels}${slices.join("")}${legendItems}`;
+}
+
+// 16-sector compass label (N, NNE, NE, ENE, E, ...)
+function labels16(idx) {
+  return ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"][idx % 16];
+}
+
 function _miniLine(svg, points, opts) {
   if (!svg) return;
   const W = 480, H = 140, padL = 36, padR = 10, padT = 8, padB = 18;
@@ -1676,8 +1792,13 @@ async function renderWeatherTab(hours) {
     mkLine("ww-chart-wind",    wxHist.series.map((r, i) => ({ x: ts[i], y: r.wind_speed_avg_ms != null ? r.wind_speed_avg_ms * 2.23694 : null })), { unit: "mph",  fmt: n => n.toFixed(1) });
     mkLine("ww-chart-rain",    wxHist.series.map((r, i) => ({ x: ts[i], y: r.rain_int_mm_hr != null ? r.rain_int_mm_hr * 0.0393701 : null })),      { unit: "in/h", fmt: n => n.toFixed(2) });
     mkLine("ww-chart-solar",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.solar_rad_wm2 })),                                                     { unit: "W/m²", fmt: n => n.toFixed(0) });
-    mkLine("ww-chart-winddir", wxHist.series.map((r, i) => ({ x: ts[i], y: r.wind_dir_avg_deg })),                                                  { unit: "°",    fmt: n => n.toFixed(0) });
     mkLine("ww-chart-cloud",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.cloud_cover_pct })),                                                   { unit: "%",    fmt: n => n.toFixed(0) });
+    // Wind direction is a circular variable — a line graph wraps around at
+    // 359°↔0° and tells you nothing about prevailing wind. Use a polar rose.
+    _windRose(
+      document.getElementById("ww-chart-winddir"),
+      wxHist.series.map(r => ({ dir_deg: r.wind_dir_avg_deg, speed_ms: r.wind_speed_avg_ms })),
+    );
   }
 }
 

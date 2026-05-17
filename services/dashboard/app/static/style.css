@@ -580,6 +580,10 @@ li.empty { color: var(--muted); font-style: italic; }
 }
 .chart-svg-wrap { width: 100%; }
 .chart-svg-wrap svg { width: 100%; height: auto; display: block; }
+/* Wind rose / compass-style square charts — preserve 1:1 aspect so the
+   rose stays circular regardless of card width. */
+.chart-svg-wrap--square { display: flex; justify-content: center; }
+.chart-svg-wrap--square svg { aspect-ratio: 1 / 1; max-width: 360px; }
 .chart-legend {
   margin-top: 8px;
   display: flex;

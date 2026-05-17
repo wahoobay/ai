@@ -309,16 +309,17 @@
               </section>
               <section class="chart-card">
                 <h2>
-                  Wind direction
+                  Wind rose
                   <span class="metric-hint" tabindex="0" role="button" aria-haspopup="true">
                     ⓘ
                     <span class="metric-hint-popover" role="tooltip">
-                      <strong>Wind direction (degrees from N)</strong>
-                      <p>0° = wind from the north, 90° = from the east, 180° = from the south, 270° = from the west. Vertical jumps in the line are the 359° ↔ 0° wraparound, not a real shift.</p>
+                      <strong>Where the wind comes from</strong>
+                      <p>Polar histogram over the selected window. Each wedge points to the compass direction the wind is blowing <em>from</em> (meteorological convention); wedge length = how often, color band = speed (calm / light / moderate / strong).</p>
+                      <p>Sectors are 22.5° wide (16-point compass). Hover a wedge to see exact sample count.</p>
                     </span>
                   </span>
                 </h2>
-                <div class="chart-svg-wrap"><svg id="ww-chart-winddir" viewBox="0 0 480 140" preserveAspectRatio="none"></svg></div>
+                <div class="chart-svg-wrap chart-svg-wrap--square"><svg id="ww-chart-winddir"></svg></div>
               </section>
               <section class="chart-card">
                 <h2>Cloud cover</h2>
