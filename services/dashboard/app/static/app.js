@@ -1403,7 +1403,7 @@ function _scatterChart(svg, points, opts) {
   svg.innerHTML = `${yTicks}${xTicks}${dots}${axisLabels}`;
 }
 
-// Polar wind rose. `samples` is an array of {dir_deg, speed_ms} pairs over
+// Polar wind rose. `samples` is an array of {dir_deg, speed_mph} pairs over
 // the time window (typically the same wxHist rows used elsewhere). Bins by
 // 16 compass sectors × N speed bands and draws concentric ring-slices per
 // sector, sized by frequency. Direction convention is *meteorological*:
@@ -1416,7 +1416,7 @@ function _windRose(svg, samples, opts = {}) {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
 
   const cleaned = (samples || []).filter(s =>
-    s && Number.isFinite(s.dir_deg) && Number.isFinite(s.speed_ms),
+    s && Number.isFinite(s.dir_deg) && Number.isFinite(s.speed_mph),
   );
   if (cleaned.length === 0) {
     svg.innerHTML = `<text x="${cx}" y="${cy}" text-anchor="middle" fill="var(--muted)" font-size="12">no wind data</text>`;
@@ -1425,20 +1425,22 @@ function _windRose(svg, samples, opts = {}) {
 
   const N_SECTORS = 16;
   const sectorDeg = 360 / N_SECTORS;
-  // Beaufort-ish speed bands (m/s). Tuned for Florida coastal winds —
-  // most days sit in light/moderate; "strong" is squall / pre-front territory.
+  // Beaufort-ish speed bands in mph. Thresholds align with Beaufort 0-1
+  // (calm), 2-3 (light breeze), 4-5 (moderate / fresh), 6+ (strong+). Tuned
+  // for Florida coastal winds — most days sit in light/moderate; "strong"
+  // is squall / pre-front territory.
   const BANDS = [
-    { label: "< 2 m/s (calm)",       max: 2,  fill: "#1e4a6e" },
-    { label: "2–5 m/s (light)",      max: 5,  fill: "#3a8fc7" },
-    { label: "5–10 m/s (moderate)",  max: 10, fill: "#f5b941" },
-    { label: "≥ 10 m/s (strong)",    max: Infinity, fill: "#e0533d" },
+    { label: "< 5 mph (calm)",       max: 5,        fill: "#1e4a6e" },
+    { label: "5–12 mph (light)",     max: 12,       fill: "#3a8fc7" },
+    { label: "12–24 mph (moderate)", max: 24,       fill: "#f5b941" },
+    { label: "≥ 24 mph (strong)",    max: Infinity, fill: "#e0533d" },
   ];
 
   // counts[sector][band] = number of samples
   const counts = Array.from({ length: N_SECTORS }, () => Array(BANDS.length).fill(0));
   for (const s of cleaned) {
     const sec = Math.floor(((s.dir_deg % 360 + 360) % 360 + sectorDeg / 2) / sectorDeg) % N_SECTORS;
-    const band = BANDS.findIndex(b => s.speed_ms < b.max);
+    const band = BANDS.findIndex(b => s.speed_mph < b.max);
     counts[sec][band >= 0 ? band : BANDS.length - 1] += 1;
   }
 
@@ -1534,7 +1536,7 @@ function _windBarbs(svg, samples, opts = {}) {
   svg.removeAttribute("preserveAspectRatio");
 
   const cleaned = (samples || []).filter(s =>
-    s && Number.isFinite(s.x) && Number.isFinite(s.dir_deg) && Number.isFinite(s.speed_ms),
+    s && Number.isFinite(s.x) && Number.isFinite(s.dir_deg) && Number.isFinite(s.speed_mph),
   );
   if (cleaned.length === 0) {
     svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="var(--muted)" font-size="12">no wind data</text>`;
@@ -1546,13 +1548,14 @@ function _windBarbs(svg, samples, opts = {}) {
   const xSpan = xMax - xMin || 1;
   const innerW = W - padL - padR;
   const cy = padT + (H - padT - padB) / 2;
-  const speedMax = Math.max(2, ...cleaned.map(s => s.speed_ms));
+  const speedMax = Math.max(5, ...cleaned.map(s => s.speed_mph));
   const maxArrowLen = (H - padT - padB) / 2 - 2;
 
+  // Same mph thresholds as the wind rose so the two charts read as one.
   const BANDS = [
-    { max: 2,        fill: "#1e4a6e" },
-    { max: 5,        fill: "#3a8fc7" },
-    { max: 10,       fill: "#f5b941" },
+    { max: 5,        fill: "#1e4a6e" },
+    { max: 12,       fill: "#3a8fc7" },
+    { max: 24,       fill: "#f5b941" },
     { max: Infinity, fill: "#e0533d" },
   ];
   const bandColor = (sp) => BANDS.find(b => sp < b.max).fill;
@@ -1563,12 +1566,12 @@ function _windBarbs(svg, samples, opts = {}) {
   for (let i = 0; i < cleaned.length; i += stride) {
     const s = cleaned[i];
     const x = padL + (innerW * (s.x - xMin)) / xSpan;
-    const len = (Math.min(s.speed_ms, speedMax) / speedMax) * maxArrowLen + 4;
+    const len = (Math.min(s.speed_mph, speedMax) / speedMax) * maxArrowLen + 4;
     // Convention: arrow points where the wind is *going*, which is opposite
     // of the meteorological "from" direction. dir_deg is "from" — flip 180°.
     const headDeg = (s.dir_deg + 180) % 360;
-    const color = bandColor(s.speed_ms);
-    const tip = `${new Date(s.x).toLocaleString()}\n${labels16(Math.floor(((s.dir_deg % 360 + 360) % 360 + 11.25) / 22.5) % 16)} (${s.dir_deg.toFixed(0)}°) · ${(s.speed_ms * 2.23694).toFixed(1)} mph`;
+    const color = bandColor(s.speed_mph);
+    const tip = `${new Date(s.x).toLocaleString()}\n${labels16(Math.floor(((s.dir_deg % 360 + 360) % 360 + 11.25) / 22.5) % 16)} (${s.dir_deg.toFixed(0)}°) · ${s.speed_mph.toFixed(1)} mph`;
     // Path of an arrow that points "up" (negative-y), with shaft length `len`:
     // - shaft: (0,0) to (0, -len)
     // - head:  short triangle at (0, -len)
@@ -1907,17 +1910,23 @@ async function renderWeatherTab(hours) {
     // Wind direction is a circular variable — a line graph wraps around at
     // 359°↔0° and tells you nothing about prevailing wind. Use a polar rose
     // for the windowed distribution; pair it with a wind-barbs strip for
-    // the chronological view ("when did the wind shift?").
+    // the chronological view ("when did the wind shift?"). Both renderers
+    // expect speed in mph (matches the KPI tile + speed line chart on the
+    // same tab — sonde stays SI, surface UI is freedom units).
+    const MS_TO_MPH = 2.23694;
     _windRose(
       document.getElementById("ww-chart-winddir"),
-      wxHist.series.map(r => ({ dir_deg: r.wind_dir_avg_deg, speed_ms: r.wind_speed_avg_ms })),
+      wxHist.series.map(r => ({
+        dir_deg: r.wind_dir_avg_deg,
+        speed_mph: r.wind_speed_avg_ms != null ? r.wind_speed_avg_ms * MS_TO_MPH : null,
+      })),
     );
     _windBarbs(
       document.getElementById("ww-chart-windbarbs"),
       wxHist.series.map((r, i) => ({
         x: ts[i],
         dir_deg: r.wind_dir_avg_deg,
-        speed_ms: r.wind_speed_avg_ms,
+        speed_mph: r.wind_speed_avg_ms != null ? r.wind_speed_avg_ms * MS_TO_MPH : null,
       })),
     );
   }
