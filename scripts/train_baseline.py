@@ -228,7 +228,12 @@ def _split_temporal_within_source(
     image_only: list[int] = []                          # indices of image-sourced crops
     for i, p in enumerate(paths):
         rec = crop_to_rec.get(p.resolve().as_posix())
-        if rec is None or rec.get("source_kind") != "video":
+        # source_kind on dataset_manifest records carries the origin prefix
+        # (e.g. "drive:video", "inat:image") after the cropper's multi-source
+        # refactor — match on the trailing token so both legacy and prefixed
+        # values resolve correctly.
+        kind = (rec.get("source_kind") or "").rsplit(":", 1)[-1]
+        if rec is None or kind != "video":
             image_only.append(i)
             continue
         by_drive.setdefault(rec["drive_id"], []).append((int(rec.get("frame_index", 0)), i))
