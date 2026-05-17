@@ -262,6 +262,7 @@ def run_inference_worker(
                 ts=item.ts,
                 source_name=item.source_name,
                 now_mono=time.monotonic(),
+                track_ids=track_ids,
             )
             if job is not None:
                 try:

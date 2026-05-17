@@ -64,6 +64,7 @@ class Config:
     save_interesting_only: bool
     save_interesting_quiet_seconds: int
     save_interesting_min_conf: float
+    save_min_track_gap_seconds: float  # rate-limit: at most one save per track per N seconds
 
     # http
     worker_http_host: str
@@ -141,6 +142,9 @@ class Config:
             save_interesting_only=_bool("SAVE_INTERESTING_ONLY", True),
             save_interesting_quiet_seconds=_int("SAVE_INTERESTING_QUIET_SECONDS", 300),
             save_interesting_min_conf=_float("SAVE_INTERESTING_MIN_CONF", 0.5),
+            # 1.0 s default ≈ 30x reduction vs every-frame for a fish lingering
+            # in front of the camera. Set to 0 to disable rate-limiting.
+            save_min_track_gap_seconds=_float("SAVE_MIN_TRACK_GAP_SECONDS", 1.0),
             worker_http_host=_str("WORKER_HTTP_HOST", "0.0.0.0"),
             worker_http_port=_int("WORKER_HTTP_PORT", 8081),
             log_level=_str("LOG_LEVEL", "INFO"),

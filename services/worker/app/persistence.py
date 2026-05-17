@@ -213,6 +213,13 @@ class ImageSaver:
         self._annotation_id = 0
         # COCO category ids are assigned lazily as species are seen.
         self._category_ids: dict[str, int] = {}
+        # Per-track save throttle. A fish lingering in front of the camera
+        # used to trigger a save on every frame it was detected (~30/sec);
+        # we now save at most once per track per save_min_track_gap_seconds.
+        # Keyed by track_id; entries older than 2× gap are GC'd periodically
+        # so the dict doesn't grow unbounded for the lifetime of the process.
+        self._last_track_save_mono: dict[int, float] = {}
+        self._track_gc_next = 0.0
 
     def _reset_today(self, ts: datetime) -> None:
         d = ts.astimezone(UTC).date()
@@ -220,7 +227,13 @@ class ImageSaver:
             self._today = d
             self._species_seen_today = set()
 
-    def _reason(self, now_mono: float, ts: datetime, detections: list) -> str | None:
+    def _reason(
+        self,
+        now_mono: float,
+        ts: datetime,
+        detections: list,
+        track_ids: list | None = None,
+    ) -> str | None:
         self._reset_today(ts)
         cfg = self.cfg
 
@@ -234,21 +247,32 @@ class ImageSaver:
             return "detection"
 
         if cfg.save_interesting_only:
-            best_confs = [d.best.accuracy for d in detections if d.best is not None]
-            max_conf = max(best_confs) if best_confs else 0.0
+            n = len(detections)
+            tids = track_ids if track_ids is not None else [None] * n
+            gap = max(0.0, float(cfg.save_min_track_gap_seconds))
 
-            # (a) new species today
-            new_species = []
+            # (a) new species today — always saves, regardless of track gap.
+            #     New-species frames are rare and high-value for the fine-tune
+            #     dataset, so we don't throttle them.
             for d in detections:
                 sid = d.best.species_id if d.best else None
                 if sid and sid not in self._species_seen_today:
-                    new_species.append(sid)
-            if new_species:
-                return "interesting:new_species"
+                    return "interesting:new_species"
 
-            # (b) high-confidence detection
-            if max_conf >= cfg.save_interesting_min_conf:
-                return "interesting:high_conf"
+            # (b) high-confidence detection, throttled per track. We save the
+            #     frame if at least one detection passes the confidence
+            #     threshold AND its track hasn't been saved in the past
+            #     `gap` seconds. An untracked detection (tid is None) always
+            #     counts as fresh — those are first sightings of new tracks.
+            for d, tid in zip(detections, tids, strict=False):
+                conf = d.best.accuracy if d.best is not None else 0.0
+                if conf < cfg.save_interesting_min_conf:
+                    continue
+                if tid is None:
+                    return "interesting:high_conf"
+                last = self._last_track_save_mono.get(int(tid))
+                if last is None or (now_mono - last) >= gap:
+                    return "interesting:high_conf"
 
             # (c) first detection after quiet period
             if (now_mono - self._last_any_save_ts) >= cfg.save_interesting_quiet_seconds:
@@ -265,6 +289,7 @@ class ImageSaver:
         ts: datetime,
         source_name: str,
         now_mono: float,
+        track_ids: list | None = None,
     ) -> SaveJob | None:
         """Decide whether to save and, if so, return a `SaveJob` ready for
         a background writer to materialise. Synchronous work only — state
@@ -273,7 +298,7 @@ class ImageSaver:
         write JPEGs, write COCO JSON) happens in `write()`, which the
         caller hands to a worker thread so the inference loop never blocks
         on disk."""
-        reason = self._reason(now_mono, ts, detections)
+        reason = self._reason(now_mono, ts, detections, track_ids)
         if reason is None:
             return None
 
@@ -285,6 +310,24 @@ class ImageSaver:
         if reason == "timelapse":
             self._last_timelapse = now_mono
         self._last_any_save_ts = now_mono
+
+        # Stamp the per-track save timestamps so the next ~gap seconds of
+        # this same fish don't trigger another save.
+        if track_ids is not None:
+            for tid in track_ids:
+                if tid is not None:
+                    self._last_track_save_mono[int(tid)] = now_mono
+            # Periodically GC stale tracks so the dict stays small even on
+            # a long-running process. Anything older than 2× the gap can be
+            # dropped — a track that hasn't shown up in that long is gone.
+            if now_mono >= self._track_gc_next:
+                gap = max(1.0, float(self.cfg.save_min_track_gap_seconds))
+                cutoff = now_mono - 2 * gap - 10.0
+                self._last_track_save_mono = {
+                    tid: t for tid, t in self._last_track_save_mono.items()
+                    if t >= cutoff
+                }
+                self._track_gc_next = now_mono + 30.0
 
         day_dir = self.root / ts.strftime("%Y/%m/%d/%H")
         day_dir.mkdir(parents=True, exist_ok=True)

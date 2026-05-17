@@ -315,6 +315,17 @@
                 </ul>
               </section>
               <section class="chart-card">
+                <h2>Frame save policy</h2>
+                <p class="notes-blurb">The camera streams 24/7, but we don't keep every frame on disk — that would be terabytes per day with no review value. The worker writes a frame to <code>saved_frames</code> (and exposes it for reviewer ROI thumbnails) only when at least one of these is true:</p>
+                <ul class="notes-list">
+                  <li><strong>New species today:</strong> first time the classifier reports a given species since midnight UTC — always saved, regardless of confidence or track gap.</li>
+                  <li><strong>High-confidence detection (throttled):</strong> at least one detection in the frame is ≥ <code>SAVE_INTERESTING_MIN_CONF</code> (default 0.5) AND that detection's persistent track hasn't been saved in the last <code>SAVE_MIN_TRACK_GAP_SECONDS</code> (default 1.0). A fish lingering in front of the camera is therefore saved at most once per second, not once per frame.</li>
+                  <li><strong>Long-quiet keepalive:</strong> if nothing has been saved for <code>SAVE_INTERESTING_QUIET_SECONDS</code> (default 5 min), the next frame with any detection is saved so we know the pipeline is alive.</li>
+                  <li><strong>Timelapse:</strong> off by default; can be enabled with <code>SAVE_TIMELAPSE_SECONDS</code> for slow-cadence archival.</li>
+                </ul>
+                <p class="notes-blurb">Net effect: roughly 5% of detection events have a saved frame to crop an ROI from. Reviewers can still correct the other 95% via the species autocomplete; they just won't see the fish thumbnail. <strong>Detections are tracked across frames</strong> via SORT-style association — sightings, species counts, and richness all count distinct tracks, not raw bbox events.</p>
+              </section>
+              <section class="chart-card">
                 <h2>Known limitations</h2>
                 <ul class="notes-list">
                   <li>The classifier was trained on a globally-mixed fish dataset; confident mislabels on Atlantic-reef species are routine and the most valuable thing reviewers can correct.</li>
@@ -384,6 +395,7 @@
               reviewer: <input id="reviewer-input" type="text" placeholder="your email">
               <input id="write-token-input" type="password" placeholder="write token (optional)">
             </span>
+            <span class="save-policy-hint" title="The worker saves frames selectively: new species today, high-confidence detections (≤1/sec/track), or a keepalive every 5 min. About 5% of events have a saved frame — the rest show '—'. See Data Notes → Frame save policy for the full rules.">ⓘ why no thumbnail?</span>
           </span>
         </h2>
         <ul id="events-list" class="half-height"><li class="empty">loading…</li></ul>

@@ -700,6 +700,21 @@ li.empty { color: var(--muted); font-style: italic; }
   border-radius: 2px;
   font-size: 11px;
 }
+.notes-blurb {
+  font-size: 12px;
+  color: #cbd9e3;
+  margin: 6px 0;
+  line-height: 1.4;
+}
+.notes-blurb code { background: var(--panel); padding: 0 4px; border-radius: 2px; font-size: 11px; }
+
+.save-policy-hint {
+  color: var(--muted);
+  font-size: 11px;
+  cursor: help;
+  border-bottom: 1px dotted var(--muted);
+}
+.save-policy-hint:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 .ov-map {
   background: #0e2a3d;
