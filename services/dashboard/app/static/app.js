@@ -429,6 +429,15 @@ function pickSpecies(eventId, latin, speciesId) {
 // corrected_name = best_name and is_endorsement=true. Used to register
 // positive signal on good predictions (fine-tuning dataset gets both
 // positive and negative examples instead of just negatives).
+// _maybeBbox returns the edited bbox for this event if the modal is in
+// edit mode AND the user actually moved the box, else null. The three
+// submit handlers all merge it in so any of them can carry a bbox
+// correction alongside the species / endorsement / not-a-fish decision.
+function _maybeBbox(eventId) {
+  if (!_bboxEdit.active || _bboxEdit.eventId !== eventId) return null;
+  return _consumeEditedBbox();
+}
+
 async function endorseEvent(eventId) {
   const r = EVENT_CACHE.get(eventId);
   if (!r?.best_name) return;
@@ -438,6 +447,7 @@ async function endorseEvent(eventId) {
     corrected_species_id: r.best_species_id || null,
     not_a_fish: false,
     is_endorsement: true,
+    corrected_bbox: _maybeBbox(eventId),
     confidence: "certain",
     reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
     notes: null,
@@ -452,6 +462,7 @@ async function submitNotAFish(eventId) {
     corrected_species_id: null,
     not_a_fish: true,
     is_endorsement: false,
+    corrected_bbox: _maybeBbox(eventId),
     confidence: document.getElementById(`cf-conf-${eventId}`)?.value || "probable",
     reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
     notes: (document.getElementById(`cf-notes-${eventId}`)?.value || "").trim() || null,
@@ -477,6 +488,7 @@ async function submitCorrection(eventId) {
     corrected_species_id: spid || null,
     not_a_fish: false,
     is_endorsement: isEndorsement,
+    corrected_bbox: _maybeBbox(eventId),
     confidence: conf,
     reviewer: reviewer || null,
     notes: notes || null,
@@ -2360,18 +2372,232 @@ function openRoiModal(eventId) {
 function switchRoiView(view) {
   _roiModalView = view;
   const img = document.getElementById("roi-modal-img");
+  const svg = document.getElementById("roi-modal-svg");
+  const editToolbar = document.getElementById("roi-modal-edit-toolbar");
   const tabRoi = document.getElementById("roi-tab-roi");
   const tabFrame = document.getElementById("roi-tab-frame");
+  const tabEdit = document.getElementById("roi-tab-edit");
   if (!img || _roiModalEventId == null) return;
+  // Reset all tab/element states; the view-specific branch below re-enables
+  // what it needs.
+  tabRoi?.classList.remove("active");
+  tabFrame?.classList.remove("active");
+  tabEdit?.classList.remove("active");
+  img.classList.remove("hidden");
+  svg?.classList.add("hidden");
+  if (editToolbar) editToolbar.style.display = "none";
+
   if (view === "frame") {
     img.src = `/api/detections/${_roiModalEventId}/frame.jpg?size=1600`;
-    tabRoi?.classList.remove("active");
     tabFrame?.classList.add("active");
+  } else if (view === "edit") {
+    tabEdit?.classList.add("active");
+    img.classList.add("hidden");
+    svg?.classList.remove("hidden");
+    if (editToolbar) editToolbar.style.display = "";
+    _enterBboxEdit(_roiModalEventId);
   } else {
     img.src = `/api/detections/${_roiModalEventId}/roi.jpg?size=1024`;
     tabRoi?.classList.add("active");
-    tabFrame?.classList.remove("active");
   }
+}
+
+// ---------- Bbox editor ----------
+//
+// State machine for the modal's "Edit bbox" view. The SVG's viewBox is the
+// source frame's pixel dimensions (read from the loaded image's
+// naturalWidth/naturalHeight at full resolution), so the bbox rect and
+// handle positions are stored in source pixels and need no scaling when
+// submitted alongside a correction. _bboxEdit.current carries the
+// in-progress edit; submitting a correction merges it onto the payload
+// if (and only if) it differs from the original detection bbox.
+const _bboxEdit = {
+  active: false,
+  eventId: null,
+  orig: null,         // original [x1,y1,x2,y2] from the detection
+  current: null,      // edited bbox (same coords)
+  imgW: 0, imgH: 0,
+  dragging: null,     // null | 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+  startSvgPt: null,   // pointer position at drag start (viewBox coords)
+  startBbox: null,    // bbox at drag start
+};
+
+// Handle layout: 4 corners + 4 edge midpoints. Edge handles only resize the
+// one axis they sit on; corner handles resize both.
+const _BBOX_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+
+async function _enterBboxEdit(eventId) {
+  const r = EVENT_CACHE.get(eventId);
+  const svg = document.getElementById("roi-modal-svg");
+  if (!svg || !r || !Array.isArray(r.bbox) || r.bbox.length !== 4) {
+    if (svg) svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="#888">no bbox to edit for this event</text>`;
+    return;
+  }
+  if (!r.image_path) {
+    svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="#888">no saved frame on disk — bbox editing requires the source image</text>`;
+    return;
+  }
+
+  // Load the raw frame so we can read its native pixel dimensions. Using
+  // size=2400 keeps small / normal frames at original resolution; very large
+  // frames downscale, which is harmless since the bbox is in *source* coords
+  // and the SVG viewBox scales independently.
+  const url = `/api/detections/${eventId}/frame.jpg?annotate=0&size=2400`;
+  const loader = new Image();
+  loader.src = url;
+  try { await loader.decode(); } catch { /* still proceed; some browsers don't need decode() */ }
+  const W = loader.naturalWidth || 1280;
+  const H = loader.naturalHeight || 720;
+
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const svgImg = document.getElementById("roi-modal-svg-img");
+  svgImg.setAttribute("href", url);
+  svgImg.setAttribute("width", String(W));
+  svgImg.setAttribute("height", String(H));
+
+  _bboxEdit.active = true;
+  _bboxEdit.eventId = eventId;
+  _bboxEdit.orig = [...r.bbox];
+  _bboxEdit.current = [...r.bbox];
+  _bboxEdit.imgW = W;
+  _bboxEdit.imgH = H;
+  _bboxEdit.dragging = null;
+
+  // Build handle elements (4 corners + 4 edges).
+  const handlesGroup = document.getElementById("roi-modal-bbox-handles");
+  handlesGroup.innerHTML = _BBOX_HANDLES.map(h =>
+    `<rect class="bbox-handle bbox-handle-${h}" data-handle="${h}"/>`
+  ).join("");
+  _renderBbox();
+  _bindBboxEvents();
+  _updateBboxStatus();
+}
+
+function _renderBbox() {
+  const [x1, y1, x2, y2] = _bboxEdit.current;
+  const rect = document.getElementById("roi-modal-bbox");
+  rect.setAttribute("x", String(x1));
+  rect.setAttribute("y", String(y1));
+  rect.setAttribute("width", String(Math.max(1, x2 - x1)));
+  rect.setAttribute("height", String(Math.max(1, y2 - y1)));
+  // Handle size scales with bbox area so they stay reachable on small boxes
+  // but don't overwhelm large ones.
+  const hSize = Math.max(8, Math.min(28, Math.round((x2 - x1 + y2 - y1) / 30)));
+  const half = hSize / 2;
+  const positions = {
+    nw: [x1, y1], n: [(x1 + x2) / 2, y1], ne: [x2, y1],
+    e:  [x2, (y1 + y2) / 2],
+    se: [x2, y2], s: [(x1 + x2) / 2, y2], sw: [x1, y2],
+    w:  [x1, (y1 + y2) / 2],
+  };
+  for (const h of _BBOX_HANDLES) {
+    const el = document.querySelector(`#roi-modal-bbox-handles .bbox-handle-${h}`);
+    if (!el) continue;
+    const [cx, cy] = positions[h];
+    el.setAttribute("x", String(cx - half));
+    el.setAttribute("y", String(cy - half));
+    el.setAttribute("width", String(hSize));
+    el.setAttribute("height", String(hSize));
+  }
+}
+
+function _bboxToSvgPt(svg, clientX, clientY) {
+  // Map a clientX/clientY (CSS pixel) into the SVG's viewBox coord space.
+  // Uses the inverse of the screen CTM, which is the standard SVG-coords
+  // recipe and survives CSS scaling automatically.
+  const pt = svg.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  const inv = svg.getScreenCTM().inverse();
+  const p = pt.matrixTransform(inv);
+  return [p.x, p.y];
+}
+
+function _bindBboxEvents() {
+  const svg = document.getElementById("roi-modal-svg");
+  if (svg.dataset.bboxBound) return;          // bind once per page lifetime
+  svg.dataset.bboxBound = "1";
+
+  const onDown = (e) => {
+    if (!_bboxEdit.active) return;
+    const target = e.target.closest(".bbox-handle, #roi-modal-bbox");
+    if (!target) return;
+    const handle = target.dataset.handle || "move";
+    _bboxEdit.dragging = handle;
+    _bboxEdit.startBbox = [..._bboxEdit.current];
+    _bboxEdit.startSvgPt = _bboxToSvgPt(svg, e.clientX, e.clientY);
+    e.preventDefault();
+  };
+
+  const onMove = (e) => {
+    if (!_bboxEdit.dragging) return;
+    const [sx, sy] = _bboxEdit.startSvgPt;
+    const [px, py] = _bboxToSvgPt(svg, e.clientX, e.clientY);
+    const dx = px - sx, dy = py - sy;
+    let [x1, y1, x2, y2] = _bboxEdit.startBbox;
+    const W = _bboxEdit.imgW, H = _bboxEdit.imgH;
+    const h = _bboxEdit.dragging;
+    if (h === "move") {
+      const w = x2 - x1, hgt = y2 - y1;
+      x1 = Math.max(0, Math.min(W - w, x1 + dx));
+      y1 = Math.max(0, Math.min(H - hgt, y1 + dy));
+      x2 = x1 + w; y2 = y1 + hgt;
+    } else {
+      if (h.includes("n")) y1 = Math.max(0, Math.min(y2 - 4, y1 + dy));
+      if (h.includes("s")) y2 = Math.min(H, Math.max(y1 + 4, y2 + dy));
+      if (h.includes("w")) x1 = Math.max(0, Math.min(x2 - 4, x1 + dx));
+      if (h.includes("e")) x2 = Math.min(W, Math.max(x1 + 4, x2 + dx));
+    }
+    _bboxEdit.current = [Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2)];
+    _renderBbox();
+    _updateBboxStatus();
+  };
+
+  const onUp = () => { _bboxEdit.dragging = null; };
+
+  svg.addEventListener("mousedown", onDown);
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+  // Touch support — single-finger drag mirrors mouse.
+  svg.addEventListener("touchstart", (e) => onDown(e.touches[0]), { passive: false });
+  document.addEventListener("touchmove", (e) => onMove(e.touches[0]), { passive: false });
+  document.addEventListener("touchend", onUp);
+}
+
+function _bboxIsEdited() {
+  if (!_bboxEdit.active || !_bboxEdit.orig || !_bboxEdit.current) return false;
+  return _bboxEdit.orig.some((v, i) => v !== _bboxEdit.current[i]);
+}
+
+function _updateBboxStatus() {
+  const status = document.getElementById("bbox-status");
+  if (!status) return;
+  if (_bboxIsEdited()) {
+    const [x1, y1, x2, y2] = _bboxEdit.current;
+    status.textContent = `edited: [${x1}, ${y1}, ${x2}, ${y2}] — will be saved with the next correction`;
+    status.classList.add("bbox-status-edited");
+  } else {
+    status.textContent = "drag corners or edges to resize · drag inside the box to move";
+    status.classList.remove("bbox-status-edited");
+  }
+}
+
+function resetBbox() {
+  if (!_bboxEdit.active) return;
+  _bboxEdit.current = [..._bboxEdit.orig];
+  _renderBbox();
+  _updateBboxStatus();
+}
+
+function _consumeEditedBbox() {
+  // Returns the edited bbox (and clears the dirty state) if it differs from
+  // the original; null otherwise. Called when a correction is submitted so
+  // the payload includes the new bbox iff the user actually moved it.
+  if (!_bboxIsEdited()) return null;
+  const out = [..._bboxEdit.current];
+  // Don't actually reset state — let the user see the same bbox if they
+  // open the modal again. _bboxEdit.active gets cleared on modal close.
+  return out;
 }
 
 // Click handler for the "ⓘ why no thumbnail?" link next to Recent events:
@@ -2393,13 +2619,16 @@ function openFrameSavePolicy() {
 function _initRoiModal() {
   const modal = document.getElementById("roi-modal");
   if (!modal) return;
+  const close = () => {
+    modal.classList.add("hidden");
+    _bboxEdit.active = false;     // forget any pending bbox edit on close
+    _bboxEdit.eventId = null;
+  };
   modal.addEventListener("click", (e) => {
-    if (e.target.dataset.roiClose) modal.classList.add("hidden");
+    if (e.target.dataset.roiClose) close();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !modal.classList.contains("hidden")) {
-      modal.classList.add("hidden");
-    }
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) close();
   });
 }
 

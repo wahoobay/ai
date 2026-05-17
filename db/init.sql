@@ -260,6 +260,7 @@ CREATE TABLE IF NOT EXISTS detection_corrections (
     corrected_species_id  TEXT,
     not_a_fish            BOOLEAN NOT NULL DEFAULT FALSE,
     is_endorsement        BOOLEAN NOT NULL DEFAULT FALSE,  -- reviewer hit "Looks right"; corrected_name == best_name
+    corrected_bbox        INTEGER[],               -- [x1,y1,x2,y2] in source pixel space when reviewer redrew the box
     confidence            TEXT NOT NULL DEFAULT 'probable',  -- 'certain' | 'probable' | 'uncertain'
     reviewer              TEXT,
     notes                 TEXT,

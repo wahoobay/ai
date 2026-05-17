@@ -57,6 +57,7 @@ class CorrectionIn(BaseModel):
     corrected_species_id: str | None = None
     not_a_fish: bool = False
     is_endorsement: bool = False  # reviewer hit "Looks right" — corrected_name == best_name
+    corrected_bbox: list[int] | None = None  # [x1,y1,x2,y2] in source pixels if reviewer redrew
     confidence: str = Field("probable", pattern="^(certain|probable|uncertain)$")
     reviewer: str | None = None
     notes: str | None = None
@@ -98,6 +99,22 @@ def _crop_roi(
         scale = max_edge / longest
         roi = roi.resize((max(1, int(rw * scale)), max(1, int(rh * scale))), Image.LANCZOS)
     return roi
+
+
+def _resize_frame(image_path: Path, max_edge: int) -> Image.Image:
+    """Return the source frame downscaled so the longest edge is at most
+    ``max_edge`` pixels. No bbox is drawn. Used by the reviewer modal's
+    edit-bbox mode — the SVG overlay handles the bbox interactively, so
+    the underlying image must be unannotated.
+    """
+    with Image.open(image_path) as src:
+        src.load()
+        frame = src.convert("RGB").copy()
+    W, H = frame.size
+    if max(W, H) > max_edge:
+        scale = max_edge / max(W, H)
+        frame = frame.resize((max(1, int(W * scale)), max(1, int(H * scale))), Image.LANCZOS)
+    return frame
 
 
 def _annotate_frame(
@@ -547,14 +564,19 @@ def build_app() -> FastAPI:
     @app.get("/api/detections/{event_id}/frame.jpg")
     async def detection_frame(
         event_id: int,
-        size: int = Query(1280, ge=320, le=1920),
+        size: int = Query(1280, ge=320, le=4096),
+        annotate: bool = Query(True),
     ) -> Response:
-        """Return the full source frame with the detection bbox drawn on it.
+        """Return the full source frame, optionally with the detection bbox
+        drawn on it.
 
-        Click-to-enlarge view in the reviewer modal — gives scene context
-        (water clarity, other fish, depth) that a cropped ROI loses. The
-        bbox is drawn in the dashboard accent color with the species label
-        above it.
+        Default (annotate=True): bbox drawn in the dashboard accent colour
+        with the species label above it, for the modal's read-only context
+        view.
+
+        annotate=False: raw frame with no overlays. The reviewer's modal
+        uses this when entering bbox-edit mode so the SVG overlay can
+        manipulate the box on a clean background.
         """
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
@@ -595,9 +617,14 @@ def build_app() -> FastAPI:
             label_parts.append(f"{float(row['best_accuracy']) * 100:.0f}%")
         label = " · ".join(label_parts) if label_parts else None
         try:
-            img = await asyncio.get_running_loop().run_in_executor(
-                None, _annotate_frame, path, bbox, label, size,
-            )
+            if annotate:
+                img = await asyncio.get_running_loop().run_in_executor(
+                    None, _annotate_frame, path, bbox, label, size,
+                )
+            else:
+                img = await asyncio.get_running_loop().run_in_executor(
+                    None, _resize_frame, path, size,
+                )
         except Exception as e:
             log.warning("frame annotate failed for event %s: %s", event_id, e)
             return JSONResponse({"error": f"annotate failed: {e}"}, status_code=500)
@@ -988,19 +1015,32 @@ def build_app() -> FastAPI:
                 {"error": "provide corrected_name, corrected_species_id, or set not_a_fish"},
                 status_code=400,
             )
+        # Validate corrected_bbox shape if provided — must be exactly four
+        # integers, x1 < x2 and y1 < y2. Anything else is a client bug and
+        # we reject rather than silently writing garbage to Postgres.
+        bbox = body.corrected_bbox
+        if bbox is not None:
+            if len(bbox) != 4 or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+                return JSONResponse(
+                    {"error": "corrected_bbox must be [x1,y1,x2,y2] with x1<x2 and y1<y2"},
+                    status_code=400,
+                )
+            bbox = [int(v) for v in bbox]
+
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
                     """
                     INSERT INTO detection_corrections
                     (event_id, corrected_name, corrected_species_id,
-                     not_a_fish, is_endorsement, confidence, reviewer, notes)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                     not_a_fish, is_endorsement, corrected_bbox,
+                     confidence, reviewer, notes)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id, created_at
                     """,
                     (body.event_id, body.corrected_name, body.corrected_species_id,
-                     body.not_a_fish, body.is_endorsement, body.confidence,
-                     body.reviewer, body.notes),
+                     body.not_a_fish, body.is_endorsement, bbox,
+                     body.confidence, body.reviewer, body.notes),
                 )
                 row = await cur.fetchone()
         return JSONResponse({

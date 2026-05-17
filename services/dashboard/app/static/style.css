@@ -1072,6 +1072,59 @@ li.empty { color: var(--muted); font-style: italic; }
   display: block;
 }
 .roi-modal-meta { font-size: 11px; color: var(--muted); text-align: center; }
+
+/* Bbox editor — SVG overlay on top of the raw frame, with corner + edge
+   handles the reviewer can drag to redraw the box. Lives in the same
+   .roi-modal-imgwrap slot as the read-only image; we toggle one visible
+   at a time by adding .hidden to whichever is inactive. */
+.bbox-editor {
+  width: 100%;
+  max-height: calc(92vh - 160px);
+  aspect-ratio: auto;
+  background: #000;
+  border-radius: 4px;
+  user-select: none;
+  cursor: default;
+}
+.bbox-editor.hidden { display: none; }
+.bbox-edit-rect {
+  cursor: move;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.bbox-handle {
+  fill: #4fc1ff;
+  stroke: rgba(11, 26, 36, 0.8);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.bbox-handle:hover { fill: #fff; }
+.bbox-handle-nw, .bbox-handle-se { cursor: nwse-resize; }
+.bbox-handle-ne, .bbox-handle-sw { cursor: nesw-resize; }
+.bbox-handle-n,  .bbox-handle-s  { cursor: ns-resize; }
+.bbox-handle-e,  .bbox-handle-w  { cursor: ew-resize; }
+
+.roi-modal-edit-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+}
+.bbox-status { color: var(--muted); }
+.bbox-status-edited { color: #f5b941; }
+.roi-modal-edit-toolbar button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid #1f3b4f;
+  border-radius: 3px;
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.roi-modal-edit-toolbar button:hover { color: var(--ink); border-color: var(--accent); }
 /* Mirror of the list-card action panel; lets a reviewer act on the
    prediction directly from the lightbox. Slightly larger hit targets than
    the inline list controls since the modal has the real estate. */

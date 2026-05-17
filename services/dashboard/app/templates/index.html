@@ -548,10 +548,25 @@
         <div class="roi-modal-toggle" role="tablist">
           <button id="roi-tab-roi"   class="roi-tab active"  onclick="switchRoiView('roi')">ROI</button>
           <button id="roi-tab-frame" class="roi-tab"         onclick="switchRoiView('frame')">Full frame</button>
+          <button id="roi-tab-edit"  class="roi-tab"         onclick="switchRoiView('edit')">✎ Edit bbox</button>
         </div>
       </div>
       <div class="roi-modal-imgwrap">
         <img id="roi-modal-img" src="" alt="">
+        <!-- Bbox editor: shown only when switchRoiView('edit') is active.
+             SVG viewBox is set to the source frame's pixel dimensions, so the
+             bbox rect + handles work in source-pixel coordinates and only
+             need scaling for the final API payload (which is already in the
+             same coord space as detection_events.bbox). -->
+        <svg id="roi-modal-svg" class="hidden bbox-editor" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+          <image id="roi-modal-svg-img" x="0" y="0" />
+          <rect id="roi-modal-bbox" class="bbox-edit-rect" fill="rgba(79,193,255,0.12)" stroke="#4fc1ff" />
+          <g id="roi-modal-bbox-handles"></g>
+        </svg>
+      </div>
+      <div class="roi-modal-edit-toolbar" id="roi-modal-edit-toolbar" style="display:none">
+        <span class="bbox-status" id="bbox-status">drag corners or edges to resize · drag inside the box to move</span>
+        <button class="secondary" onclick="resetBbox()">Reset</button>
       </div>
       <div class="roi-modal-meta" id="roi-modal-meta">—</div>
       <div class="roi-modal-actions" id="roi-modal-actions" data-event-id="">
