@@ -1444,19 +1444,37 @@ function _windRose(svg, samples, opts = {}) {
     counts[sec][band >= 0 ? band : BANDS.length - 1] += 1;
   }
 
-  const sectorTotals = counts.map(b => b.reduce((a, c) => a + c, 0));
-  const maxTotal = Math.max(1, ...sectorTotals);
+  // Nested (overlapping) wedges, not stacked. Each band's radius represents
+  // its OWN absolute sample count, so a rare band (moderate, strong) shows
+  // as a short wedge even when it sits in the busiest sector. The earlier
+  // stacked-band convention made rare bands appear to reach the outer ring
+  // simply because they were drawn on top of a tall calm/light stack —
+  // visually overstating their frequency.
+  let maxBandCount = 0;
+  for (let i = 0; i < N_SECTORS; i++) {
+    for (let b = 0; b < BANDS.length; b++) {
+      if (counts[i][b] > maxBandCount) maxBandCount = counts[i][b];
+    }
+  }
+  maxBandCount = Math.max(1, maxBandCount);
 
   // SVG angle convention: 0° at 3 o'clock, clockwise positive. Convert
   // meteorological compass-degree (0° = N = 12 o'clock) by subtracting 90°.
   const toRad = (deg) => (deg - 90) * Math.PI / 180;
   const pointOnCircle = (r, deg) => [cx + r * Math.cos(toRad(deg)), cy + r * Math.sin(toRad(deg))];
 
-  // Concentric reference rings (25/50/75/100% of max sector)
-  let rings = "";
-  for (const frac of [0.25, 0.5, 0.75, 1]) {
-    rings += `<circle cx="${cx}" cy="${cy}" r="${(maxR * frac).toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+  // Concentric reference rings at 25 / 50 / 75 / 100 % of maxBandCount, with
+  // count labels along the N axis so the radial scale is unambiguous —
+  // "outer ring = N samples" rather than an opaque relative scale.
+  const ringPieces = [];
+  for (let k = 1; k <= 4; k++) {
+    const frac = k / 4;
+    const r = maxR * frac;
+    ringPieces.push(`<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`);
+    const labelCount = Math.round(maxBandCount * frac);
+    ringPieces.push(`<text x="${(cx + 6).toFixed(1)}" y="${(cy - r + 2).toFixed(1)}" font-size="9" fill="var(--muted)">${labelCount}</text>`);
   }
+  const rings = ringPieces.join("");
 
   // Cardinal-direction labels
   const labels = [
@@ -1467,46 +1485,32 @@ function _windRose(svg, samples, opts = {}) {
     return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="12" fill="var(--muted)">${text}</text>`;
   }).join("");
 
-  // Per-sector stacked ring-slices
-  const slices = [];
-  for (let i = 0; i < N_SECTORS; i++) {
-    const total = sectorTotals[i];
-    if (!total) continue;
-    const outerR = maxR * (total / maxTotal);
-    const a1 = i * sectorDeg - sectorDeg / 2;
-    const a2 = i * sectorDeg + sectorDeg / 2;
-    let prevR = 0;
-    for (let b = 0; b < BANDS.length; b++) {
+  // One wedge per non-empty (sector, band). Sort descending by count so the
+  // smaller wedges render LAST (on top) — that way every band stays visible
+  // even when fully nested inside a larger band's wedge for the same sector.
+  const wedges = [];
+  for (let b = 0; b < BANDS.length; b++) {
+    for (let i = 0; i < N_SECTORS; i++) {
       const n = counts[i][b];
       if (!n) continue;
-      const bandR = prevR + outerR * (n / total);
-      // ring slice from prevR..bandR, angle a1..a2
-      const [p1x, p1y] = pointOnCircle(prevR, a1);
-      const [p2x, p2y] = pointOnCircle(prevR, a2);
-      const [p3x, p3y] = pointOnCircle(bandR, a2);
+      const bandR = (n / maxBandCount) * maxR;
+      const a1 = i * sectorDeg - sectorDeg / 2;
+      const a2 = i * sectorDeg + sectorDeg / 2;
       const [p4x, p4y] = pointOnCircle(bandR, a1);
+      const [p3x, p3y] = pointOnCircle(bandR, a2);
       const largeArc = (a2 - a1) > 180 ? 1 : 0;
-      let d;
-      if (prevR === 0) {
-        // inner radius is 0 → degenerate, just a wedge
-        d = `M ${cx} ${cy} L ${p4x.toFixed(1)} ${p4y.toFixed(1)} ` +
-            `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 1 ${p3x.toFixed(1)} ${p3y.toFixed(1)} Z`;
-      } else {
-        d = `M ${p1x.toFixed(1)} ${p1y.toFixed(1)} ` +
-            `A ${prevR.toFixed(1)} ${prevR.toFixed(1)} 0 ${largeArc} 1 ${p2x.toFixed(1)} ${p2y.toFixed(1)} ` +
-            `L ${p3x.toFixed(1)} ${p3y.toFixed(1)} ` +
-            `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 0 ${p4x.toFixed(1)} ${p4y.toFixed(1)} Z`;
-      }
-      // Custom hover via data-* attributes; cheaper than per-path event
-      // listeners and renders a styled tooltip instead of the browser's
-      // half-second native title-attribute popup.
+      const d = `M ${cx} ${cy} L ${p4x.toFixed(1)} ${p4y.toFixed(1)} ` +
+                `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 1 ${p3x.toFixed(1)} ${p3y.toFixed(1)} Z`;
       const tip = `${labels16(i)} · ${BANDS[b].label} · ${n} sample${n === 1 ? "" : "s"}`;
-      slices.push(`<path class="wr-slice" d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.4)" stroke-width="0.5" data-tip="${tip.replace(/"/g, "&quot;")}"></path>`);
-      prevR = bandR;
+      wedges.push({ count: n, fill: BANDS[b].fill, d, tip });
     }
   }
+  wedges.sort((a, b) => b.count - a.count);
+  const slices = wedges.map(w =>
+    `<path class="wr-slice" d="${w.d}" fill="${w.fill}" stroke="rgba(11,26,36,0.5)" stroke-width="0.5" data-tip="${w.tip.replace(/"/g, "&quot;")}"></path>`,
+  );
 
-  // Legend (compact, bottom of the SVG)
+  // Legend (compact, bottom). Right side carries the radial-scale annotation.
   const legendY = H - 6;
   const legendX0 = 8;
   const legendItems = BANDS.map((b, i) => {
@@ -1514,8 +1518,9 @@ function _windRose(svg, samples, opts = {}) {
     return `<rect x="${x}" y="${legendY - 9}" width="10" height="10" rx="2" fill="${b.fill}"/>` +
            `<text x="${x + 14}" y="${legendY}" font-size="10" fill="var(--muted)">${b.label.split(" (")[0]}</text>`;
   }).join("");
+  const scaleNote = `<text x="${W - 8}" y="${legendY}" font-size="9" fill="var(--muted)" text-anchor="end">rings = sample count</text>`;
 
-  svg.innerHTML = `${rings}${labels}${slices.join("")}${legendItems}`;
+  svg.innerHTML = `${rings}${labels}${slices.join("")}${legendItems}${scaleNote}`;
   _attachWindRoseTooltip(svg);
 }
 
