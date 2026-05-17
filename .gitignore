@@ -21,6 +21,12 @@ assets/community_clips/
 # scripts/build_finetune_dataset_from_clips.py.
 data/fine_tune/
 
+# Training runs (checkpoints, history JSON, per-class reports). Each run
+# is ~200 MB of weights + a few KB of metrics. Reproducible from the
+# script + the fine-tune dataset; we track the metrics into commit
+# messages or memory rather than checking weights in.
+data/baseline_runs/
+
 # Runtime artifacts
 frames/
 logs/
