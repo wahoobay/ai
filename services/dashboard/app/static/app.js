@@ -1495,9 +1495,11 @@ function _windRose(svg, samples, opts = {}) {
             `L ${p3x.toFixed(1)} ${p3y.toFixed(1)} ` +
             `A ${bandR.toFixed(1)} ${bandR.toFixed(1)} 0 ${largeArc} 0 ${p4x.toFixed(1)} ${p4y.toFixed(1)} Z`;
       }
-      slices.push(`<path d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.4)" stroke-width="0.5">
-        <title>${labels16(i)} · ${BANDS[b].label} · ${n} sample${n === 1 ? "" : "s"}</title>
-      </path>`);
+      // Custom hover via data-* attributes; cheaper than per-path event
+      // listeners and renders a styled tooltip instead of the browser's
+      // half-second native title-attribute popup.
+      const tip = `${labels16(i)} · ${BANDS[b].label} · ${n} sample${n === 1 ? "" : "s"}`;
+      slices.push(`<path class="wr-slice" d="${d}" fill="${BANDS[b].fill}" stroke="rgba(11,26,36,0.4)" stroke-width="0.5" data-tip="${tip.replace(/"/g, "&quot;")}"></path>`);
       prevR = bandR;
     }
   }
@@ -1512,11 +1514,40 @@ function _windRose(svg, samples, opts = {}) {
   }).join("");
 
   svg.innerHTML = `${rings}${labels}${slices.join("")}${legendItems}`;
+  _attachWindRoseTooltip(svg);
 }
 
 // 16-sector compass label (N, NNE, NE, ENE, E, ...)
 function labels16(idx) {
   return ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"][idx % 16];
+}
+
+// Cursor-following HTML tooltip for the wind-rose wedges. Falls back to a
+// no-op when the body already has a `.wb-tip` element (idempotent across
+// re-renders). Listens on the SVG itself rather than attaching per-path
+// handlers so re-rendering the rose doesn't accumulate stale listeners.
+function _attachWindRoseTooltip(svg) {
+  if (!svg || svg.dataset.tipBound) return;
+  svg.dataset.tipBound = "1";
+  let tipEl = document.getElementById("wb-tip");
+  if (!tipEl) {
+    tipEl = document.createElement("div");
+    tipEl.id = "wb-tip";
+    tipEl.className = "wb-tip";
+    document.body.appendChild(tipEl);
+  }
+  svg.addEventListener("mousemove", (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains("wr-slice") && t.dataset.tip) {
+      tipEl.textContent = t.dataset.tip;
+      tipEl.style.left = (e.clientX + 12) + "px";
+      tipEl.style.top  = (e.clientY + 12) + "px";
+      tipEl.classList.add("visible");
+    } else {
+      tipEl.classList.remove("visible");
+    }
+  });
+  svg.addEventListener("mouseleave", () => tipEl.classList.remove("visible"));
 }
 
 function _miniLine(svg, points, opts) {

@@ -584,6 +584,30 @@ li.empty { color: var(--muted); font-style: italic; }
    rose stays circular regardless of card width. */
 .chart-svg-wrap--square { display: flex; justify-content: center; }
 .chart-svg-wrap--square svg { aspect-ratio: 1 / 1; max-width: 360px; }
+.wr-slice { cursor: crosshair; transition: stroke 80ms; }
+.wr-slice:hover { stroke: var(--accent); stroke-width: 1.5; }
+
+/* Cursor-following tooltip for the wind rose (and any other custom chart
+   that wants a styled hover label — set data-tip on the target element
+   and use the same .wb-tip floating div). */
+.wb-tip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 2000;
+  padding: 6px 10px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid #1f3b4f;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 80ms ease-out;
+}
+.wb-tip.visible { opacity: 1; visibility: visible; }
 .chart-legend {
   margin-top: 8px;
   display: flex;
