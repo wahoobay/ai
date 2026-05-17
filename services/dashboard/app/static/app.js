@@ -250,8 +250,8 @@ function renderEventCard(r) {
   const acc = fmtPct(r.best_accuracy);
   const hasImage = !!r.image_path;
   const thumb = hasImage
-    ? `<img class="event-thumb" src="/api/detections/${r.id}/roi.jpg?size=160" alt="" loading="lazy" onerror="this.style.display='none'">`
-    : `<div class="event-thumb event-thumb-empty" title="no saved frame for this detection">—</div>`;
+    ? `<img class="event-thumb" src="/api/detections/${r.id}/roi.jpg?size=160" alt="" loading="lazy" onclick="openRoiModal(${r.id})" title="click to enlarge" onerror="this.style.display='none'">`
+    : `<div class="event-thumb event-thumb-empty" title="no saved frame on disk for this detection (worker saves frames selectively)">no frame</div>`;
   const meta = `${new Date(r.ts).toLocaleTimeString()} · ${short(r.source_name)} · frame ${r.frame_id}`;
   const canEndorse = hasImage && !!r.best_name;
   const endorseBtn = canEndorse
@@ -1955,6 +1955,62 @@ function _initSpeciesModal() {
   });
 }
 
+// ---------- ROI / full-frame lightbox (drill-into from event thumbnail) ----------
+
+let _roiModalEventId = null;
+let _roiModalView = "roi"; // "roi" | "frame"
+
+function openRoiModal(eventId) {
+  _roiModalEventId = eventId;
+  _roiModalView = "roi";
+  const modal = document.getElementById("roi-modal");
+  if (!modal) return;
+  const r = EVENT_CACHE.get(eventId);
+  const title = document.getElementById("roi-modal-title");
+  const meta  = document.getElementById("roi-modal-meta");
+  if (title) title.textContent = r?.best_name || `Event ${eventId}`;
+  if (meta) {
+    const parts = [];
+    if (r?.best_accuracy != null) parts.push(`${fmtPct(r.best_accuracy)} confidence`);
+    if (r?.ts) parts.push(new Date(r.ts).toLocaleString());
+    if (r?.source_name) parts.push(r.source_name);
+    if (r?.frame_id != null) parts.push(`frame ${r.frame_id}`);
+    meta.textContent = parts.join(" · ") || "—";
+  }
+  switchRoiView("roi");
+  modal.classList.remove("hidden");
+}
+
+function switchRoiView(view) {
+  _roiModalView = view;
+  const img = document.getElementById("roi-modal-img");
+  const tabRoi = document.getElementById("roi-tab-roi");
+  const tabFrame = document.getElementById("roi-tab-frame");
+  if (!img || _roiModalEventId == null) return;
+  if (view === "frame") {
+    img.src = `/api/detections/${_roiModalEventId}/frame.jpg?size=1600`;
+    tabRoi?.classList.remove("active");
+    tabFrame?.classList.add("active");
+  } else {
+    img.src = `/api/detections/${_roiModalEventId}/roi.jpg?size=1024`;
+    tabRoi?.classList.add("active");
+    tabFrame?.classList.remove("active");
+  }
+}
+
+function _initRoiModal() {
+  const modal = document.getElementById("roi-modal");
+  if (!modal) return;
+  modal.addEventListener("click", (e) => {
+    if (e.target.dataset.roiClose) modal.classList.add("hidden");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+      modal.classList.add("hidden");
+    }
+  });
+}
+
 // ---------- Camera toggle (live stream) ----------
 
 async function _initCameraToggle() {
@@ -2020,6 +2076,7 @@ initTrendsToggle();
 initReportsToggle();
 _initFishExplorerInteractions();
 _initSpeciesModal();
+_initRoiModal();
 _initCameraToggle();
 refreshAuthMode();
 setInterval(tick, 500);

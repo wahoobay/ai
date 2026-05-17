@@ -425,6 +425,25 @@
     </div>
   </div>
 
+  <!-- ROI lightbox: opens when a reviewer clicks an event thumbnail -->
+  <div id="roi-modal" class="roi-modal hidden" role="dialog" aria-modal="true" aria-labelledby="roi-modal-title">
+    <div class="roi-modal-backdrop" data-roi-close="1"></div>
+    <div class="roi-modal-card">
+      <button class="roi-modal-x" data-roi-close="1" aria-label="Close">✕</button>
+      <div class="roi-modal-header">
+        <h2 id="roi-modal-title">—</h2>
+        <div class="roi-modal-toggle" role="tablist">
+          <button id="roi-tab-roi"   class="roi-tab active"  onclick="switchRoiView('roi')">ROI</button>
+          <button id="roi-tab-frame" class="roi-tab"         onclick="switchRoiView('frame')">Full frame</button>
+        </div>
+      </div>
+      <div class="roi-modal-imgwrap">
+        <img id="roi-modal-img" src="" alt="">
+      </div>
+      <div class="roi-modal-meta" id="roi-modal-meta">—</div>
+    </div>
+  </div>
+
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

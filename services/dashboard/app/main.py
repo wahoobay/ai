@@ -100,6 +100,55 @@ def _crop_roi(
     return roi
 
 
+def _annotate_frame(
+    image_path: Path,
+    bbox: list[int],
+    label: str | None,
+    max_edge: int,
+) -> Image.Image:
+    """Draw the detection bbox on the full source frame for context view.
+
+    Lets a reviewer see the scene around the fish — water clarity, other
+    fish, depth — alongside the cropped ROI. Stroke + label use the
+    dashboard's accent color.
+    """
+    from PIL import ImageDraw, ImageFont
+    x1, y1, x2, y2 = bbox
+    with Image.open(image_path) as src:
+        src.load()
+        frame = src.convert("RGB").copy()
+    W, H = frame.size
+    if max(W, H) > max_edge:
+        scale = max_edge / max(W, H)
+        nw, nh = max(1, int(W * scale)), max(1, int(H * scale))
+        frame = frame.resize((nw, nh), Image.LANCZOS)
+        x1, y1, x2, y2 = (int(c * scale) for c in (x1, y1, x2, y2))
+    draw = ImageDraw.Draw(frame)
+    stroke_color = (79, 193, 255)  # dashboard accent
+    stroke_width = max(2, int(max(frame.size) / 400))
+    for inset in range(stroke_width):
+        draw.rectangle(
+            [(x1 - inset, y1 - inset), (x2 + inset, y2 + inset)],
+            outline=stroke_color,
+        )
+    if label:
+        try:
+            font = ImageFont.load_default(size=max(12, int(max(frame.size) / 70)))
+        except (TypeError, OSError):
+            font = ImageFont.load_default()
+        bbox_txt = draw.textbbox((0, 0), label, font=font)
+        tw = bbox_txt[2] - bbox_txt[0]
+        th = bbox_txt[3] - bbox_txt[1]
+        pad = 4
+        ly1 = max(0, y1 - th - 2 * pad)
+        draw.rectangle(
+            [(x1, ly1), (x1 + tw + 2 * pad, ly1 + th + 2 * pad)],
+            fill=stroke_color,
+        )
+        draw.text((x1 + pad, ly1 + pad), label, fill=(11, 26, 36), font=font)
+    return frame
+
+
 def _env(key: str, default: str) -> str:
     return os.environ.get(key, default)
 
@@ -482,6 +531,71 @@ def build_app() -> FastAPI:
                 # ROI is immutable for an event_id (bbox + frame don't change)
                 "Cache-Control": "public, max-age=86400, immutable",
             },
+        )
+
+    @app.get("/api/detections/{event_id}/frame.jpg")
+    async def detection_frame(
+        event_id: int,
+        size: int = Query(1280, ge=320, le=1920),
+    ) -> Response:
+        """Return the full source frame with the detection bbox drawn on it.
+
+        Click-to-enlarge view in the reviewer modal — gives scene context
+        (water clarity, other fish, depth) that a cropped ROI loses. The
+        bbox is drawn in the dashboard accent color with the species label
+        above it.
+        """
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT de.bbox, de.best_name, de.best_accuracy,
+                           COALESCE(
+                             de.image_path,
+                             (SELECT image_path FROM saved_frames sf
+                               WHERE sf.frame_id = de.frame_id
+                                 AND sf.source_name = de.source_name
+                               ORDER BY sf.ts DESC LIMIT 1)
+                           ) AS image_path
+                      FROM detection_events de
+                     WHERE de.id = %s
+                    """,
+                    (event_id,),
+                )
+                row = await cur.fetchone()
+        if row is None:
+            return JSONResponse({"error": "event not found"}, status_code=404)
+        image_path = row.get("image_path")
+        bbox = row.get("bbox") or []
+        if not image_path or len(bbox) != 4:
+            return JSONResponse(
+                {"error": "no frame saved for this detection"}, status_code=404,
+            )
+        path = Path(image_path)
+        if not path.exists():
+            return JSONResponse({"error": "frame file missing on disk"}, status_code=404)
+        label_parts = []
+        if row.get("best_name"):
+            label_parts.append(str(row["best_name"]))
+        if row.get("best_accuracy") is not None:
+            label_parts.append(f"{float(row['best_accuracy']) * 100:.0f}%")
+        label = " · ".join(label_parts) if label_parts else None
+        try:
+            img = await asyncio.get_running_loop().run_in_executor(
+                None, _annotate_frame, path, bbox, label, size,
+            )
+        except Exception as e:
+            log.warning("frame annotate failed for event %s: %s", event_id, e)
+            return JSONResponse({"error": f"annotate failed: {e}"}, status_code=500)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=82, optimize=True)
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
 
     @app.get("/api/species_counts")
