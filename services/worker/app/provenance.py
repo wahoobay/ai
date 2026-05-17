@@ -58,20 +58,26 @@ def _canonical_config_hash(cfg) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _model_version(detector_path: str, classifier_module_dir: str) -> str:
-    """Best-effort: read info.json next to each checkpoint for a human label."""
+def _model_version(detector_path: str, classifier_info_path: Path, backend: str) -> str:
+    """Best-effort: read info.json next to each checkpoint for a human label.
+    For the v2 backend the "info.json" path points at the run dir's
+    config.json instead, which holds arch + img_size + split mode."""
     parts = []
-    for label, pth in (
-        ("det", Path(detector_path).with_name("info.json")),
-        ("cls", Path(classifier_module_dir) / "info.json"),
-    ):
-        try:
-            info = json.loads(pth.read_text())
-            version = info.get("version")
-            model = info.get("model")
-            parts.append(f"{label}:{model or '?'}@{version or '?'}")
-        except Exception:
-            parts.append(f"{label}:unknown")
+    try:
+        info = json.loads(Path(detector_path).with_name("info.json").read_text())
+        parts.append(f"det:{info.get('model') or '?'}@{info.get('version') or '?'}")
+    except Exception:
+        parts.append("det:unknown")
+    try:
+        info = json.loads(classifier_info_path.read_text())
+        if backend == "v2":
+            arch = info.get("arch") or "?"
+            split = info.get("split_mode") or "?"
+            parts.append(f"cls:{arch}@{split}")
+        else:
+            parts.append(f"cls:{info.get('model') or '?'}@{info.get('version') or '?'}")
+    except Exception:
+        parts.append("cls:unknown")
     return " | ".join(parts)
 
 
@@ -96,14 +102,25 @@ def compute(cfg) -> Provenance:
     except Exception as e:
         log.warning("failed to hash detector checkpoint: %s", e)
         det_sha = "unknown"
+
+    # Hash whichever classifier the active backend will load — otherwise
+    # detection_events.classifier_sha256 lies about which weights produced
+    # the row when we're running v2.
+    backend = (getattr(cfg, "classifier_backend", "v2") or "v2").strip().lower()
+    if backend == "v2":
+        cls_ckpt_path = cfg.classifier_v2_checkpoint
+        cls_info_path = Path(cfg.classifier_v2_checkpoint).with_name("config.json")
+    else:
+        cls_ckpt_path = cfg.classifier_path
+        cls_info_path = Path(cfg.classifier_inference_module_dir) / "info.json"
     try:
-        cls_sha = _sha256_file(cfg.classifier_path)
+        cls_sha = _sha256_file(cls_ckpt_path)
     except Exception as e:
-        log.warning("failed to hash classifier checkpoint: %s", e)
+        log.warning("failed to hash classifier checkpoint (%s): %s", cls_ckpt_path, e)
         cls_sha = "unknown"
 
     prov = Provenance(
-        model_version=_model_version(cfg.detector_path, cfg.classifier_inference_module_dir),
+        model_version=_model_version(cfg.detector_path, cls_info_path, backend),
         detector_sha256=det_sha[:16],
         classifier_sha256=cls_sha[:16],
         config_hash=_canonical_config_hash(cfg),

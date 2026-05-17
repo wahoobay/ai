@@ -90,21 +90,36 @@ def run_inference_worker(
 
     import cv2
 
-    from .fishial import FishialPipeline
     from .overlay import annotate
     from .persistence import EventLog, ImageSaver, PgWriter
     from .provenance import compute as compute_provenance
     from .tracker import DetectionSmoother
+
+    # Pick the classifier backend at subprocess boot. Default is "v2"
+    # (DINOv2 ViT-S/14 from-scratch); "fishial" keeps the legacy
+    # 866-class Fishial pipeline available as a one-flag revert.
+    backend = (cfg.classifier_backend or "v2").strip().lower()
+    if backend == "v2":
+        from .classifier_v2 import ClassifierV2Pipeline as _Pipeline
+    elif backend == "fishial":
+        from .fishial import FishialPipeline as _Pipeline
+    else:
+        raise RuntimeError(
+            f"unknown CLASSIFIER_BACKEND={backend!r}; expected 'v2' or 'fishial'"
+        )
 
     logging.basicConfig(
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
 
-    log.info("inference subprocess: starting (pid=%d, device=%s)", os.getpid(), cfg.device)
+    log.info(
+        "inference subprocess: starting (pid=%d, device=%s, classifier_backend=%s)",
+        os.getpid(), cfg.device, backend,
+    )
     provenance = compute_provenance(cfg)
 
-    fishial = FishialPipeline(cfg)
+    classifier = _Pipeline(cfg)
     event_log = EventLog(cfg.events_log_dir)
     saver = ImageSaver(cfg)
 
@@ -196,7 +211,7 @@ def run_inference_worker(
                 log.info("smoother reset (post-fallback transition)")
 
             t0 = time.time()
-            detections = fishial.process_frame(item.frame_bgr)
+            detections = classifier.process_frame(item.frame_bgr)
             infer_ms = (time.time() - t0) * 1000
 
             had_fish = bool(detections)

@@ -21,6 +21,12 @@ fi
 
 export VIDEO_SOURCE="${VIDEO_SOURCE:-file://$(pwd)/data/test_videos}"
 export DETECTOR_PATH="${DETECTOR_PATH:-$(pwd)/data/models/detector_v26/model.pt}"
+# v2 (default backend) — DINOv2 ViT-S/14 trained from scratch on Wahoo Bay
+# crops + iNat supplements. Set CLASSIFIER_BACKEND=fishial to roll back.
+export CLASSIFIER_BACKEND="${CLASSIFIER_BACKEND:-v2}"
+export CLASSIFIER_V2_CHECKPOINT="${CLASSIFIER_V2_CHECKPOINT:-$(pwd)/data/models/classifier_v2/checkpoint_best.pt}"
+export CLASSIFIER_V2_CLASSES_JSON="${CLASSIFIER_V2_CLASSES_JSON:-$(pwd)/data/models/classifier_v2/classes.json}"
+# Legacy Fishial (one-flag revert path) — kept available locally too.
 export CLASSIFIER_PATH="${CLASSIFIER_PATH:-$(pwd)/data/models/classifier_v0_10_2/model.pt}"
 export CLASSIFIER_INFERENCE_MODULE_DIR="${CLASSIFIER_INFERENCE_MODULE_DIR:-$(pwd)/data/models/classifier_v0_10_2}"
 export EVENTS_LOG_DIR="${EVENTS_LOG_DIR:-$(pwd)/logs/events}"

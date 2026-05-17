@@ -43,20 +43,27 @@ WORKDIR /app
 COPY services/worker/requirements.txt /app/requirements.txt
 RUN python -m pip install --no-cache-dir -r /app/requirements.txt
 
-# Fishial model artifacts (detector + classifier bundle + the vendored
-# inference.py the worker loads into sys.path at runtime).
+# Model artifacts. We bake in both the v2 (DINOv2 ViT-S/14, from-scratch
+# Wahoo Bay classifier — the default backend) and the legacy Fishial
+# bundle so reverting is a single env-var flip (CLASSIFIER_BACKEND=fishial)
+# instead of a rebuild. Detector is shared by both.
 COPY data/models/detector_v26       /data/models/detector_v26
+COPY data/models/classifier_v2      /data/models/classifier_v2
 COPY data/models/classifier_v0_10_2 /data/models/classifier_v0_10_2
 
 # Application code last so dev rebuilds skip the slow layers above.
 COPY services/worker/app /app/app
 
 # Sensible runtime defaults; everything is overridable via env or .env.
+# CLASSIFIER_BACKEND=v2 is the new default; set to "fishial" to roll back.
 ENV PYTHONPATH=/app \
     WORKER_HTTP_PORT=8081 \
+    CLASSIFIER_BACKEND=v2 \
     DETECTOR_PATH=/data/models/detector_v26/model.pt \
     CLASSIFIER_PATH=/data/models/classifier_v0_10_2/model.pt \
     CLASSIFIER_INFERENCE_MODULE_DIR=/data/models/classifier_v0_10_2 \
+    CLASSIFIER_V2_CHECKPOINT=/data/models/classifier_v2/checkpoint_best.pt \
+    CLASSIFIER_V2_CLASSES_JSON=/data/models/classifier_v2/classes.json \
     EVENTS_LOG_DIR=/data/logs/events \
     FRAMES_DIR=/data/frames
 

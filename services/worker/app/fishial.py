@@ -9,32 +9,20 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
 from ultralytics import YOLO
 
+from .pipeline_types import FishDetection, Prediction
+
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class Prediction:
-    name: str
-    species_id: str | None
-    accuracy: float
-
-
-@dataclass
-class FishDetection:
-    bbox: tuple[int, int, int, int]
-    det_conf: float
-    topk: list[Prediction]
-
-    @property
-    def best(self) -> Prediction | None:
-        return self.topk[0] if self.topk else None
+# Re-export so existing `from .fishial import FishDetection, Prediction`
+# call sites keep working unchanged after the dataclass move.
+__all__ = ["FishDetection", "Prediction", "FishialPipeline"]
 
 
 class _AutocastForward:

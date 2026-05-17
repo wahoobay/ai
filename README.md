@@ -1,11 +1,18 @@
 # Wahoo Bay · Real-time Fish ID
 
 Real-time fish detection and species identification for the underwater
-cameras at Wahoo Bay (Pompano Beach, FL). Uses the open-source
-[Fishial.ai](https://github.com/fishial/fish-identification) detector and
-classifier (MIT-licensed) on a single NVIDIA H200, exposes a live web
-dashboard, and persists every detection to Postgres for ecological
-analysis and model fine-tuning.
+cameras at Wahoo Bay (Pompano Beach, FL). Detector is the open-source
+[Fishial.ai](https://github.com/fishial/fish-identification) YOLO v26
+nano (MIT-licensed); the **v2 classifier** is a DINOv2 ViT-S/14 trained
+from random init on Wahoo Bay community footage + iNaturalist
+supplements (223 species). Runs on a single NVIDIA H200, exposes a live
+web dashboard, and persists every detection to Postgres for ecological
+analysis and continual fine-tuning.
+
+The legacy Fishial 866-class classifier remains bundled and is one env
+var away (`CLASSIFIER_BACKEND=fishial`) for fast rollback. See
+[`assets/LICENSES_AND_CREDITS.md`](assets/LICENSES_AND_CREDITS.md) for
+the dataset and weights licence picture.
 
 Currently running 24/7 on the lab DGX with a public demo URL via a
 Cloudflare quick tunnel. The architecture is designed to lift-and-shift
@@ -55,6 +62,10 @@ to manage the running services.
   classifier checkpoint going live.
 - [`docs/reviewer_guide.md`](docs/reviewer_guide.md) — non-technical guide
   for the humans submitting corrections.
+- [`assets/LICENSES_AND_CREDITS.md`](assets/LICENSES_AND_CREDITS.md) —
+  source-by-source dataset provenance, licence breakdown, attribution
+  obligations, and what the trained v2 checkpoint may / may not be used
+  for. Read before any public release or commercial use.
 - [`PLAN.md`](PLAN.md) — original architecture/deployment plan (week 1).
   Some details have evolved since; defer to the `docs/` files for the
   current state.
@@ -125,9 +136,23 @@ last documentation update:
 
 ## License + attribution
 
-- This project: MIT (matching Fishial's licensing).
-- Detector + classifier weights: Fishial.ai (MIT) — see
-  `data/models/{detector_v26,classifier_v0_10_2}/info.json`.
+- **This project's source code:** MIT.
+- **Detector weights** (`data/models/detector_v26`): Fishial.ai, MIT —
+  see the `info.json` next to the checkpoint.
+- **Legacy classifier weights** (`data/models/classifier_v0_10_2`):
+  Fishial.ai, MIT — available as the `CLASSIFIER_BACKEND=fishial`
+  fallback.
+- **v2 classifier weights** (`data/models/classifier_v2`): this project,
+  MIT for the architecture and training code, but the trained
+  parameters inherit non-commercial / no-derivatives constraints from
+  a subset of the training data. See
+  [`assets/LICENSES_AND_CREDITS.md`](assets/LICENSES_AND_CREDITS.md)
+  for the exact picture and what's required before publication or
+  commercial release.
+- **Training data sources:** Wahoo Bay community Drive contributors
+  (internal-use grant), [iNaturalist](https://www.inaturalist.org/)
+  (mixed CC licences — see credits file), and the
+  [WoRMS](https://www.marinespecies.org/) editorial board for taxonomy.
 - VITB Octopus camera (SEAHIVECAM hardware): View Into The Blue.
 - SpotAI is the camera-management platform Wahoo Bay uses; this project
   bypasses SpotAI and connects to the cameras directly.

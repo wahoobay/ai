@@ -32,9 +32,21 @@ class Config:
     realtime_pacing: bool
 
     # models
+    # Which classifier backend to instantiate in the inference subprocess:
+    #   "v2"      — DINOv2 ViT-S/14 trained from scratch on Wahoo Bay crops
+    #               + iNaturalist supplements (223 classes). Default.
+    #   "fishial" — vendored Fishial v0.10.2 ArcFace + sub-centre + KNN
+    #               (866 classes). Kept available for one-flag revert.
+    classifier_backend: str
     detector_path: str
     classifier_path: str
     classifier_inference_module_dir: str
+    # v2-specific (ignored when classifier_backend != "v2"):
+    classifier_v2_checkpoint: str
+    classifier_v2_classes_json: str
+    classifier_v2_arch: str
+    classifier_v2_input_size: int
+    classifier_v2_compile: bool
     device: str
     det_imgsz: int
     det_conf_threshold: float
@@ -114,12 +126,24 @@ class Config:
             video_loop=_bool("VIDEO_LOOP", True),
             playlist_shuffle=_bool("PLAYLIST_SHUFFLE", False),
             realtime_pacing=_bool("REALTIME_PACING", True),
+            classifier_backend=_str("CLASSIFIER_BACKEND", "v2"),
             detector_path=_str("DETECTOR_PATH", "/data/models/detector_v26/model.pt"),
             classifier_path=_str("CLASSIFIER_PATH", "/data/models/classifier_v0_10_2/model.pt"),
             classifier_inference_module_dir=_str(
                 "CLASSIFIER_INFERENCE_MODULE_DIR",
                 "/data/models/classifier_v0_10_2",
             ),
+            classifier_v2_checkpoint=_str(
+                "CLASSIFIER_V2_CHECKPOINT",
+                "/data/models/classifier_v2/checkpoint_best.pt",
+            ),
+            classifier_v2_classes_json=_str(
+                "CLASSIFIER_V2_CLASSES_JSON",
+                "/data/models/classifier_v2/classes.json",
+            ),
+            classifier_v2_arch=_str("CLASSIFIER_V2_ARCH", "vit_small_patch14_dinov2"),
+            classifier_v2_input_size=_int("CLASSIFIER_V2_INPUT_SIZE", 224),
+            classifier_v2_compile=_bool("CLASSIFIER_V2_COMPILE", True),
             device=_str("DEVICE", "cuda:0"),
             det_imgsz=_int("DET_IMGSZ", 640),
             det_conf_threshold=_float("DET_CONF_THRESHOLD", 0.25),
