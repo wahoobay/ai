@@ -781,6 +781,61 @@ li.empty { color: var(--muted); font-style: italic; }
   font-size: 11px;
 }
 
+/* Small "ⓘ" hint that sits inline in chart titles next to a metric whose
+   definition might surprise a non-engineer (e.g. "sightings" vs raw
+   detections). Same hover-popover pattern as save-policy-hint, sized
+   down to fit alongside an H2. */
+.metric-hint {
+  position: relative;
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  cursor: help;
+  outline: none;
+  vertical-align: baseline;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.metric-hint:hover,
+.metric-hint:focus { color: var(--accent); }
+.metric-hint-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--panel);
+  color: #cbd9e3;
+  border: 1px solid #1f3b4f;
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  box-shadow: 0 8px 22px rgba(0,0,0,0.45);
+  z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0s linear 120ms;
+  pointer-events: none;
+}
+.metric-hint:hover .metric-hint-popover,
+.metric-hint:focus .metric-hint-popover,
+.metric-hint:focus-within .metric-hint-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+.metric-hint-popover strong { color: var(--ink); display: block; margin-bottom: 6px; }
+.metric-hint-popover p { margin: 4px 0; }
+.metric-hint-popover em { color: var(--accent); font-style: normal; }
+
 .ov-map {
   background: #0e2a3d;
   border-radius: 4px;

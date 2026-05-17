@@ -93,7 +93,18 @@
         <div id="trends-body" class="trends-body">
           <div class="trends-grid">
             <section class="chart-card">
-              <h2>Detections per hour <span class="chart-meta" id="chart-detection-rate-meta">—</span></h2>
+              <h2>
+                Sightings per hour
+                <span class="metric-hint" tabindex="0" role="button" aria-haspopup="true">
+                  ⓘ
+                  <span class="metric-hint-popover" role="tooltip">
+                    <strong>What's a sighting?</strong>
+                    <p>Each tick on this chart is one tracked fish that lingered long enough to be counted (≥ 3 frames). A fish in front of the camera for 60 s is <em>one</em> sighting, not 1,800 detections.</p>
+                    <p>Counted in the hour the track was first seen. Track flickers under 3 frames are dropped to keep noise out.</p>
+                  </span>
+                </span>
+                <span class="chart-meta" id="chart-detection-rate-meta">—</span>
+              </h2>
               <div class="chart-svg-wrap"><svg id="chart-detection-rate" viewBox="0 0 480 180" preserveAspectRatio="none"></svg></div>
             </section>
             <section class="chart-card">
