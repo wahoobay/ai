@@ -84,6 +84,11 @@ class TrainConfig:
     device: str = "cuda:0"
     amp_dtype: str = "bf16"     # bf16 needs Ampere+; falls back to fp16 elsewhere
     num_workers: int = 4
+    # "stratified" = random 80/20 with class balance (frames from one video
+    # leak across splits → optimistic numbers). "by_source" = 80/20 over
+    # source drive_ids; honest generalisation test, but most classes here
+    # have only one source so they end up entirely train- or val-only.
+    split_mode: str = "stratified"
 
 
 # ---------- dataset ----------
@@ -109,10 +114,18 @@ class CropDataset(Dataset):
 def build_splits(cfg: TrainConfig) -> tuple[list[tuple[Path, int]],
                                              list[tuple[Path, int]],
                                              list[str]]:
-    """Discover crops on disk, build the class list, do a stratified split.
+    """Discover crops on disk, build the class list, do an 80/20 split.
 
-    Classes with only one crop can't be split — those samples land in
-    train only and contribute no validation signal. We log how many.
+    Two split modes (selected via cfg.split_mode):
+      * "stratified" (default) — random 80/20 stratified by class. Tends
+        to overstate generalisation because random frames from the same
+        source video land in both train and val.
+      * "by_source" — hold out 20% of the source drive_ids; all crops
+        from a held-out source go to val. The honest "did the model
+        learn the species or just the individual fish?" eval. Most
+        classes have only one source file in this dataset, so under
+        this split they'll be entirely train OR entirely val — the
+        latter become effectively zero-shot tests.
     """
     classes = sorted(p.name for p in DATASET_DIR.iterdir()
                      if p.is_dir() and not p.name.startswith("_"))
@@ -127,11 +140,29 @@ def build_splits(cfg: TrainConfig) -> tuple[list[tuple[Path, int]],
     paths = [s[0] for s in samples]
     labels = np.array([s[1] for s in samples])
 
-    # Stratify only on classes with ≥ 2 samples; the others go to train.
+    if cfg.split_mode == "by_source":
+        train_idx, val_idx = _split_by_source(paths, labels, cfg)
+        kind = "by_source"
+    elif cfg.split_mode == "temporal_within_source":
+        train_idx, val_idx = _split_temporal_within_source(paths, labels, cfg)
+        kind = "temporal_within_source"
+    else:
+        train_idx, val_idx = _split_stratified(labels, cfg)
+        kind = "stratified"
+
+    train = [(paths[i], int(labels[i])) for i in train_idx]
+    val   = [(paths[i], int(labels[i])) for i in val_idx]
+    cls_counts = Counter(labels.tolist())
+    only_one_count = sum(1 for c, n in cls_counts.items() if n == 1)
+    print(f"split[{kind}]: train={len(train)}  val={len(val)}  "
+          f"classes={len(classes)}  singletons={only_one_count}")
+    return train, val, classes
+
+
+def _split_stratified(labels: np.ndarray, cfg: TrainConfig) -> tuple[np.ndarray, np.ndarray]:
+    """Class-stratified random split. Singleton classes go to train only."""
     cls_counts = Counter(labels.tolist())
     stratifiable_mask = np.array([cls_counts[lbl] >= 2 for lbl in labels])
-    only_one_count = sum(1 for c, n in cls_counts.items() if n == 1)
-
     if stratifiable_mask.any():
         train_idx_strat, val_idx = train_test_split(
             np.where(stratifiable_mask)[0],
@@ -143,12 +174,79 @@ def build_splits(cfg: TrainConfig) -> tuple[list[tuple[Path, int]],
         train_idx_strat, val_idx = np.array([], dtype=int), np.array([], dtype=int)
     singleton_idx = np.where(~stratifiable_mask)[0]
     train_idx = np.concatenate([train_idx_strat, singleton_idx])
+    return train_idx, val_idx
 
-    train = [(paths[i], int(labels[i])) for i in train_idx]
-    val   = [(paths[i], int(labels[i])) for i in val_idx]
-    print(f"split: train={len(train)}  val={len(val)}  "
-          f"classes={len(classes)}  singletons={only_one_count}")
-    return train, val, classes
+
+def _split_by_source(
+    paths: list[Path], labels: np.ndarray, cfg: TrainConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Hold out 20% of source drive_ids. All crops from a held-out source
+    land in val; train sees none of those clips. The drive_id for each
+    crop comes from _dataset_manifest.json (joined on the crop file
+    path)."""
+    manifest = json.loads((DATASET_DIR / "_dataset_manifest.json").read_text())
+    crop_to_drive = {(REPO_ROOT / r["crop_path"]).resolve(): r["drive_id"] for r in manifest}
+    groups = np.array([crop_to_drive.get(p.resolve(), "unknown") for p in paths])
+
+    unique_drives = np.array(sorted(set(groups)))
+    rng = np.random.default_rng(cfg.seed)
+    perm = rng.permutation(len(unique_drives))
+    n_val_drives = max(1, int(round(len(unique_drives) * cfg.val_split)))
+    val_drive_set = set(unique_drives[perm[:n_val_drives]])
+
+    is_val = np.array([g in val_drive_set for g in groups])
+    train_idx = np.where(~is_val)[0]
+    val_idx = np.where(is_val)[0]
+    print(f"  source-split: {len(unique_drives) - n_val_drives} train sources / "
+          f"{n_val_drives} val sources")
+    return train_idx, val_idx
+
+
+def _split_temporal_within_source(
+    paths: list[Path], labels: np.ndarray, cfg: TrainConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Within each video source, hold out the last val_split fraction of
+    frames as val. Image sources (single frame) stay in train. Same fish
+    individual on both sides, but the val frames are a temporally
+    separate segment of the clip — tests within-clip generalisation
+    (pose changes, lighting drift, motion blur) without requiring more
+    independent source clips per species.
+
+    crop_id encodes both drive_id and frame_index for videos (the
+    cropper builds them as `<drive_id>_f<idx>_d<det>`); we sort frames
+    by their numeric index and split the trailing val_split of each
+    video's frames into val. Image crop_ids look like
+    `<drive_id>_d<det>` (no frame index) and always land in train.
+    """
+    manifest = json.loads((DATASET_DIR / "_dataset_manifest.json").read_text())
+    crop_to_rec: dict[str, dict] = {
+        (REPO_ROOT / r["crop_path"]).resolve().as_posix(): r for r in manifest
+    }
+
+    # Group video crops by drive_id, sorted by frame_index
+    by_drive: dict[str, list[tuple[int, int]]] = {}    # drive_id → [(frame_idx, sample_idx)]
+    image_only: list[int] = []                          # indices of image-sourced crops
+    for i, p in enumerate(paths):
+        rec = crop_to_rec.get(p.resolve().as_posix())
+        if rec is None or rec.get("source_kind") != "video":
+            image_only.append(i)
+            continue
+        by_drive.setdefault(rec["drive_id"], []).append((int(rec.get("frame_index", 0)), i))
+
+    val_idx_list: list[int] = []
+    train_idx_list: list[int] = list(image_only)
+    for drive_id, items in by_drive.items():
+        items.sort(key=lambda kv: kv[0])
+        n = len(items)
+        n_val = max(1, int(round(n * cfg.val_split)))
+        train_part = [s for _, s in items[: n - n_val]]
+        val_part   = [s for _, s in items[n - n_val:]]
+        train_idx_list.extend(train_part)
+        val_idx_list.extend(val_part)
+
+    print(f"  temporal-within-source: {len(by_drive)} videos contribute val frames; "
+          f"{len(image_only)} image-only crops stay in train")
+    return np.array(train_idx_list), np.array(val_idx_list)
 
 
 # ---------- training utilities ----------
@@ -393,6 +491,16 @@ def main() -> None:
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--smoke", action="store_true", help="run 3 epochs as a sanity check")
+    ap.add_argument("--split-mode",
+                    choices=("stratified", "by_source", "temporal_within_source"),
+                    default="stratified",
+                    help="stratified: random 80/20 with class balance "
+                         "(frame-level leakage → optimistic). "
+                         "by_source: 80/20 over source drive_ids; brutally "
+                         "honest but mostly zero-shot given our dataset. "
+                         "temporal_within_source: hold out the last 20% of "
+                         "frames from each video clip — same fish, different "
+                         "temporal segment, tests within-clip generalisation.")
     args = ap.parse_args()
 
     cfg = TrainConfig(
@@ -403,6 +511,7 @@ def main() -> None:
         img_size=args.img_size,
         device=args.device,
         num_workers=args.num_workers,
+        split_mode=args.split_mode,
     )
     train(cfg)
 
