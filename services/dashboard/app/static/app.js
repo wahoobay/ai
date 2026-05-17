@@ -240,7 +240,11 @@ function renderEvents(rows) {
     el.innerHTML = `<li class="empty">no events yet</li>`;
     return;
   }
-  EVENT_CACHE.clear();
+  // Don't .clear() — if the reviewer has the modal open on an event that's
+  // since scrolled off this poll's top-N, wiping the cache nukes its topk +
+  // best_name and the modal re-renders with no "Looks right" button, no
+  // top-K chips, and the bbox editor bails out (destroying its own SVG
+  // children on the way). Cache eviction is owned by postCorrection.
   for (const r of rows) EVENT_CACHE.set(r.id, r);
 
   el.innerHTML = rows.map(renderEventCard).join("");
@@ -2429,12 +2433,19 @@ const _BBOX_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 async function _enterBboxEdit(eventId) {
   const r = EVENT_CACHE.get(eventId);
   const svg = document.getElementById("roi-modal-svg");
+  // Bail-out paths used to do `svg.innerHTML = "<text>...</text>"`, which also
+  // destroyed the <image>, <rect>, and <g> children that the editor needs to
+  // exist for *every* event. Once destroyed, they don't come back on the next
+  // event either. Hide the status text in the toolbar instead and leave the
+  // SVG structure alone.
+  const status = document.getElementById("bbox-status");
+  _bboxEdit.active = false;
   if (!svg || !r || !Array.isArray(r.bbox) || r.bbox.length !== 4) {
-    if (svg) svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="#888">no bbox to edit for this event</text>`;
+    if (status) status.textContent = "no bbox to edit for this event";
     return;
   }
   if (!r.image_path) {
-    svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="#888">no saved frame on disk — bbox editing requires the source image</text>`;
+    if (status) status.textContent = "no saved frame on disk — bbox editing requires the source image";
     return;
   }
 
@@ -2463,11 +2474,21 @@ async function _enterBboxEdit(eventId) {
   _bboxEdit.imgH = H;
   _bboxEdit.dragging = null;
 
-  // Build handle elements (4 corners + 4 edges).
+  // Build handle elements (4 corners + 4 edges). Use createElementNS so
+  // the rects are *actually* in the SVG namespace — setting innerHTML on
+  // an SVG group with a `<rect>` string parses as HTML in some browsers,
+  // which produces non-SVG elements that render but don't catch SVG
+  // pointer events. That was the symptom of the "drag does nothing"
+  // bug in the first cut.
+  const SVG_NS = "http://www.w3.org/2000/svg";
   const handlesGroup = document.getElementById("roi-modal-bbox-handles");
-  handlesGroup.innerHTML = _BBOX_HANDLES.map(h =>
-    `<rect class="bbox-handle bbox-handle-${h}" data-handle="${h}"/>`
-  ).join("");
+  handlesGroup.replaceChildren();
+  for (const h of _BBOX_HANDLES) {
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("class", `bbox-handle bbox-handle-${h}`);
+    rect.dataset.handle = h;
+    handlesGroup.appendChild(rect);
+  }
   _renderBbox();
   _bindBboxEvents();
   _updateBboxStatus();
