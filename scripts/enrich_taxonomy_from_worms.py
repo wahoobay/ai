@@ -241,6 +241,41 @@ def _flatten(rec: dict, *, lowest: str, fallback_species: str | None) -> dict[st
     }
 
 
+def _carry_down(row: dict) -> dict:
+    """Propagate the lowest-resolved rank down into the more-specific
+    columns so every row exposes a non-empty ``species`` field.
+
+    When WoRMS only resolved to genus, the species column repeats the
+    genus; when only to family, both species and genus repeat the family.
+    Lets consumers read ``row["species"]`` as "the most specific
+    identifier we have for this taxon" without per-row null handling,
+    and keeps the ImageFolder-style folder names consistent across the
+    dataset (a genus-only class becomes a folder named after the genus
+    rather than a confusingly-empty species slot).
+
+    Overwrites unconditionally below ``lowest`` — when WoRMS only got us
+    to family, any species epithet the volunteer typed but WoRMS couldn't
+    confirm is *not* preserved (it would be a false advertisement of
+    precision).
+    """
+    out = dict(row)
+    lowest = out.get("lowest")
+    if lowest == "genus":
+        out["species"] = out.get("genus")
+    elif lowest == "family":
+        fam = out.get("family")
+        out["genus"] = fam
+        out["species"] = fam
+    elif lowest == "order":
+        ordr = out.get("order")
+        for col in ("family", "genus", "species"):
+            out[col] = ordr
+    elif lowest == "unknown":
+        # Leave everything as-is; downstream code can branch on lowest.
+        pass
+    return out
+
+
 def _species_epithet(binomial: str) -> str | None:
     parts = binomial.strip().split()
     return parts[1] if len(parts) >= 2 else None
@@ -311,7 +346,7 @@ def main() -> None:
         # Sort by kingdom → phylum → class → order → family → genus → species
         # so the CSV reads as a coherent tree when opened in Excel.
         rows = sorted(
-            tax.values(),
+            (_carry_down(r) for r in tax.values()),
             key=lambda r: tuple((r.get(k) or "").lower() for k in fieldnames),
         )
         for row in rows:

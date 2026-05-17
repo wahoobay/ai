@@ -1,20 +1,15 @@
 species,genus,family,order,class,phylum,kingdom,lowest
-,Anamobaea,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,genus
-,Anilocra,Cymothoidae,Isopoda,Malacostraca,Arthropoda,Animalia,genus
-,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,genus
-,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,genus
-,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
-,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,genus
-,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,genus
-,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,genus
 acuminatus,Pareques,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 adustus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
 alatus,Strombus,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
 albigutta,Paralichthys,Paralichthyidae,Pleuronectiformes,Teleostei,Chordata,Animalia,species
+Alligatoridae,Alligatoridae,Alligatoridae,,Crocodylia,Chordata,Animalia,family
 americana,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
 americanus,Octopus,Octopodidae,Octopoda,Cephalopoda,Mollusca,Animalia,species
 analis,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Anamobaea,Anamobaea,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,genus
 anhinga,Anhinga,Anhingidae,Pelecaniformes,Aves,Chordata,Animalia,species
+Anilocra,Anilocra,Cymothoidae,Isopoda,Malacostraca,Arthropoda,Animalia,genus
 antillarum,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
 apodus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 arctifrons,Calamus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
@@ -58,7 +53,6 @@ chrysurus,Chloroscombrus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,sp
 chrysurus,Ocyurus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 ciliaris,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
 ciliata,Pseudosquilla,Pseudosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
-cinctimanus,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,genus
 cinerascens,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
 cinereus,Gerres,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 cirratum,Ginglymostoma,Ginglymostomatidae,Orectolobiformes,Elasmobranchii,Chordata,Animalia,species
@@ -76,6 +70,7 @@ cyanea,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Anima
 cyanopterus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 depressa,Plagusia,Plagusiidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 diencaeus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Diodon,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,genus
 diogenes,Petrochirus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 dubia,Libinia,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 dumerili,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
@@ -102,11 +97,12 @@ hippos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
 hispida,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
 hispidus,Stenopus,Stenopodidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 histrio,Histrio,Antennariidae,Lophiiformes,Teleostei,Chordata,Animalia,species
+Holacanthus,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,genus
 holbrookii,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 holocanthus,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Homo,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,genus
 horsti,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
 humeralis,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
-immaculata,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,genus
 inermis,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
 intermedius,Synodus,Synodontidae,Aulopiformes,Teleostei,Chordata,Animalia,species
 iseri,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
@@ -114,6 +110,7 @@ itajara,Epinephelus,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,specie
 jaguana,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
 jamaicensis,Urobatis,Urotrygonidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
 jocu,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
 latus,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
 leucas,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
 leucostictus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
@@ -138,8 +135,8 @@ mercenaria,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 mercenaria,Mercenaria,Veneridae,Venerida,Bivalvia,Mollusca,Animalia,species
 mexicana,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
 microlepis,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
-mississippiensis,,Alligatoridae,,Crocodylia,Chordata,Animalia,family
 mitchilli,Anchoa,Engraulidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+Mithrax,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,genus
 mokorran,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
 moringa,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
 morio,Aplysia,Aplysiidae,Aplysiida,Gastropoda,Mollusca,Animalia,species
@@ -147,6 +144,8 @@ multilineata,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata
 mydas,Chelonia,Cheloniidae,Testudines,,Chordata,Animalia,species
 narinari,Aetobatus,Aetobatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
 naucrates,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Neogonodactylus,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,genus
+Neopomacentrus,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,genus
 neucratoides,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
 nigricinctus,Brockius,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 nigromaculatum,Branchiomma,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,species
@@ -154,6 +153,8 @@ nodifrons,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 nuchipinnis,Labrisomus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 oceanops,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
 ocellatus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Ocyropsis,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,genus
+Ophiothrix,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,genus
 ophryas,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
 ornatus,Callinectes,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 parra,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
@@ -210,7 +211,6 @@ testudineus,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Anim
 thomasi,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
 tiburo,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
 tigrinus,Serranus,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
-townsendi,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,genus
 triangulatus,Malacoctenus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 triqueter,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
 trispinosum,Macrocoeloma,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
