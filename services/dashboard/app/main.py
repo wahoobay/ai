@@ -311,12 +311,17 @@ def build_app() -> FastAPI:
             except Exception:
                 return Response(content=r.content, media_type="application/json")
             # Enrich with common names so the dashboard's Current detections
-            # panel can show "Sergeant Major (Abudefduf saxatilis)" without a
-            # client-side lookup table.
+            # panel can show "Sergeant Major (A. saxatilis)" without a
+            # client-side lookup table. Same enrichment is applied to each
+            # top-K candidate so the secondary picks render in the same
+            # canonical format.
             for d in data.get("detections", []) or []:
                 latin = d.get("best_name")
                 if latin:
                     d["best_common"] = common_name(latin)
+                for p in d.get("topk") or []:
+                    if isinstance(p, dict) and p.get("name"):
+                        p["common"] = common_name(p["name"])
             return JSONResponse(data)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
@@ -496,6 +501,15 @@ def build_app() -> FastAPI:
                 rows = await cur.fetchall()
         for r in rows:
             r["ts"] = r["ts"].isoformat() if r["ts"] else None
+            # Enrich with common names so the dashboard's recent-events
+            # list + correction modal can show "Sergeant Major (A. saxatilis)"
+            # without a client-side lookup. Best_common is None for any
+            # species not in common_names.py — the renderer falls back to
+            # italic-Latin alone.
+            r["best_common"] = common_name(r["best_name"]) if r.get("best_name") else None
+            for p in r.get("topk") or []:
+                if isinstance(p, dict) and p.get("name"):
+                    p["common"] = common_name(p["name"])
         return JSONResponse(rows)
 
     @app.get("/api/detections/{event_id}/roi.jpg")
@@ -690,6 +704,7 @@ def build_app() -> FastAPI:
                 rows = await cur.fetchall()
         for r in rows:
             r["last_seen"] = r["last_seen"].isoformat() if r["last_seen"] else None
+            r["common"] = common_name(r["name"]) if r.get("name") else None
         return JSONResponse({"mode": mode, "items": rows})
 
     # ------------------------------------------------------------------

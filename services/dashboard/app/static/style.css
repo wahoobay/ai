@@ -1043,7 +1043,8 @@ li.empty { color: var(--muted); font-style: italic; }
 }
 .roi-modal-x:hover { color: var(--ink); }
 .roi-modal-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.roi-modal-header h2 { margin: 0; font-size: 15px; color: var(--accent); font-style: italic; }
+.roi-modal-header h2 { margin: 0; font-size: 15px; color: var(--accent); font-style: normal; }
+.roi-modal-header h2 em { font-style: italic; }
 .roi-modal-toggle { display: inline-flex; gap: 2px; border: 1px solid #1f3b4f; border-radius: 4px; overflow: hidden; }
 .roi-tab {
   background: transparent;

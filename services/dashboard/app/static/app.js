@@ -131,18 +131,16 @@ function renderCurrent(live) {
     .slice()
     .sort((a, b) => (b.best_accuracy ?? 0) - (a.best_accuracy ?? 0))
     .map((d) => {
-      const latin = d.best_name ?? "unknown";
+      const latin = d.best_name;
       const common = d.best_common;
-      // Match the "Most-spotted fish" formatting: common name first,
-      // scientific in italic parens; if there's no common name we fall
-      // back to italic Latin alone.
-      const display = common
-        ? `${common} <em>(${latin})</em>`
-        : `<em>${latin}</em>`;
+      // Canonical display = "Common Name (G. species)" with italic
+      // parenthetical and the genus abbreviated to its initial. Falls
+      // back to italic-abbrev alone when there's no curated common name.
+      const display = latin ? speciesDisplayHtml(latin, common) : "unknown";
       const acc = d.best_accuracy;
       const topk = (d.topk || [])
         .slice(1)
-        .map((p) => `<span class="meta">${p.name} ${fmtPct(p.accuracy)}</span>`)
+        .map((p) => `<span class="meta">${speciesDisplayHtml(p.name, p.common)} ${fmtPct(p.accuracy)}</span>`)
         .join(" · ");
       return `
         <li>
@@ -217,7 +215,9 @@ function renderSpecies(payload) {
     .map(
       (r) => `
       <li>
-        <span class="species-name">${r.name ?? r.species_id}</span>
+        <span class="species-name">${
+          r.name ? speciesDisplayHtml(r.name, r.common) : escHtml(r.species_id || "unknown")
+        }</span>
         <span class="acc">×${r.n}${isSightings ? " fish" : ""}</span>
         <span class="meta">${
           isSightings
@@ -263,7 +263,7 @@ function renderEventCard(r) {
         ${thumb}
         <div class="event-info">
           <div class="event-line1">
-            <span class="species-name">${r.best_name ?? "unknown"}</span>
+            <span class="species-name">${speciesDisplayHtml(r.best_name, r.best_common)}</span>
             <span class="acc">${acc}</span>
           </div>
           <div class="meta">${meta}</div>
@@ -299,7 +299,7 @@ function correctionFormHtml(eventId) {
     .slice(0, 4)
     .map((t) => `
       <button type="button" class="topk-chip" onclick="pickTopK(${eventId}, '${escAttr(t.name)}', '${escAttr(t.species_id || "")}')">
-        ${escHtml(t.name)} <span class="topk-conf">${fmtPct(t.accuracy)}</span>
+        ${speciesDisplayHtml(t.name, t.common)} <span class="topk-conf">${fmtPct(t.accuracy)}</span>
       </button>`)
     .join("");
   const altsBlock = altChips
@@ -345,6 +345,28 @@ function correctionFormHtml(eventId) {
 
 function escAttr(s) { return String(s ?? "").replace(/'/g, "&#39;").replace(/"/g, "&quot;"); }
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+// Canonical species display: "Common Name (G. species)" with italic
+// parenthetical. The genus is abbreviated to its initial + period — matches
+// the format wired into assets/species_manifest.json's display_label_html
+// field. Returns "" / "unknown" sentinels if the binomial is missing.
+function abbreviateBinomial(latin) {
+  if (!latin) return "";
+  const parts = String(latin).trim().split(/\s+/);
+  if (parts.length < 2 || !parts[0]) return latin;
+  return `${parts[0][0]}. ${parts.slice(1).join(" ")}`;
+}
+function speciesDisplayHtml(latin, common) {
+  if (!latin) return common ? escHtml(common) : "unknown";
+  const abbrev = abbreviateBinomial(latin);
+  const paren = `<em>(${escHtml(abbrev)})</em>`;
+  return common ? `${escHtml(common)} ${paren}` : paren;
+}
+function speciesDisplayText(latin, common) {
+  if (!latin) return common || "unknown";
+  const abbrev = abbreviateBinomial(latin);
+  return common ? `${common} (${abbrev})` : `(${abbrev})`;
+}
 
 // Find the *active* container for an event's correction UI. When the ROI
 // modal is open on this event, the modal wins (it's the focused surface);
@@ -953,9 +975,7 @@ function renderTopSpecies(rows) {
   const max = Math.max(...rows.map(r => r.sightings), 1);
   el.innerHTML = rows.map(r => {
     const pct = (100 * r.sightings / max).toFixed(1);
-    const display = r.common
-      ? `${r.common} <em>(${r.latin})</em>`
-      : `<em>${r.latin}</em>`;
+    const display = speciesDisplayHtml(r.latin, r.common);
     return `
       <div class="reef-top-row">
         <div class="reef-bar-wrap">
@@ -1868,7 +1888,7 @@ async function renderOverviewTab(hours) {
       const max = Math.max(...rows.map(r => r.sightings), 1);
       topEl.innerHTML = rows.map(r => {
         const pct = (100 * r.sightings / max).toFixed(1);
-        const display = r.common ? `${r.common} <em>(${r.latin})</em>` : `<em>${r.latin}</em>`;
+        const display = speciesDisplayHtml(r.latin, r.common);
         return `<div class="reef-top-row">
           <div class="reef-bar-wrap"><div class="reef-bar" style="width:${pct}%"></div><div class="reef-name">${display}</div></div>
           <div class="reef-count">${r.sightings}</div>
@@ -2086,9 +2106,7 @@ function _renderSpeciesTable() {
     return;
   }
   tbody.innerHTML = rows.map(s => {
-    const name = s.common
-      ? `${s.common} <em>(${s.latin})</em>`
-      : `<em>${s.latin}</em>`;
+    const name = speciesDisplayHtml(s.latin, s.common);
     const acc = s.mean_accuracy != null ? (s.mean_accuracy * 100).toFixed(0) + "%" : "—";
     const cams = (s.sources || []).map(_camLabel).join(", ") || "—";
     const last = s.last_seen ? new Date(s.last_seen).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -2124,7 +2142,7 @@ function _renderHabitatMatrix(matrix) {
   let max = 1;
   for (const sp of species) for (const v of Object.values(sp.counts || {})) if (v > max) max = v;
   for (const sp of species) {
-    const name = sp.common ? `${sp.common} <em>(${sp.latin})</em>` : `<em>${sp.latin}</em>`;
+    const name = speciesDisplayHtml(sp.latin, sp.common);
     html += `<div class="hm-row"><div class="hm-name">${name}</div>`;
     for (const s of sources) {
       const v = sp.counts?.[s] || 0;
@@ -2174,7 +2192,7 @@ async function renderFishExplorerTab(hours) {
       const max = Math.max(...top.map(r => r.sightings), 1);
       topEl.innerHTML = top.map(r => {
         const pct = (100 * r.sightings / max).toFixed(1);
-        const display = r.common ? `${r.common} <em>(${r.latin})</em>` : `<em>${r.latin}</em>`;
+        const display = speciesDisplayHtml(r.latin, r.common);
         return `<div class="reef-top-row">
           <div class="reef-bar-wrap"><div class="reef-bar" style="width:${pct}%"></div><div class="reef-name">${display}</div></div>
           <div class="reef-count">${r.sightings}</div>
@@ -2347,7 +2365,13 @@ function openRoiModal(eventId) {
   const r = EVENT_CACHE.get(eventId);
   const title = document.getElementById("roi-modal-title");
   const meta  = document.getElementById("roi-modal-meta");
-  if (title) title.textContent = r?.best_name || `Event ${eventId}`;
+  // innerHTML so the parenthetical gets its <em> italics applied; falls
+  // through to a plain "Event N" label when the latin is missing.
+  if (title) {
+    title.innerHTML = r?.best_name
+      ? speciesDisplayHtml(r.best_name, r.best_common)
+      : `Event ${eventId}`;
+  }
   if (meta) {
     const parts = [];
     if (r?.best_accuracy != null) parts.push(`${fmtPct(r.best_accuracy)} confidence`);
