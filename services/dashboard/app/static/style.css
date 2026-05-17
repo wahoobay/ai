@@ -586,6 +586,8 @@ li.empty { color: var(--muted); font-style: italic; }
 .chart-svg-wrap--square svg { aspect-ratio: 1 / 1; max-width: 360px; }
 .wr-slice { cursor: crosshair; transition: stroke 80ms; }
 .wr-slice:hover { stroke: var(--accent); stroke-width: 1.5; }
+.wb-barb { cursor: crosshair; }
+.wb-barb:hover path { stroke-width: 2.5; }
 
 /* Cursor-following tooltip for the wind rose (and any other custom chart
    that wants a styled hover label — set data-tip on the target element

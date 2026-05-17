@@ -1522,6 +1522,83 @@ function labels16(idx) {
   return ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"][idx % 16];
 }
 
+// Wind barbs strip: chronological view to complement the wind rose. One
+// arrow per time bucket along a horizontal axis, pointing in the direction
+// the wind is *blowing toward* (most intuitive for a general audience —
+// "wind moving east → arrow east"). Shaft length + color encode speed using
+// the same Beaufort-ish bands as the rose so the two charts read together.
+function _windBarbs(svg, samples, opts = {}) {
+  if (!svg) return;
+  const W = 480, H = 120, padL = 36, padR = 10, padT = 14, padB = 22;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.removeAttribute("preserveAspectRatio");
+
+  const cleaned = (samples || []).filter(s =>
+    s && Number.isFinite(s.x) && Number.isFinite(s.dir_deg) && Number.isFinite(s.speed_ms),
+  );
+  if (cleaned.length === 0) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="var(--muted)" font-size="12">no wind data</text>`;
+    return;
+  }
+
+  const xs = cleaned.map(s => s.x);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const xSpan = xMax - xMin || 1;
+  const innerW = W - padL - padR;
+  const cy = padT + (H - padT - padB) / 2;
+  const speedMax = Math.max(2, ...cleaned.map(s => s.speed_ms));
+  const maxArrowLen = (H - padT - padB) / 2 - 2;
+
+  const BANDS = [
+    { max: 2,        fill: "#1e4a6e" },
+    { max: 5,        fill: "#3a8fc7" },
+    { max: 10,       fill: "#f5b941" },
+    { max: Infinity, fill: "#e0533d" },
+  ];
+  const bandColor = (sp) => BANDS.find(b => sp < b.max).fill;
+
+  // Subsample down to ~64 ticks for legibility on long windows.
+  const stride = Math.max(1, Math.ceil(cleaned.length / 64));
+  const arrows = [];
+  for (let i = 0; i < cleaned.length; i += stride) {
+    const s = cleaned[i];
+    const x = padL + (innerW * (s.x - xMin)) / xSpan;
+    const len = (Math.min(s.speed_ms, speedMax) / speedMax) * maxArrowLen + 4;
+    // Convention: arrow points where the wind is *going*, which is opposite
+    // of the meteorological "from" direction. dir_deg is "from" — flip 180°.
+    const headDeg = (s.dir_deg + 180) % 360;
+    const color = bandColor(s.speed_ms);
+    const tip = `${new Date(s.x).toLocaleString()}\n${labels16(Math.floor(((s.dir_deg % 360 + 360) % 360 + 11.25) / 22.5) % 16)} (${s.dir_deg.toFixed(0)}°) · ${(s.speed_ms * 2.23694).toFixed(1)} mph`;
+    // Path of an arrow that points "up" (negative-y), with shaft length `len`:
+    // - shaft: (0,0) to (0, -len)
+    // - head:  short triangle at (0, -len)
+    const headHalf = 3.5;
+    const headLen = 5;
+    const d = `M 0 0 L 0 ${(-len + headLen).toFixed(1)} M ${-headHalf} ${(-len + headLen).toFixed(1)} L 0 ${(-len).toFixed(1)} L ${headHalf} ${(-len + headLen).toFixed(1)}`;
+    arrows.push(
+      `<g class="wb-barb" transform="translate(${x.toFixed(1)} ${cy}) rotate(${headDeg.toFixed(1)})" ` +
+      `data-tip="${tip.replace(/"/g, "&quot;").replace(/\n/g, "&#10;")}">` +
+      `<path d="${d}" stroke="${color}" stroke-width="1.4" fill="none" stroke-linecap="round"/>` +
+      `</g>`,
+    );
+  }
+
+  // X-axis ticks (time labels at start, mid, end)
+  const fmtT = (ms) => {
+    const d = new Date(ms);
+    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  };
+  const tickXs = [xMin, xMin + xSpan / 2, xMax];
+  const xTicks = tickXs.map(t => {
+    const x = padL + (innerW * (t - xMin)) / xSpan;
+    return `<text x="${x.toFixed(1)}" y="${(H - 4).toFixed(1)}" font-size="9" fill="var(--muted)" text-anchor="middle">${fmtT(t)}</text>`;
+  }).join("");
+  const baseline = `<line x1="${padL}" y1="${cy}" x2="${W - padR}" y2="${cy}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+
+  svg.innerHTML = `${baseline}${arrows.join("")}${xTicks}`;
+  _attachWindRoseTooltip(svg); // re-use the same hover-tooltip mechanism
+}
+
 // Cursor-following HTML tooltip for the wind-rose wedges. Falls back to a
 // no-op when the body already has a `.wb-tip` element (idempotent across
 // re-renders). Listens on the SVG itself rather than attaching per-path
@@ -1537,9 +1614,12 @@ function _attachWindRoseTooltip(svg) {
     document.body.appendChild(tipEl);
   }
   svg.addEventListener("mousemove", (e) => {
-    const t = e.target;
-    if (t && t.classList && t.classList.contains("wr-slice") && t.dataset.tip) {
-      tipEl.textContent = t.dataset.tip;
+    // Walk up from the event target — barbs sit inside a <g class="wb-barb">
+    // so the path itself doesn't carry the data-tip attribute.
+    let node = e.target;
+    while (node && node !== svg && !node.dataset?.tip) node = node.parentNode;
+    if (node && node !== svg && node.dataset?.tip) {
+      tipEl.innerHTML = node.dataset.tip.replace(/\n/g, "<br>");
       tipEl.style.left = (e.clientX + 12) + "px";
       tipEl.style.top  = (e.clientY + 12) + "px";
       tipEl.classList.add("visible");
@@ -1825,10 +1905,20 @@ async function renderWeatherTab(hours) {
     mkLine("ww-chart-solar",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.solar_rad_wm2 })),                                                     { unit: "W/m²", fmt: n => n.toFixed(0) });
     mkLine("ww-chart-cloud",   wxHist.series.map((r, i) => ({ x: ts[i], y: r.cloud_cover_pct })),                                                   { unit: "%",    fmt: n => n.toFixed(0) });
     // Wind direction is a circular variable — a line graph wraps around at
-    // 359°↔0° and tells you nothing about prevailing wind. Use a polar rose.
+    // 359°↔0° and tells you nothing about prevailing wind. Use a polar rose
+    // for the windowed distribution; pair it with a wind-barbs strip for
+    // the chronological view ("when did the wind shift?").
     _windRose(
       document.getElementById("ww-chart-winddir"),
       wxHist.series.map(r => ({ dir_deg: r.wind_dir_avg_deg, speed_ms: r.wind_speed_avg_ms })),
+    );
+    _windBarbs(
+      document.getElementById("ww-chart-windbarbs"),
+      wxHist.series.map((r, i) => ({
+        x: ts[i],
+        dir_deg: r.wind_dir_avg_deg,
+        speed_ms: r.wind_speed_avg_ms,
+      })),
     );
   }
 }
