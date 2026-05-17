@@ -379,8 +379,11 @@
         <h2>Recent events
           <span class="reviewer-line">
             <span id="auth-state" class="auth-badge">view-only</span>
-            reviewer: <input id="reviewer-input" type="text" placeholder="your email">
-            <input id="write-token-input" type="password" placeholder="write token (optional)">
+            <span id="reviewer-chip" class="reviewer-chip" style="display:none"></span>
+            <span id="reviewer-inputs">
+              reviewer: <input id="reviewer-input" type="text" placeholder="your email">
+              <input id="write-token-input" type="password" placeholder="write token (optional)">
+            </span>
           </span>
         </h2>
         <ul id="events-list" class="half-height"><li class="empty">loading…</li></ul>

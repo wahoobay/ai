@@ -229,62 +229,118 @@ function renderSpecies(payload) {
     .join("");
 }
 
+// EVENT_CACHE keeps the latest /api/events payload keyed by event_id so the
+// per-event correction form can look up the row (topk, bbox, image availability)
+// without re-querying the API.
+const EVENT_CACHE = new Map();
+
 function renderEvents(rows) {
   const el = document.getElementById("events-list");
   if (!rows || !rows.length) {
     el.innerHTML = `<li class="empty">no events yet</li>`;
     return;
   }
-  el.innerHTML = rows
-    .map(
-      (r) => `
-      <li class="event-item" data-event-id="${r.id}">
-        <span class="species-name">${r.best_name ?? "unknown"}</span>
-        <span class="acc">${fmtPct(r.best_accuracy)}</span>
-        <div class="meta">${new Date(r.ts).toLocaleTimeString()} · ${short(r.source_name)} · frame ${r.frame_id}</div>
-        <button class="correct-btn" onclick="toggleCorrection(${r.id}, '${(r.best_name || '').replace(/'/g, "\\'")}')">correct</button>
-        <div class="correction-slot"></div>
-      </li>`
-    )
-    .join("");
+  EVENT_CACHE.clear();
+  for (const r of rows) EVENT_CACHE.set(r.id, r);
+
+  el.innerHTML = rows.map(renderEventCard).join("");
 }
 
-function correctionFormHtml(eventId, originalName) {
-  const reviewer = localStorage.getItem("wb_reviewer") || "";
+function renderEventCard(r) {
+  const acc = fmtPct(r.best_accuracy);
+  const hasImage = !!r.image_path;
+  const thumb = hasImage
+    ? `<img class="event-thumb" src="/api/detections/${r.id}/roi.jpg?size=160" alt="" loading="lazy" onerror="this.style.display='none'">`
+    : `<div class="event-thumb event-thumb-empty" title="no saved frame for this detection">—</div>`;
+  const meta = `${new Date(r.ts).toLocaleTimeString()} · ${short(r.source_name)} · frame ${r.frame_id}`;
+  const canEndorse = hasImage && !!r.best_name;
+  const endorseBtn = canEndorse
+    ? `<button class="ev-btn ev-btn-ok"   onclick="endorseEvent(${r.id})" title="confirm the model got it right">✓ Looks right</button>`
+    : "";
+  const correctBtn = `<button class="ev-btn ev-btn-edit" onclick="toggleCorrection(${r.id})" title="correct or reject this prediction">✏️ Correct</button>`;
+  return `
+    <li class="event-item" data-event-id="${r.id}">
+      <div class="event-row">
+        ${thumb}
+        <div class="event-info">
+          <div class="event-line1">
+            <span class="species-name">${r.best_name ?? "unknown"}</span>
+            <span class="acc">${acc}</span>
+          </div>
+          <div class="meta">${meta}</div>
+          <div class="event-actions">${endorseBtn}${correctBtn}</div>
+        </div>
+      </div>
+      <div class="correction-slot"></div>
+    </li>`;
+}
+
+function correctionFormHtml(eventId) {
+  const r = EVENT_CACHE.get(eventId);
+  const original = r?.best_name || "";
+  const topk = Array.isArray(r?.topk) ? r.topk : [];
+  // De-dup: best_name is already the #1 of topk; show the OTHER top-K as
+  // one-click alternatives. Most reviewer "corrections" should be one click.
+  const altChips = topk
+    .filter((t) => t?.name && t.name !== original)
+    .slice(0, 4)
+    .map((t) => `
+      <button type="button" class="topk-chip" onclick="pickTopK(${eventId}, '${escAttr(t.name)}', '${escAttr(t.species_id || "")}')">
+        ${escHtml(t.name)} <span class="topk-conf">${fmtPct(t.accuracy)}</span>
+      </button>`)
+    .join("");
+  const altsBlock = altChips
+    ? `<div class="cf-section">
+         <div class="cf-label">Or pick a top-K alternative:</div>
+         <div class="cf-chips">${altChips}</div>
+       </div>`
+    : "";
   return `
     <div class="correction-form">
-      <div class="row">
-        <input type="text" placeholder="correct species name" id="cf-name-${eventId}" value="">
+      <div class="cf-section">
+        <div class="cf-label">Type the correct species name:</div>
+        <input type="text"
+               id="cf-name-${eventId}"
+               class="cf-name"
+               placeholder="start typing — e.g. ${escAttr(original) || 'Sergeant Major'}"
+               autocomplete="off"
+               oninput="onSpeciesInput(${eventId}, event)">
+        <ul class="cf-suggest" id="cf-suggest-${eventId}"></ul>
+        <input type="hidden" id="cf-species-id-${eventId}" value="">
       </div>
-      <div class="row">
-        <select id="cf-conf-${eventId}">
+      ${altsBlock}
+      <div class="cf-section cf-quick">
+        <button type="button" class="cf-bad" onclick="submitNotAFish(${eventId})">
+          ✗ Not a fish
+        </button>
+        <select id="cf-conf-${eventId}" class="cf-conf" title="how sure are you?">
           <option value="certain">certain</option>
           <option value="probable" selected>probable</option>
           <option value="uncertain">uncertain</option>
         </select>
-        <label style="font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 4px;">
-          <input type="checkbox" id="cf-notfish-${eventId}"> not a fish
-        </label>
       </div>
-      <div class="row">
-        <input type="text" placeholder="notes (optional)" id="cf-notes-${eventId}" style="flex:1">
+      <div class="cf-section">
+        <input type="text" id="cf-notes-${eventId}" class="cf-notes" placeholder="notes (optional)">
       </div>
-      <div class="row" style="justify-content: flex-end; gap: 6px;">
-        <button class="secondary" onclick="closeCorrection(${eventId})">cancel</button>
-        <button onclick="submitCorrection(${eventId})">save</button>
+      <div class="cf-actions">
+        <button type="button" class="secondary" onclick="closeCorrection(${eventId})">cancel</button>
+        <button type="button" onclick="submitCorrection(${eventId})">save correction</button>
       </div>
     </div>
   `;
 }
 
-function toggleCorrection(eventId, originalName) {
+function escAttr(s) { return String(s ?? "").replace(/'/g, "&#39;").replace(/"/g, "&quot;"); }
+function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function toggleCorrection(eventId) {
   const li = document.querySelector(`li[data-event-id="${eventId}"]`);
   if (!li) return;
   const slot = li.querySelector(".correction-slot");
   if (slot.innerHTML.trim()) {
     slot.innerHTML = "";
   } else {
-    slot.innerHTML = correctionFormHtml(eventId, originalName);
+    slot.innerHTML = correctionFormHtml(eventId);
     const nameInput = document.getElementById(`cf-name-${eventId}`);
     if (nameInput) nameInput.focus();
   }
@@ -296,48 +352,143 @@ function closeCorrection(eventId) {
   li.querySelector(".correction-slot").innerHTML = "";
 }
 
-async function submitCorrection(eventId) {
-  const reviewerInput = document.getElementById("reviewer-input");
-  const reviewer = reviewerInput.value.trim();
-  if (reviewer) localStorage.setItem("wb_reviewer", reviewer);
+function pickTopK(eventId, name, speciesId) {
+  const nameEl = document.getElementById(`cf-name-${eventId}`);
+  const idEl = document.getElementById(`cf-species-id-${eventId}`);
+  if (nameEl) nameEl.value = name;
+  if (idEl) idEl.value = speciesId || "";
+  // Auto-submit on a top-K chip click — it's a one-click correction.
+  submitCorrection(eventId);
+}
 
-  const name  = document.getElementById(`cf-name-${eventId}`).value.trim();
-  const conf  = document.getElementById(`cf-conf-${eventId}`).value;
-  const nf    = document.getElementById(`cf-notfish-${eventId}`).checked;
-  const notes = document.getElementById(`cf-notes-${eventId}`).value.trim();
-
-  if (!nf && !name) {
-    alert("provide a species name or tick 'not a fish'");
-    return;
+// Species autocomplete. /api/species/list returns up to ~hundreds of items;
+// we load once on first use and filter client-side.
+let SPECIES_CACHE = null;
+async function loadSpeciesIfNeeded() {
+  if (SPECIES_CACHE !== null) return SPECIES_CACHE;
+  try {
+    const r = await fetch("/api/species/list?hours=720&min_frames=1");
+    if (!r.ok) throw new Error(`${r.status}`);
+    const j = await r.json();
+    SPECIES_CACHE = Array.isArray(j?.species) ? j.species : [];
+  } catch {
+    SPECIES_CACHE = [];
   }
+  return SPECIES_CACHE;
+}
+
+function onSpeciesInput(eventId, ev) {
+  const q = (ev?.target?.value || "").trim().toLowerCase();
+  const list = document.getElementById(`cf-suggest-${eventId}`);
+  if (!list) return;
+  if (q.length < 2) { list.innerHTML = ""; return; }
+  loadSpeciesIfNeeded().then((species) => {
+    const matches = species
+      .filter((s) => (s.latin || "").toLowerCase().includes(q) || (s.common || "").toLowerCase().includes(q))
+      .slice(0, 8);
+    list.innerHTML = matches.map((s) => `
+      <li onclick="pickSpecies(${eventId}, '${escAttr(s.latin)}', '${escAttr(s.species_id || "")}')">
+        <span class="sg-latin">${escHtml(s.latin)}</span>
+        ${s.common ? `<span class="sg-common">${escHtml(s.common)}</span>` : ""}
+      </li>`).join("");
+  });
+}
+
+function pickSpecies(eventId, latin, speciesId) {
+  document.getElementById(`cf-name-${eventId}`).value = latin;
+  document.getElementById(`cf-species-id-${eventId}`).value = speciesId || "";
+  document.getElementById(`cf-suggest-${eventId}`).innerHTML = "";
+}
+
+// "Looks right" one-click endorsement: posts a correction with
+// corrected_name = best_name and is_endorsement=true. Used to register
+// positive signal on good predictions (fine-tuning dataset gets both
+// positive and negative examples instead of just negatives).
+async function endorseEvent(eventId) {
+  const r = EVENT_CACHE.get(eventId);
+  if (!r?.best_name) return;
   const body = {
     event_id: eventId,
-    corrected_name: name || null,
+    corrected_name: r.best_name,
+    corrected_species_id: r.best_species_id || null,
+    not_a_fish: false,
+    is_endorsement: true,
+    confidence: "certain",
+    reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
+    notes: null,
+  };
+  await postCorrection(eventId, body, "endorsed");
+}
+
+async function submitNotAFish(eventId) {
+  const body = {
+    event_id: eventId,
+    corrected_name: null,
     corrected_species_id: null,
-    not_a_fish: nf,
+    not_a_fish: true,
+    is_endorsement: false,
+    confidence: document.getElementById(`cf-conf-${eventId}`)?.value || "probable",
+    reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
+    notes: (document.getElementById(`cf-notes-${eventId}`)?.value || "").trim() || null,
+  };
+  await postCorrection(eventId, body, "not a fish");
+}
+
+async function submitCorrection(eventId) {
+  const reviewer = persistReviewerFromInputs();
+  const name  = document.getElementById(`cf-name-${eventId}`).value.trim();
+  const spid  = document.getElementById(`cf-species-id-${eventId}`).value.trim();
+  const conf  = document.getElementById(`cf-conf-${eventId}`).value;
+  const notes = document.getElementById(`cf-notes-${eventId}`).value.trim();
+  if (!name) {
+    alert("type a species name or pick one from the suggestions / top-K chips");
+    return;
+  }
+  const r = EVENT_CACHE.get(eventId);
+  const isEndorsement = !!(r?.best_name && r.best_name === name);
+  const body = {
+    event_id: eventId,
+    corrected_name: name,
+    corrected_species_id: spid || null,
+    not_a_fish: false,
+    is_endorsement: isEndorsement,
     confidence: conf,
     reviewer: reviewer || null,
     notes: notes || null,
   };
+  await postCorrection(eventId, body, isEndorsement ? "endorsed" : "corrected");
+}
+
+async function postCorrection(eventId, body, label) {
   try {
-    const r = await fetch("/api/corrections", {
+    const resp = await fetch("/api/corrections", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...writeAuthHeaders() },
       body: JSON.stringify(body),
     });
-    if (r.status === 401) {
-      alert("write token required or invalid — paste it in the field next to 'reviewer'");
+    if (resp.status === 401) {
+      alert("reviewer write token required — set it from the header (Reviewing as: link)");
       return;
     }
-    if (!r.ok) throw new Error(`${r.status}`);
+    if (!resp.ok) throw new Error(`${resp.status}`);
     const li = document.querySelector(`li[data-event-id="${eventId}"]`);
     if (li) {
-      li.querySelector(".correction-slot").innerHTML = `<div class="correction-ok">✓ saved</div>`;
+      const slot = li.querySelector(".correction-slot");
+      slot.innerHTML = `<div class="correction-ok">✓ ${label}</div>`;
+      // Disable the action buttons so reviewers don't double-submit.
+      for (const b of li.querySelectorAll(".ev-btn")) b.disabled = true;
     }
     tickCorrectionStats();
   } catch (e) {
     alert(`save failed: ${e}`);
   }
+}
+
+function persistReviewerFromInputs() {
+  const input = document.getElementById("reviewer-input");
+  const v = (input?.value || "").trim();
+  if (v) localStorage.setItem("wb_reviewer", v);
+  return v || (localStorage.getItem("wb_reviewer") || "");
 }
 
 async function tickCorrectionStats() {
@@ -358,7 +509,10 @@ function initReviewer() {
     const saved = localStorage.getItem("wb_reviewer");
     if (saved) el.value = saved;
     el.addEventListener("change", () => {
-      if (el.value.trim()) localStorage.setItem("wb_reviewer", el.value.trim());
+      if (el.value.trim()) {
+        localStorage.setItem("wb_reviewer", el.value.trim());
+        updateReviewerChip();
+      }
     });
   }
   const tk = document.getElementById("write-token-input");
@@ -370,7 +524,39 @@ function initReviewer() {
       if (v) localStorage.setItem("wb_write_token", v);
       else localStorage.removeItem("wb_write_token");
       updateAuthBadge();
+      updateReviewerChip();
     });
+  }
+  updateReviewerChip();
+}
+
+// Once a reviewer has saved both their email and write token, collapse the
+// header inputs into a compact "Reviewing as: X" chip with a [change] link
+// to bring the inputs back. Keeps the focus on the actual review queue.
+function updateReviewerChip() {
+  const email = (localStorage.getItem("wb_reviewer") || "").trim();
+  const token = (localStorage.getItem("wb_write_token") || "").trim();
+  const chip = document.getElementById("reviewer-chip");
+  const inputs = document.getElementById("reviewer-inputs");
+  if (!chip || !inputs) return;
+  if (email && (token || !WRITE_PROTECTED)) {
+    chip.innerHTML = `Reviewing as: <strong>${escHtml(email)}</strong> <a href="#" onclick="event.preventDefault();showReviewerInputs()">change</a>`;
+    chip.style.display = "";
+    inputs.style.display = "none";
+  } else {
+    chip.style.display = "none";
+    inputs.style.display = "";
+  }
+}
+
+function showReviewerInputs() {
+  const chip = document.getElementById("reviewer-chip");
+  const inputs = document.getElementById("reviewer-inputs");
+  if (chip) chip.style.display = "none";
+  if (inputs) {
+    inputs.style.display = "";
+    const el = document.getElementById("reviewer-input");
+    if (el) el.focus();
   }
 }
 

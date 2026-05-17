@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS saved_frames (
 );
 
 CREATE INDEX IF NOT EXISTS saved_frames_ts_desc ON saved_frames (ts DESC);
+-- Lookups by (frame_id, source_name) join detection_events back to its source
+-- frame for ROI review. Without this index the dashboard's /api/events JOIN
+-- degenerates to a 50s sequential scan over millions of saved_frames rows.
+CREATE INDEX IF NOT EXISTS saved_frames_frame_source
+    ON saved_frames (frame_id, source_name);
 
 -- Water-quality sonde readings (sensestream.org wahoo_2 deployment).
 -- Populated either from a live poller or from the synthetic data generator
@@ -254,6 +259,7 @@ CREATE TABLE IF NOT EXISTS detection_corrections (
     corrected_name        TEXT,                    -- NULL + not_a_fish=true  →  false positive
     corrected_species_id  TEXT,
     not_a_fish            BOOLEAN NOT NULL DEFAULT FALSE,
+    is_endorsement        BOOLEAN NOT NULL DEFAULT FALSE,  -- reviewer hit "Looks right"; corrected_name == best_name
     confidence            TEXT NOT NULL DEFAULT 'probable',  -- 'certain' | 'probable' | 'uncertain'
     reviewer              TEXT,
     notes                 TEXT,

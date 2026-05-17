@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -20,6 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
@@ -54,6 +56,7 @@ class CorrectionIn(BaseModel):
     corrected_name: str | None = None
     corrected_species_id: str | None = None
     not_a_fish: bool = False
+    is_endorsement: bool = False  # reviewer hit "Looks right" — corrected_name == best_name
     confidence: str = Field("probable", pattern="^(certain|probable|uncertain)$")
     reviewer: str | None = None
     notes: str | None = None
@@ -62,6 +65,39 @@ log = logging.getLogger("wahoobay.dashboard")
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+def _crop_roi(
+    image_path: Path,
+    bbox: list[int],
+    pad_frac: float,
+    max_edge: int,
+) -> Image.Image:
+    """Crop a detection bbox out of a source frame with a fractional pad.
+
+    Synchronous; run in a threadpool from the route handler. Bbox is
+    [x1, y1, x2, y2] in source pixel coordinates. Pad expands the crop by
+    `pad_frac * max(width, height)` on each side, clamped to image bounds.
+    Output is downscaled so the longer edge is at most `max_edge` px.
+    """
+    x1, y1, x2, y2 = bbox
+    with Image.open(image_path) as src:
+        src.load()
+        W, H = src.size
+        w = max(1, x2 - x1)
+        h = max(1, y2 - y1)
+        pad = int(round(max(w, h) * pad_frac))
+        cx1 = max(0, x1 - pad)
+        cy1 = max(0, y1 - pad)
+        cx2 = min(W, x2 + pad)
+        cy2 = min(H, y2 + pad)
+        roi = src.crop((cx1, cy1, cx2, cy2)).convert("RGB")
+    rw, rh = roi.size
+    longest = max(rw, rh)
+    if longest > max_edge:
+        scale = max_edge / longest
+        roi = roi.resize((max(1, int(rw * scale)), max(1, int(rh * scale))), Image.LANCZOS)
+    return roi
 
 
 def _env(key: str, default: str) -> str:
@@ -352,12 +388,29 @@ def build_app() -> FastAPI:
             where.append("best_species_id = %s")
             params.append(species_id)
         params.append(limit)
+        # detection_events.image_path is legacy / always NULL — the worker
+        # writes interesting frames to saved_frames (keyed by frame_id +
+        # source_name). Use a correlated subquery instead of a JOIN: the LIMIT
+        # caps how many lookups fire, the saved_frames index on
+        # (frame_id, source_name) makes each one O(log N), and we avoid the
+        # duplicate-event-row problem when saved_frames has multiple rows for
+        # the same key (which happens — same frame can be saved under several
+        # reasons). Newest matching saved_frame wins.
+        where_q = " AND ".join("de." + w for w in where)
         sql = f"""
-            SELECT id, ts, frame_id, source_name, det_conf, bbox,
-                   best_name, best_species_id, best_accuracy, image_path
-              FROM detection_events
-             WHERE {' AND '.join(where)}
-             ORDER BY ts DESC
+            SELECT de.id, de.ts, de.frame_id, de.source_name, de.det_conf,
+                   de.bbox, de.topk, de.best_name, de.best_species_id,
+                   de.best_accuracy,
+                   COALESCE(
+                     de.image_path,
+                     (SELECT image_path FROM saved_frames sf
+                       WHERE sf.frame_id = de.frame_id
+                         AND sf.source_name = de.source_name
+                       ORDER BY sf.ts DESC LIMIT 1)
+                   ) AS image_path
+              FROM detection_events de
+             WHERE {where_q}
+             ORDER BY de.ts DESC
              LIMIT %s
         """
         async with pool.connection() as conn:
@@ -367,6 +420,69 @@ def build_app() -> FastAPI:
         for r in rows:
             r["ts"] = r["ts"].isoformat() if r["ts"] else None
         return JSONResponse(rows)
+
+    @app.get("/api/detections/{event_id}/roi.jpg")
+    async def detection_roi(
+        event_id: int,
+        size: int = Query(384, ge=64, le=1024),
+        pad: float = Query(0.10, ge=0.0, le=0.5),
+    ) -> Response:
+        """Return the cropped bbox region for a detection as a JPEG.
+
+        Reviewers see the actual ROI rather than just a text label when
+        deciding whether to accept / correct a prediction. ``pad`` adds a
+        small fractional margin around the bbox so the fish isn't flush
+        against the crop edge. ``size`` caps the longer edge of the output.
+        """
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT de.bbox,
+                           COALESCE(
+                             de.image_path,
+                             (SELECT image_path FROM saved_frames sf
+                               WHERE sf.frame_id = de.frame_id
+                                 AND sf.source_name = de.source_name
+                               ORDER BY sf.ts DESC LIMIT 1)
+                           ) AS image_path
+                      FROM detection_events de
+                     WHERE de.id = %s
+                    """,
+                    (event_id,),
+                )
+                row = await cur.fetchone()
+        if row is None:
+            return JSONResponse({"error": "event not found"}, status_code=404)
+        image_path = row.get("image_path")
+        bbox = row.get("bbox") or []
+        if not image_path or len(bbox) != 4:
+            return JSONResponse(
+                {"error": "no frame saved for this detection"}, status_code=404,
+            )
+        path = Path(image_path)
+        if not path.exists():
+            return JSONResponse({"error": "frame file missing on disk"}, status_code=404)
+        try:
+            img = await asyncio.get_running_loop().run_in_executor(
+                None, _crop_roi, path, bbox, pad, size,
+            )
+        except Exception as e:
+            log.warning("ROI crop failed for event %s: %s", event_id, e)
+            return JSONResponse({"error": f"crop failed: {e}"}, status_code=500)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/jpeg",
+            headers={
+                # ROI is immutable for an event_id (bbox + frame don't change)
+                "Cache-Control": "public, max-age=86400, immutable",
+            },
+        )
 
     @app.get("/api/species_counts")
     async def species_counts(
@@ -753,18 +869,20 @@ def build_app() -> FastAPI:
                     """
                     INSERT INTO detection_corrections
                     (event_id, corrected_name, corrected_species_id,
-                     not_a_fish, confidence, reviewer, notes)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s)
+                     not_a_fish, is_endorsement, confidence, reviewer, notes)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id, created_at
                     """,
                     (body.event_id, body.corrected_name, body.corrected_species_id,
-                     body.not_a_fish, body.confidence, body.reviewer, body.notes),
+                     body.not_a_fish, body.is_endorsement, body.confidence,
+                     body.reviewer, body.notes),
                 )
                 row = await cur.fetchone()
         return JSONResponse({
             "id": row["id"],
             "event_id": body.event_id,
             "created_at": row["created_at"].isoformat(),
+            "is_endorsement": body.is_endorsement,
         })
 
     @app.get("/api/corrections")
