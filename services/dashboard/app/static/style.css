@@ -926,22 +926,25 @@ li.empty { color: var(--muted); font-style: italic; }
    prediction directly from the lightbox. Slightly larger hit targets than
    the inline list controls since the modal has the real estate. */
 .roi-modal-actions {
-  padding: 10px 4px 4px;
+  padding: 14px 4px 4px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 .roi-modal-actions .event-actions { justify-content: center; gap: 10px; }
 .roi-modal-actions .ev-btn { font-size: 14px; padding: 8px 18px; }
 .roi-modal-actions:empty { display: none; }
+/* Breathing room between the primary actions (✓ Looks right / ✏️ Correct)
+   and the expanded correction form below them. */
+.roi-modal-actions .correction-slot:not(:empty) { margin-top: 16px; }
 
 /* The list-card form is tuned for a narrow sidebar; the modal has real
    estate, so scale everything up so reviewers aren't squinting. */
 .roi-modal-actions .correction-form {
   background: rgba(79, 193, 255, 0.07);
-  padding: 14px 16px;
-  gap: 14px;
+  padding: 16px 18px;
+  gap: 18px;
 }
-.roi-modal-actions .cf-section { gap: 8px; }
-.roi-modal-actions .cf-label { font-size: 12px; letter-spacing: 0.6px; }
+.roi-modal-actions .cf-section { gap: 10px; }
+.roi-modal-actions .cf-label { font-size: 12px; letter-spacing: 0.6px; margin-bottom: 2px; }
 .roi-modal-actions .correction-form input,
 .roi-modal-actions .correction-form select {
   font-size: 14px;
