@@ -940,11 +940,16 @@ li.empty { color: var(--muted); font-style: italic; }
    estate, so scale everything up so reviewers aren't squinting. */
 .roi-modal-actions .correction-form {
   background: rgba(79, 193, 255, 0.07);
-  padding: 16px 18px;
-  gap: 18px;
+  padding: 18px 20px;
+  gap: 0;
 }
 .roi-modal-actions .cf-section { gap: 10px; }
+/* Use explicit margin-top instead of flex `gap` for the modal form — the
+   bordered text input was visually butting up against the next section's
+   label even with gap:18px in place. Margin-top is unambiguous. */
+.roi-modal-actions .cf-section + .cf-section { margin-top: 24px; }
 .roi-modal-actions .cf-label { font-size: 12px; letter-spacing: 0.6px; margin-bottom: 2px; }
+.roi-modal-actions .cf-actions { margin-top: 18px; }
 .roi-modal-actions .correction-form input,
 .roi-modal-actions .correction-form select {
   font-size: 14px;
