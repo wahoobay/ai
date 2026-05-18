@@ -1,11 +1,29 @@
 """Latin → friendly common-name lookup.
 
-Curated for SE-Florida / Caribbean reef fauna we expect to see at Wahoo Bay
-or the Pompano pier. Anything not in this dict falls back to the Latin
-binomial in the UI; users can still google it. Add entries here as the
-classifier surfaces species we want to label nicely.
+Two layers feed the lookup:
+
+1. The hand-curated `COMMON_NAMES` dict below — preferred labels we
+   explicitly want (e.g. "Blue Tang" rather than the iNat-canonical
+   "Atlantic Blue Tang"). Edit here when a class deserves a specific
+   short label.
+
+2. At module import we merge in any binomial → common_name pairs from
+   the dataset manifests (assets/species_manifest.json for the Wahoo
+   Bay spreadsheet, assets/inat_manifest.json for iNat photos).
+   Curated entries always win; manifests fill the long tail of
+   classes nobody bothered to hand-label.
+
+If neither source has a name for a binomial, the dashboard falls
+through to italic Latin alone — that's the "(G. species)" you see in
+the UI.
 """
 from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 COMMON_NAMES: dict[str, str] = {
     # Damselfishes
@@ -119,16 +137,76 @@ COMMON_NAMES: dict[str, str] = {
 }
 
 
+# ---- manifest-derived fallback layer --------------------------------------
+#
+# Populated once at import. Tried only when COMMON_NAMES has no entry for a
+# binomial, so the hand-curated label always wins. Stored separately (not
+# merged into COMMON_NAMES) so a future hot-reload could replace just this
+# layer without dropping the curated overrides.
+_MANIFEST_NAMES: dict[str, str] = {}
+
+
+def _repo_root() -> Path:
+    # services/dashboard/app/common_names.py → repo root is three parents up.
+    return Path(__file__).resolve().parents[3]
+
+
+def _ingest_manifest(path: Path, b_key: str, c_key: str) -> int:
+    """Add (binomial → common_name) pairs from a JSON manifest. Returns the
+    number of entries newly added. First non-empty common name per binomial
+    wins; manifests are checked in order at module load."""
+    added = 0
+    try:
+        rows = json.loads(path.read_text())
+    except FileNotFoundError:
+        return 0
+    except Exception as e:
+        log.warning("common_names: failed to read %s (%s); skipping", path, e)
+        return 0
+    if not isinstance(rows, list):
+        return 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        b = (r.get(b_key) or "").strip()
+        c = (r.get(c_key) or "").strip()
+        if not b or not c:
+            continue
+        if b in COMMON_NAMES or b in _MANIFEST_NAMES:
+            continue
+        _MANIFEST_NAMES[b] = c
+        added += 1
+    return added
+
+
+def _load_manifest_names() -> None:
+    root = _repo_root()
+    # species_manifest.json first (spreadsheet-curated, generally the
+    # cleanest labels). inat_manifest.json second to backfill the tail.
+    n_sm = _ingest_manifest(root / "assets" / "species_manifest.json",
+                            "binomial", "common_name")
+    n_in = _ingest_manifest(root / "assets" / "inat_manifest.json",
+                            "binomial", "common_name")
+    if _MANIFEST_NAMES:
+        log.info(
+            "common_names: loaded %d manifest fallbacks (species_manifest=%d, inat=%d)",
+            len(_MANIFEST_NAMES), n_sm, n_in,
+        )
+
+
+_load_manifest_names()
+
+
 def common(latin_name: str | None) -> str | None:
     """Return the friendly common name if known; else None."""
     if not latin_name:
         return None
-    return COMMON_NAMES.get(latin_name)
+    return COMMON_NAMES.get(latin_name) or _MANIFEST_NAMES.get(latin_name)
 
 
 def display(latin_name: str | None) -> str:
     """Return 'Common Name (Latinus binomialis)' or just the latin name."""
     if not latin_name:
         return "Unknown"
-    cn = COMMON_NAMES.get(latin_name)
+    cn = common(latin_name)
     return f"{cn} ({latin_name})" if cn else latin_name
