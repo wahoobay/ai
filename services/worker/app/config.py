@@ -47,6 +47,10 @@ class Config:
     classifier_v2_arch: str
     classifier_v2_input_size: int
     classifier_v2_compile: bool
+
+    # Per-camera no-fish-zone polygons. JSON file path; see
+    # data/camera_negative_regions.json for format. Empty string disables.
+    negative_regions_path: str
     device: str
     det_imgsz: int
     det_conf_threshold: float
@@ -144,6 +148,10 @@ class Config:
             classifier_v2_arch=_str("CLASSIFIER_V2_ARCH", "vit_small_patch14_dinov2"),
             classifier_v2_input_size=_int("CLASSIFIER_V2_INPUT_SIZE", 224),
             classifier_v2_compile=_bool("CLASSIFIER_V2_COMPILE", True),
+            negative_regions_path=_str(
+                "NEGATIVE_REGIONS_PATH",
+                "/data/camera_negative_regions.json",
+            ),
             device=_str("DEVICE", "cuda:0"),
             det_imgsz=_int("DET_IMGSZ", 640),
             det_conf_threshold=_float("DET_CONF_THRESHOLD", 0.25),

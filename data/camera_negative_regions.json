@@ -1,0 +1,20 @@
+{
+  "_about": "Per-camera no-fish-zones. The detector reliably emits false-positive boxes on stationary reef geometry — notably the dark oval holes in the SEAHIVE artificial reef. Any detection whose bbox center falls inside a region listed below is dropped before reaching the classifier, so it never lands in detection_events or the reviewer queue.",
+  "_format": {
+    "polygon": "list of [x, y] integer image-pixel coordinates. Vertices joined in order; the last vertex connects back to the first.",
+    "frame_w / frame_h": "image resolution the polygon was annotated against. If the camera resolution changes, the filter rescales polygons proportionally at load time."
+  },
+  "_admin_ui": "Draw + save regions interactively at /admin/regions.html on the dashboard.",
+  "sources": {
+    "seahivecam": {
+      "frame_w": 1280,
+      "frame_h": 720,
+      "regions": []
+    },
+    "pier_cam": {
+      "frame_w": 1280,
+      "frame_h": 720,
+      "regions": []
+    }
+  }
+}

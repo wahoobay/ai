@@ -26,6 +26,7 @@ export DETECTOR_PATH="${DETECTOR_PATH:-$(pwd)/data/models/detector_v26/model.pt}
 export CLASSIFIER_BACKEND="${CLASSIFIER_BACKEND:-v2}"
 export CLASSIFIER_V2_CHECKPOINT="${CLASSIFIER_V2_CHECKPOINT:-$(pwd)/data/models/classifier_v2/checkpoint_best.pt}"
 export CLASSIFIER_V2_CLASSES_JSON="${CLASSIFIER_V2_CLASSES_JSON:-$(pwd)/data/models/classifier_v2/classes.json}"
+export NEGATIVE_REGIONS_PATH="${NEGATIVE_REGIONS_PATH:-$(pwd)/data/camera_negative_regions.json}"
 # Legacy Fishial (one-flag revert path) — kept available locally too.
 export CLASSIFIER_PATH="${CLASSIFIER_PATH:-$(pwd)/data/models/classifier_v0_10_2/model.pt}"
 export CLASSIFIER_INFERENCE_MODULE_DIR="${CLASSIFIER_INFERENCE_MODULE_DIR:-$(pwd)/data/models/classifier_v0_10_2}"

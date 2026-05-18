@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -193,6 +194,14 @@ class DashboardCfg:
         # How often to refresh species_sightings_mat. 60 s gives the dashboard
         # near-real-time data; raise on a busy DB to reduce refresh cost.
         self.matview_refresh_interval_s = float(_env("MATVIEW_REFRESH_INTERVAL_S", "60"))
+        # Per-camera no-fish-zones config. Read by the admin endpoint that
+        # serves the regions-drawing UI, and written by its POST companion.
+        # The worker reads the same file at subprocess startup and uses it
+        # to drop false-positive detections on stationary reef geometry.
+        self.negative_regions_path = _env(
+            "NEGATIVE_REGIONS_PATH",
+            "/raid/scratch/dzimmerman2021/wahoobay/data/camera_negative_regions.json",
+        )
 
 
 def build_app() -> FastAPI:
@@ -376,13 +385,28 @@ def build_app() -> FastAPI:
             return _no_pier_response()
         return _proxy_mjpeg("/stream_raw.mjpeg", cfg.worker_url_pier)
 
+    @app.get("/api/snapshot.jpg")
+    async def snapshot(raw: int = 0) -> Response:
+        """Single-frame snapshot from the primary worker. `raw=1` returns
+        the bare camera frame (no bbox overlay) — used by the
+        negative-regions admin UI so polygons get drawn against a clean
+        image."""
+        client: httpx.AsyncClient = state["client"]
+        worker_path = "/snapshot_raw.jpg" if raw else "/snapshot.jpg"
+        try:
+            r = await client.get(f"{cfg.worker_url}{worker_path}")
+            return Response(content=r.content, media_type="image/jpeg", status_code=r.status_code)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+
     @app.get("/api/snapshot_pier.jpg")
-    async def snapshot_pier() -> Response:
+    async def snapshot_pier(raw: int = 0) -> Response:
         if not cfg.worker_url_pier:
             return _no_pier_response()
         client: httpx.AsyncClient = state["client"]
+        worker_path = "/snapshot_raw.jpg" if raw else "/snapshot.jpg"
         try:
-            r = await client.get(f"{cfg.worker_url_pier}/snapshot.jpg")
+            r = await client.get(f"{cfg.worker_url_pier}{worker_path}")
             return Response(content=r.content, media_type="image/jpeg", status_code=r.status_code)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
@@ -1098,6 +1122,114 @@ def build_app() -> FastAPI:
             r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
             r["event_ts"]   = r["event_ts"].isoformat()   if r.get("event_ts")   else None
         return JSONResponse(rows)
+
+    # ------------------------------------------------------------------
+    # Per-camera no-fish-zone admin (polygon mask for false-positive
+    # geometry — SEAHIVE holes, dock pilings, etc.). The drawing UI is
+    # at /admin/regions.html; the worker reads the saved JSON at
+    # subprocess startup.
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/regions.html")
+    async def regions_admin_page() -> Response:
+        """The polygon-drawing admin UI. Standalone HTML page — no
+        templating needed, the JS fetches everything else from the
+        sibling API endpoints below."""
+        try:
+            html = (BASE_DIR / "templates" / "regions_admin.html").read_text()
+        except FileNotFoundError:
+            return JSONResponse(
+                {"error": "regions_admin.html missing on disk"}, status_code=500,
+            )
+        return Response(content=html, media_type="text/html")
+
+    @app.get("/api/admin/negative_regions")
+    async def get_negative_regions() -> Response:
+        try:
+            data = json.loads(Path(cfg.negative_regions_path).read_text())
+        except FileNotFoundError:
+            data = {"sources": {}}
+        except Exception as e:
+            return JSONResponse(
+                {"error": f"failed to read regions config: {e}"}, status_code=500,
+            )
+        return JSONResponse(data)
+
+    @app.post(
+        "/api/admin/negative_regions",
+        dependencies=[Depends(require_write_token)],
+    )
+    async def post_negative_regions(body: dict) -> Response:
+        """Replace the full negative-regions JSON. Validates shape so a
+        malformed POST can't poison the worker's startup. Worker reads
+        this file at boot — restart workers to apply changes."""
+        if not isinstance(body, dict) or "sources" not in body:
+            return JSONResponse(
+                {"error": "payload must be a JSON object with a 'sources' key"},
+                status_code=400,
+            )
+        sources = body.get("sources")
+        if not isinstance(sources, dict):
+            return JSONResponse(
+                {"error": "'sources' must be an object keyed by source_name"},
+                status_code=400,
+            )
+        for src, cfg_per_src in sources.items():
+            if not isinstance(cfg_per_src, dict):
+                return JSONResponse(
+                    {"error": f"sources.{src} must be an object"}, status_code=400,
+                )
+            regions = cfg_per_src.get("regions") or []
+            if not isinstance(regions, list):
+                return JSONResponse(
+                    {"error": f"sources.{src}.regions must be a list"}, status_code=400,
+                )
+            for i, r in enumerate(regions):
+                if not isinstance(r, dict):
+                    return JSONResponse(
+                        {"error": f"sources.{src}.regions[{i}] must be an object"},
+                        status_code=400,
+                    )
+                poly = r.get("polygon")
+                if not isinstance(poly, list) or len(poly) < 3:
+                    return JSONResponse(
+                        {"error": f"sources.{src}.regions[{i}].polygon needs >=3 vertices"},
+                        status_code=400,
+                    )
+                for v in poly:
+                    if (
+                        not isinstance(v, list)
+                        or len(v) != 2
+                        or not all(isinstance(x, (int, float)) for x in v)
+                    ):
+                        return JSONResponse(
+                            {"error": f"vertices must be [x, y] number pairs ({src}#{i})"},
+                            status_code=400,
+                        )
+        path = Path(cfg.negative_regions_path)
+        try:
+            # Preserve any underscore-prefixed top-level keys (the
+            # _about / _format / _admin_ui docstrings in the on-disk
+            # file). The admin UI doesn't know about them and will
+            # otherwise wipe them on save.
+            existing: dict = {}
+            try:
+                existing = json.loads(path.read_text())
+            except FileNotFoundError:
+                pass
+            merged = {k: v for k, v in existing.items() if k.startswith("_")}
+            merged.update(body)
+            # Write to a temp file, then rename — atomic on the same
+            # filesystem. Worker is reading the file at startup only,
+            # so we don't need to coordinate with a live reader.
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(merged, indent=2))
+            tmp.replace(path)
+        except Exception as e:
+            return JSONResponse(
+                {"error": f"failed to write regions config: {e}"}, status_code=500,
+            )
+        return JSONResponse({"ok": True, "saved": str(path)})
 
     @app.get("/api/corrections/stats")
     async def correction_stats() -> Response:

@@ -107,6 +107,7 @@ def run_inference_worker(
     import cv2
 
     from .frame_shm import FrameShmReader
+    from .negative_regions import NegativeRegionFilter
     from .overlay import annotate
     from .persistence import EventLog, ImageSaver, PgWriter
     from .provenance import compute as compute_provenance
@@ -149,6 +150,7 @@ def run_inference_worker(
     provenance = compute_provenance(cfg)
 
     classifier = _Pipeline(cfg)
+    negative_filter = NegativeRegionFilter(getattr(cfg, "negative_regions_path", None))
     event_log = EventLog(cfg.events_log_dir)
     saver = ImageSaver(cfg)
 
@@ -270,6 +272,16 @@ def run_inference_worker(
 
                 t0 = time.time()
                 detections = classifier.process_frame(frame_bgr)
+                # Drop detections that fall inside a configured no-fish
+                # zone for this camera (stationary reef geometry —
+                # SEAHIVE holes etc.). Applied here, post-classifier,
+                # so the filter sees the exact same bboxes the rest of
+                # the pipeline would have persisted.
+                if negative_filter.has_regions and detections:
+                    h, w = frame_bgr.shape[:2]
+                    detections, _n_filtered = negative_filter.filter_detections(
+                        item.source_name, detections, w, h,
+                    )
                 infer_ms = (time.time() - t0) * 1000
 
                 had_fish = bool(detections)
