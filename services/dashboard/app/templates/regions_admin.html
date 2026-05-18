@@ -62,9 +62,14 @@
   Press <b>Close polygon</b> (or double-click) to commit the current
   shape, then start the next one. Hit <b>Save</b> to write the JSON to
   disk. Restart the workers afterwards for the change to take effect.
-  Any detection whose bbox center lands inside any polygon is dropped
-  before reaching the classifier, so it never lands in the events
-  list or the reviewer queue.
+  <br><br>
+  <b>How the filter works:</b> a detection is dropped only when its
+  bbox closely <i>matches</i> a polygon — IoU(bbox, polygon's bounding
+  rect) ≥ <code>min_iou</code> (default 0.5). The hole's own
+  false-positive is roughly the size of the hole and matches; a fish
+  that swims through has a much smaller bbox and so a tiny IoU even
+  when fully inside, so it's kept. Draw the polygon as tightly to the
+  hole's actual outline as you can — closer match = better filtering.
 </div>
 
 <div class="row" style="margin-top: 16px;">
