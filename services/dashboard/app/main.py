@@ -42,6 +42,7 @@ from .exports import (
     export_topk_long,
     export_tracks_timeline,
     export_water_quality,
+    export_weather,
     fetch_parquet_bytes,
     query_for,
 )
@@ -1807,6 +1808,21 @@ def build_app() -> FastAPI:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_water_quality(pool, hours, deployment)
         return _csv_response(gen, _csv_filename("water_quality", hours=hours, deployment=deployment))
+
+    @app.get("/api/export/weather.csv")
+    async def export_weather_csv(
+        hours: int = Query(24, ge=1, le=24 * 365),
+        deployment: str = Query("wahoo_2"),
+    ) -> Response:
+        """All columns of weather_readings: on-site WXT-536 station
+        readings (wind, pressure, rain, air temp, RH, solar rad, …)
+        plus the merged Open-Meteo / NWS forecast layer (cloud cover,
+        dew point, UV index, weather code, METAR description)."""
+        pool: AsyncConnectionPool | None = state.get("pool")
+        if pool is None:
+            return JSONResponse({"error": "database unavailable"}, status_code=503)
+        gen = export_weather(pool, hours, deployment)
+        return _csv_response(gen, _csv_filename("weather", hours=hours, deployment=deployment))
 
     @app.get("/api/export/frame_stats.csv")
     async def export_frame_stats_csv(

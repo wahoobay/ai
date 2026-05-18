@@ -146,6 +146,48 @@ def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str)
     return _stream(pool, sql, (deployment, hours), cols)
 
 
+def export_weather(pool: AsyncConnectionPool, hours: int, deployment: str):
+    """All columns of weather_readings — on-site WXT-536 station feed
+    plus the merged Open-Meteo / NWS forecast layer. Both sources are
+    materialised on the same row by the poller; NULLs are normal where
+    one feed has a measurement the other doesn't."""
+    sql = """
+        SELECT ts, deployment_uri, source,
+               bar_press_hpa,
+               wind_dir_avg_deg, wind_dir_min_deg, wind_dir_max_deg,
+               wind_speed_avg_ms, wind_speed_min_ms, wind_speed_max_ms,
+               air_temp_c, rel_humidity_pct,
+               rain_accum_mm, rain_dur_frac_hr,
+               rain_int_mm_hr, rain_peak_int_mm_hr,
+               hail_accum, hail_dur, hail_int, hail_peak_int,
+               water_level_mm, solar_rad_wm2,
+               cloud_cover_pct, dew_point_c,
+               forecast_humidity_pct, precip_intensity_mm_hr, precip_prob_pct,
+               press_sea_level_hpa, press_surface_hpa,
+               temp_apparent_c, uv_index,
+               weather_code, weather_description
+          FROM weather_readings
+         WHERE deployment_uri = %s
+           AND ts >= NOW() - (%s::int || ' hours')::interval
+         ORDER BY ts ASC
+    """
+    cols = ["ts", "deployment_uri", "source",
+            "bar_press_hpa",
+            "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
+            "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
+            "air_temp_c", "rel_humidity_pct",
+            "rain_accum_mm", "rain_dur_frac_hr",
+            "rain_int_mm_hr", "rain_peak_int_mm_hr",
+            "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
+            "water_level_mm", "solar_rad_wm2",
+            "cloud_cover_pct", "dew_point_c",
+            "forecast_humidity_pct", "precip_intensity_mm_hr", "precip_prob_pct",
+            "press_sea_level_hpa", "press_surface_hpa",
+            "temp_apparent_c", "uv_index",
+            "weather_code", "weather_description"]
+    return _stream(pool, sql, (deployment, hours), cols)
+
+
 def export_frame_stats(pool: AsyncConnectionPool, hours: int):
     sql = """
         SELECT ts, source_name, frame_id,

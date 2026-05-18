@@ -121,6 +121,24 @@ Sonde readings (YSI EXO2 via SenseStream). Currently **synthetic
 placeholder data** until live SenseStream credentials are configured —
 look at the `source` column: `synthetic` vs `live`.
 
+### `weather.csv`
+
+Atmospheric readings. Two feeds merged onto each row:
+
+* **On-site station** (Vaisala WXT-536, polled via the Wahoo Bay API):
+  `bar_press_hpa`, `wind_dir_{avg,min,max}_deg`,
+  `wind_speed_{avg,min,max}_ms`, `air_temp_c`, `rel_humidity_pct`,
+  `rain_*`, `hail_*`, `water_level_mm`, `solar_rad_wm2`.
+* **Forecast / nearest-METAR layer** (Open-Meteo + NWS station KPMP):
+  `cloud_cover_pct`, `dew_point_c`, `forecast_humidity_pct`,
+  `precip_intensity_mm_hr`, `precip_prob_pct`,
+  `press_{sea_level,surface}_hpa`, `temp_apparent_c`, `uv_index`,
+  `weather_code` (WMO code), `weather_description` (METAR text).
+
+NULLs are expected where one feed has a measurement the other
+doesn't. `source` column: `live` (current normal) or `synthetic`
+(when the station feed has gapped).
+
 ### `frame_stats.csv`
 
 Drift sampler output, one row per ~1 s. Brightness, per-channel colour,
