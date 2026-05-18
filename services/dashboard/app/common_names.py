@@ -194,6 +194,15 @@ def _load_manifest_names() -> None:
         )
 
 
+def reload_manifest_names() -> int:
+    """Drop and rebuild the manifest fallback layer. Called by the
+    sheet poller after species_manifest.json gets rewritten. Returns
+    the new entry count for logging."""
+    _MANIFEST_NAMES.clear()
+    _load_manifest_names()
+    return len(_MANIFEST_NAMES)
+
+
 _load_manifest_names()
 
 

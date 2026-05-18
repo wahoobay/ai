@@ -46,7 +46,9 @@ from .exports import (
     fetch_parquet_bytes,
     query_for,
 )
+from .common_names import reload_manifest_names
 from .matviews import MatviewRefresher
+from .sheet_poller import SheetPoller
 from .stats import (
     rate_ci,
     species_counts_with_ci,
@@ -208,6 +210,16 @@ class DashboardCfg:
             "NEGATIVE_REGIONS_PATH",
             "/raid/scratch/dzimmerman2021/wahoobay/data/camera_negative_regions.json",
         )
+        # Google Sheet polling — refreshes assets/species.xlsx +
+        # downstream JSON catalogues on a schedule. Default URL points
+        # at Wahoo Bay's "Species + Fish named by Chatters" sheet
+        # (shared "anyone with link" so no auth needed). Setting
+        # SHEET_URL to an empty string disables the poller entirely.
+        self.sheet_url = _env(
+            "SHEET_URL",
+            "https://docs.google.com/spreadsheets/d/1Git0Chs3pnEDngCVfDJmQ7noGM90h7uCu3AKecNgiOQ/export?format=xlsx",
+        )
+        self.sheet_poll_interval_s = float(_env("SHEET_POLL_INTERVAL_HOURS", "24")) * 3600.0
 
 
 def build_app() -> FastAPI:
@@ -248,8 +260,37 @@ def build_app() -> FastAPI:
             log.warning("dashboard: failed to load celebrities.json (%s); feature inert", e)
 
         # SLO checker runs as a background task and upserts rows into `alerts`.
+        # Reusable hook: re-read the celebrities catalogue + manifest
+        # common-name fallback layer from disk. Called by the sheet
+        # poller after a successful build-script run, and by the
+        # /api/admin/refresh_sheets endpoint when invoked manually.
+        async def _reload_catalogues() -> dict:
+            stats: dict = {"celebrities": 0, "manifest_names": 0}
+            try:
+                doc = json.loads(
+                    (BASE_DIR.parent.parent.parent / "assets" / "celebrities.json").read_text()
+                )
+                celebs = doc.get("celebrities") or []
+                state["celebrities"] = celebs
+                state["celebrities_by_id"] = {c["id"]: c for c in celebs}
+                stats["celebrities"] = len(celebs)
+            except Exception as e:
+                log.warning("reload_catalogues: celebrities reload failed (%s)", e)
+            try:
+                stats["manifest_names"] = reload_manifest_names()
+            except Exception as e:
+                log.warning("reload_catalogues: manifest_names reload failed (%s)", e)
+            log.info(
+                "reload_catalogues: celebrities=%d, manifest_names=%d",
+                stats["celebrities"], stats["manifest_names"],
+            )
+            return stats
+
+        state["reload_catalogues"] = _reload_catalogues
+
         slo_task: asyncio.Task | None = None
         matview_task: asyncio.Task | None = None
+        sheet_task: asyncio.Task | None = None
         if state.get("pool") is not None:
             checker = SLOChecker(
                 pool=state["pool"],
@@ -275,10 +316,33 @@ def build_app() -> FastAPI:
             state["matviews"] = refresher
             matview_task = asyncio.create_task(refresher.run_forever(), name="matview-refresher")
 
+        # Google Sheet poller. Refreshes assets/species.xlsx + the
+        # downstream JSON catalogues on the configured cadence. The
+        # poller runs even without a DB pool (so manual /api/admin/
+        # refresh_sheets still works in DB-degraded mode).
+        sheet_poller: SheetPoller | None = None
+        if cfg.sheet_url and cfg.sheet_poll_interval_s > 0:
+            sheet_poller = SheetPoller(
+                sheet_url=cfg.sheet_url,
+                xlsx_path=BASE_DIR.parent.parent.parent / "assets" / "species.xlsx",
+                repo_root=BASE_DIR.parent.parent.parent,
+                interval_s=cfg.sheet_poll_interval_s,
+                http_client=client,
+                refresh_fn=lambda: _reload_catalogues(),
+            )
+            state["sheet_poller"] = sheet_poller
+            sheet_task = asyncio.create_task(sheet_poller.run_forever(), name="sheet-poller")
+            log.info(
+                "sheet poller: scheduled every %.1f h (url=%s)",
+                cfg.sheet_poll_interval_s / 3600, cfg.sheet_url,
+            )
+        else:
+            log.info("sheet poller: disabled (SHEET_URL empty or interval=0)")
+
         try:
             yield
         finally:
-            for t in (slo_task, matview_task):
+            for t in (slo_task, matview_task, sheet_task):
                 if t is not None:
                     t.cancel()
                     try:
@@ -1165,6 +1229,24 @@ def build_app() -> FastAPI:
     # sightings + canonical-photo data joins to detection_corrections
     # where reviewers have tagged a detection with a celebrity_id.
     # ------------------------------------------------------------------
+
+    @app.post(
+        "/api/admin/refresh_sheets",
+        dependencies=[Depends(require_write_token)],
+    )
+    async def refresh_sheets() -> Response:
+        """Force-refresh the Wahoo Bay Google Sheet right now. Returns
+        the poller's result blob (sheet_changed, rebuilt scripts, any
+        errors). Useful when a chatter just named a new fish and you
+        don't want to wait for the daily cycle."""
+        poller: SheetPoller | None = state.get("sheet_poller")
+        if poller is None:
+            return JSONResponse(
+                {"error": "sheet poller disabled (SHEET_URL empty)"},
+                status_code=503,
+            )
+        result = await poller.refresh_once(force=True)
+        return JSONResponse(result)
 
     @app.get("/api/celebrities")
     async def list_celebrities() -> Response:
