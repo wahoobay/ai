@@ -84,6 +84,8 @@ class WorkerApp:
             live_raw=self.live_raw,
             live_annotated=self.live,
             in_queue=self.infer.in_queue,
+            empty_q=self.infer.empty_q,
+            frame_pool=self.infer.frame_pool,
             stats=self.stats,
         )
         self.tap.start()
