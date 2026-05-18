@@ -322,6 +322,7 @@ function correctionFormHtml(eventId) {
         <input type="hidden" id="cf-species-id-${eventId}" value="">
       </div>
       ${altsBlock}
+      ${getCelebrityOptionsHtml(eventId, r?.best_species_id)}
       <div class="cf-section cf-quick">
         <button type="button" class="cf-bad" onclick="submitNotAFish(${eventId})">
           ✗ Not a fish
@@ -459,6 +460,14 @@ function pickSpecies(eventId, latin, speciesId) {
 // edit mode AND the user actually moved the box, else null. The three
 // submit handlers all merge it in so any of them can carry a bbox
 // correction alongside the species / endorsement / not-a-fish decision.
+function _maybeCelebrity(eventId) {
+  // Read the optional "Tag as celebrity" dropdown value if it's
+  // present in the current correction form. Empty string → null.
+  const sel = document.getElementById(`cf-celebrity-${eventId}`);
+  const v = (sel?.value || "").trim();
+  return v || null;
+}
+
 function _maybeBbox(eventId) {
   if (!_bboxEdit.active || _bboxEdit.eventId !== eventId) return null;
   return _consumeEditedBbox();
@@ -474,6 +483,7 @@ async function endorseEvent(eventId) {
     not_a_fish: false,
     is_endorsement: true,
     corrected_bbox: _maybeBbox(eventId),
+    celebrity_id: _maybeCelebrity(eventId),
     confidence: "certain",
     reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
     notes: null,
@@ -489,6 +499,7 @@ async function submitNotAFish(eventId) {
     not_a_fish: true,
     is_endorsement: false,
     corrected_bbox: _maybeBbox(eventId),
+    celebrity_id: _maybeCelebrity(eventId),
     confidence: document.getElementById(`cf-conf-${eventId}`)?.value || "probable",
     reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
     notes: (document.getElementById(`cf-notes-${eventId}`)?.value || "").trim() || null,
@@ -515,6 +526,7 @@ async function submitCorrection(eventId) {
     not_a_fish: false,
     is_endorsement: isEndorsement,
     corrected_bbox: _maybeBbox(eventId),
+    celebrity_id: _maybeCelebrity(eventId),
     confidence: conf,
     reviewer: reviewer || null,
     notes: notes || null,
@@ -2726,6 +2738,7 @@ async function tickReports() {
   try {
     if (tab === "overview")            await renderOverviewTab(hours);
     else if (tab === "fish-explorer")  await renderFishExplorerTab(hours);
+    else if (tab === "celebrities")    await renderCelebritiesTab();
     else if (tab === "water")          await renderWaterTab(hours);
     else if (tab === "weather")        await renderWeatherTab(hours);
     else if (tab === "insights")       await renderInsightsTab(hours);
@@ -2744,6 +2757,7 @@ initReportsToggle();
 _initFishExplorerInteractions();
 _initSpeciesModal();
 _initRoiModal();
+_initCelebrityModal();
 _initCameraToggle();
 refreshAuthMode();
 setInterval(tick, 500);
@@ -2764,3 +2778,170 @@ tickCorrectionStats();
 tickReef();
 tickTrends();
 tickReports();
+
+// ---------- Celebrities tab ----------
+//
+// Reads /api/celebrities (cached briefly), renders one card per named
+// individual + opens a per-celebrity modal with the full gallery of
+// reviewer-tagged sightings. Reviewer-tagging is wired into the ROI
+// modal via getCelebrityOptionsHtml() — see correctionFormHtml.
+
+let _celebsCache = null;        // [{...}, ...] from /api/celebrities, cached
+let _celebsCacheAt = 0;
+const _CELEBS_CACHE_TTL_MS = 60_000;
+
+async function _fetchCelebrities(force = false) {
+  const now = Date.now();
+  if (!force && _celebsCache && (now - _celebsCacheAt) < _CELEBS_CACHE_TTL_MS) {
+    return _celebsCache;
+  }
+  const r = await fetch("/api/celebrities", { cache: "no-store" });
+  if (!r.ok) return _celebsCache || [];
+  const d = await r.json();
+  _celebsCache = d.celebrities || [];
+  _celebsCacheAt = now;
+  return _celebsCache;
+}
+
+async function renderCelebritiesTab() {
+  const grid = document.getElementById("celeb-grid");
+  if (!grid) return;
+  const celebs = await _fetchCelebrities(true);
+  if (!celebs.length) {
+    grid.innerHTML = `<div class="celeb-empty">no celebrities catalogue loaded — see <code>scripts/build_celebrities.py</code></div>`;
+    return;
+  }
+  // Sort: most-recently-tagged first, then alphabetical for the
+  // never-tagged tail. Stable so the directory feels predictable.
+  celebs.sort((a, b) => {
+    const at = a.last_tagged_at || "";
+    const bt = b.last_tagged_at || "";
+    if (at && bt) return bt.localeCompare(at);
+    if (at && !bt) return -1;
+    if (bt && !at) return 1;
+    return a.nickname.localeCompare(b.nickname);
+  });
+  grid.innerHTML = celebs.map(c => {
+    const speciesLine = c.binomial
+      ? speciesDisplayHtml(c.binomial, c.common || c.species_common)
+      : `<span>${escHtml(c.species_common || "unknown species")}</span>`;
+    const sightings = c.sightings || 0;
+    const lastSeen = c.last_tagged_at
+      ? new Date(c.last_tagged_at).toLocaleDateString([], { month: "short", day: "numeric" })
+      : "—";
+    const photo = c.photo_url
+      ? `<img class="celeb-photo" src="${c.photo_url}" alt="${escAttr(c.nickname)}" loading="lazy" onerror="this.style.display='none'">`
+      : `<div class="celeb-photo celeb-photo-empty">no tagged photo yet</div>`;
+    return `
+      <div class="celeb-card" onclick="openCelebrityModal('${escAttr(c.id)}')" tabindex="0">
+        ${photo}
+        <div class="celeb-card-body">
+          <div class="celeb-name">${escHtml(c.nickname)}</div>
+          <div class="celeb-species">${speciesLine}</div>
+          ${c.id_mark ? `<div class="celeb-idmark">${escHtml(c.id_mark)}</div>` : ""}
+          <div class="celeb-meta">
+            <span title="reviewer-tagged sightings">${sightings} sighting${sightings === 1 ? "" : "s"}</span>
+            <span title="last reviewer tag">last seen ${lastSeen}</span>
+          </div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+// ---- Per-celebrity detail modal ----
+
+function _initCelebrityModal() {
+  const modal = document.getElementById("celeb-modal");
+  if (!modal) return;
+  const close = () => modal.classList.add("hidden");
+  modal.addEventListener("click", (e) => {
+    if (e.target.dataset.celebClose) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) close();
+  });
+}
+
+async function openCelebrityModal(celebId) {
+  const modal = document.getElementById("celeb-modal");
+  const body  = document.getElementById("celeb-modal-body");
+  if (!modal || !body) return;
+  body.innerHTML = `<div class="celeb-empty">loading ${escHtml(celebId)}…</div>`;
+  modal.classList.remove("hidden");
+  let d;
+  try {
+    const r = await fetch(`/api/celebrities/${encodeURIComponent(celebId)}`, { cache: "no-store" });
+    d = await r.json();
+    if (!r.ok) {
+      body.innerHTML = `<div class="celeb-empty">${escHtml(d.error || "unknown error")}</div>`;
+      return;
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="celeb-empty">failed: ${escHtml(String(e))}</div>`;
+    return;
+  }
+  const speciesLine = d.binomial
+    ? speciesDisplayHtml(d.binomial, d.common || d.species_common)
+    : escHtml(d.species_common || "unknown species");
+  const hero = d.photo_url
+    ? `<img class="celeb-hero" src="${d.photo_url}" alt="${escAttr(d.nickname)}">`
+    : `<div class="celeb-hero celeb-photo-empty">no tagged photo yet — once a reviewer tags a detection as ${escHtml(d.nickname)}, that detection's ROI shows up here.</div>`;
+  const firstSeen = d.first_seen || (d.first_tagged_at ? new Date(d.first_tagged_at).toLocaleDateString() : null);
+  const lastSeen  = d.last_seen  || (d.last_tagged_at  ? new Date(d.last_tagged_at).toLocaleDateString()  : null);
+  const galleryHtml = (d.gallery || []).length
+    ? `<div class="celeb-gallery">${d.gallery.map(g => `
+        <a class="celeb-thumb" href="javascript:openRoiModal(${g.event_id})" title="${escAttr(g.tagged_at || '')} · ${escAttr(g.reviewer || 'unknown reviewer')}">
+          <img src="${g.roi_url}" alt="event ${g.event_id}" loading="lazy" onerror="this.style.display='none'">
+        </a>`).join("")}</div>`
+    : `<div class="celeb-empty">no reviewer-tagged sightings yet.</div>`;
+  body.innerHTML = `
+    <div class="celeb-detail-grid">
+      <div class="celeb-detail-photo">${hero}</div>
+      <div class="celeb-detail-info">
+        <h2 class="celeb-name-h2">${escHtml(d.nickname)}</h2>
+        <div class="celeb-species">${speciesLine}</div>
+        ${d.id_mark ? `<p class="celeb-idmark">${escHtml(d.id_mark)}</p>` : ""}
+        <dl class="celeb-meta-dl">
+          ${d.named_by    ? `<dt>Named by</dt><dd>${escHtml(d.named_by)}</dd>` : ""}
+          ${firstSeen     ? `<dt>First seen</dt><dd>${escHtml(firstSeen)}</dd>` : ""}
+          ${lastSeen      ? `<dt>Last seen</dt><dd>${escHtml(lastSeen)}</dd>`   : ""}
+          <dt>Reviewer-tagged sightings</dt><dd>${d.sightings || 0}</dd>
+        </dl>
+      </div>
+    </div>
+    <h3 class="celeb-section-title">Tagged sightings</h3>
+    ${galleryHtml}
+  `;
+}
+
+// ---- Reviewer modal: "Tag as celebrity" dropdown ----
+//
+// Called from correctionFormHtml() to inject the optional dropdown.
+// Filters by binomial when the reviewer has chosen a species the
+// catalogue knows; passes an empty filter to show all otherwise.
+
+function getCelebrityOptionsHtml(eventId, filterBinomial) {
+  const celebs = _celebsCache || [];
+  // Default visible set: all celebrities whose binomial matches the
+  // filter, plus celebrities with no binomial (so they're not stuck
+  // behind a filter the catalogue can't apply).
+  const candidates = filterBinomial
+    ? celebs.filter(c => !c.binomial || c.binomial === filterBinomial)
+    : celebs;
+  if (!candidates.length) return "";
+  const opts = candidates
+    .map(c => `<option value="${escAttr(c.id)}">${escHtml(c.nickname)}${c.species_common ? " — " + escHtml(c.species_common) : ""}</option>`)
+    .join("");
+  return `
+    <div class="cf-section">
+      <div class="cf-label">Tag as celebrity (optional):</div>
+      <select id="cf-celebrity-${eventId}" class="cf-celebrity">
+        <option value="">— not a known individual —</option>
+        ${opts}
+      </select>
+    </div>`;
+}
+
+// Kick off a cache priming on load so the first reviewer-modal open
+// has the catalogue available.
+_fetchCelebrities().catch(() => {});

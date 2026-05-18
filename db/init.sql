@@ -264,11 +264,16 @@ CREATE TABLE IF NOT EXISTS detection_corrections (
     confidence            TEXT NOT NULL DEFAULT 'probable',  -- 'certain' | 'probable' | 'uncertain'
     reviewer              TEXT,
     notes                 TEXT,
+    -- Optional: reviewer-assigned celebrity id (Bobby, Barnadette, Marty, …).
+    -- Slugs match assets/celebrities.json. NULL = "not a known individual"
+    -- (the default — most detections are anonymous fish).
+    celebrity_id          TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS detection_corrections_event    ON detection_corrections (event_id);
 CREATE INDEX IF NOT EXISTS detection_corrections_reviewer ON detection_corrections (reviewer, created_at DESC);
 CREATE INDEX IF NOT EXISTS detection_corrections_ts_desc  ON detection_corrections (created_at DESC);
+CREATE INDEX IF NOT EXISTS detection_corrections_celebrity ON detection_corrections (celebrity_id, created_at DESC) WHERE celebrity_id IS NOT NULL;
 
 -- SLO alerts. Rule evaluator upserts on (name); acknowledgement + resolution
 -- are in-band. Keeping it flat (one table, no history) to start.

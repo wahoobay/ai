@@ -149,6 +149,7 @@
           <div class="reports-tabs" role="tablist">
             <button class="reports-tab active" data-tab="overview"        role="tab">Overview</button>
             <button class="reports-tab"        data-tab="fish-explorer"   role="tab">Fish Explorer</button>
+            <button class="reports-tab"        data-tab="celebrities"     role="tab">Celebrities</button>
             <button class="reports-tab"        data-tab="water"           role="tab">Water</button>
             <button class="reports-tab"        data-tab="weather"         role="tab">Weather</button>
             <button class="reports-tab"        data-tab="insights"        role="tab">Insights</button>
@@ -224,6 +225,28 @@
                 </div>
                 <p class="reports-placeholder-meta">Click any row for a species profile drill-through.</p>
               </section>
+            </div>
+          </div>
+
+          <!-- Celebrities tab — named recurring animals (Bobby the Blue Tang etc.). Cards link to per-celebrity galleries. -->
+          <div class="reports-tab-panel" id="tab-celebrities" role="tabpanel">
+            <div class="celeb-help">
+              Wahoo Bay's named recurring animals — collected from the
+              "Fish named by Chatters" sheet. Reviewers can tag a
+              detection as one of these celebrities in the ROI modal;
+              tagged sightings power the sightings count and the
+              auto-picked photo on each card. Click a card for the
+              full gallery of tagged sightings.
+            </div>
+            <div id="celeb-grid" class="celeb-grid"><div class="celeb-empty">loading…</div></div>
+          </div>
+
+          <!-- Celebrity detail modal — opens when a card is clicked. Shows photo + ID marks + gallery. -->
+          <div id="celeb-modal" class="roi-modal hidden" role="dialog" aria-modal="true">
+            <div class="roi-modal-backdrop" data-celeb-close="1"></div>
+            <div class="roi-modal-card celeb-modal-card">
+              <button class="roi-modal-x" data-celeb-close="1" aria-label="Close">✕</button>
+              <div id="celeb-modal-body">—</div>
             </div>
           </div>
 

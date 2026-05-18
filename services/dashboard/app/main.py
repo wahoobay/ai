@@ -63,6 +63,11 @@ class CorrectionIn(BaseModel):
     confidence: str = Field("probable", pattern="^(certain|probable|uncertain)$")
     reviewer: str | None = None
     notes: str | None = None
+    # Optional reviewer-assigned celebrity id — slug from assets/celebrities.json
+    # (Bobby, Marty, Stumpy, …). Most detections are anonymous, so this is
+    # usually None; when set, the per-celebrity gallery / sightings count
+    # picks the detection up.
+    celebrity_id: str | None = None
 
 log = logging.getLogger("wahoobay.dashboard")
 
@@ -222,6 +227,25 @@ def build_app() -> FastAPI:
         except Exception as e:
             log.warning("dashboard: postgres unavailable (%s); history endpoints will 503", e)
             state["pool"] = None
+
+        # Load the celebrities catalogue once at startup. Small file
+        # (~25 named animals) sourced from the "Fish named by Chatters"
+        # sheet via scripts/build_celebrities.py. Indexed by slug so
+        # the correction POST + the GET endpoints can look up O(1).
+        try:
+            celeb_doc = json.loads((BASE_DIR.parent.parent.parent / "assets" / "celebrities.json").read_text())
+            celebs = celeb_doc.get("celebrities") or []
+            state["celebrities"] = celebs
+            state["celebrities_by_id"] = {c["id"]: c for c in celebs}
+            log.info("dashboard: celebrities catalogue loaded (%d named individuals)", len(celebs))
+        except FileNotFoundError:
+            state["celebrities"] = []
+            state["celebrities_by_id"] = {}
+            log.info("dashboard: assets/celebrities.json not present; celebrities feature inert")
+        except Exception as e:
+            state["celebrities"] = []
+            state["celebrities_by_id"] = {}
+            log.warning("dashboard: failed to load celebrities.json (%s); feature inert", e)
 
         # SLO checker runs as a background task and upserts rows into `alerts`.
         slo_task: asyncio.Task | None = None
@@ -1067,6 +1091,17 @@ def build_app() -> FastAPI:
                 )
             bbox = [int(v) for v in bbox]
 
+        # If a celebrity_id was supplied, validate it against the loaded
+        # catalogue so a typo can't poison the gallery / sightings count.
+        celeb_id = (body.celebrity_id or "").strip() or None
+        if celeb_id is not None:
+            known = state.get("celebrities_by_id") or {}
+            if celeb_id not in known:
+                return JSONResponse(
+                    {"error": f"unknown celebrity_id={celeb_id!r}; not in assets/celebrities.json"},
+                    status_code=400,
+                )
+
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
@@ -1074,13 +1109,13 @@ def build_app() -> FastAPI:
                     INSERT INTO detection_corrections
                     (event_id, corrected_name, corrected_species_id,
                      not_a_fish, is_endorsement, corrected_bbox,
-                     confidence, reviewer, notes)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     confidence, reviewer, notes, celebrity_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id, created_at
                     """,
                     (body.event_id, body.corrected_name, body.corrected_species_id,
                      body.not_a_fish, body.is_endorsement, bbox,
-                     body.confidence, body.reviewer, body.notes),
+                     body.confidence, body.reviewer, body.notes, celeb_id),
                 )
                 row = await cur.fetchone()
         return JSONResponse({
@@ -1123,6 +1158,131 @@ def build_app() -> FastAPI:
             r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
             r["event_ts"]   = r["event_ts"].isoformat()   if r.get("event_ts")   else None
         return JSONResponse(rows)
+
+    # ------------------------------------------------------------------
+    # Celebrities — named recurring animals from the "Fish named by
+    # Chatters" sheet. The catalogue is loaded once at startup; the
+    # sightings + canonical-photo data joins to detection_corrections
+    # where reviewers have tagged a detection with a celebrity_id.
+    # ------------------------------------------------------------------
+
+    @app.get("/api/celebrities")
+    async def list_celebrities() -> Response:
+        """The full celebrities directory plus per-celebrity sightings
+        count + canonical photo. Sightings = count of distinct events
+        where a reviewer tagged this celebrity. Canonical photo =
+        ROI of the most-recent tagged event (rendered through the
+        existing /api/detections/{id}/roi.jpg endpoint)."""
+        celebs = state.get("celebrities") or []
+        if not celebs:
+            return JSONResponse({"celebrities": [], "count": 0})
+        pool: AsyncConnectionPool | None = state.get("pool")
+        stats: dict[str, dict] = {}
+        if pool is not None:
+            async with pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    # Per-celebrity aggregate: total tagged corrections,
+                    # most recent tagged event_id, first + last tag time.
+                    await cur.execute("""
+                        SELECT celebrity_id,
+                               COUNT(*)::int  AS sightings,
+                               MAX(created_at) AS last_tagged_at,
+                               MIN(created_at) AS first_tagged_at,
+                               (ARRAY_AGG(event_id ORDER BY created_at DESC))[1] AS recent_event_id
+                          FROM detection_corrections
+                         WHERE celebrity_id IS NOT NULL
+                         GROUP BY celebrity_id
+                    """)
+                    for r in await cur.fetchall():
+                        stats[r["celebrity_id"]] = {
+                            "sightings": int(r["sightings"]),
+                            "last_tagged_at": r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None,
+                            "first_tagged_at": r["first_tagged_at"].isoformat() if r["first_tagged_at"] else None,
+                            "recent_event_id": int(r["recent_event_id"]) if r["recent_event_id"] is not None else None,
+                        }
+        out = []
+        for c in celebs:
+            s = stats.get(c["id"], {})
+            photo_event = s.get("recent_event_id")
+            out.append({
+                **c,
+                "common": common_name(c["binomial"]) if c.get("binomial") else None,
+                "sightings": s.get("sightings", 0),
+                "last_tagged_at": s.get("last_tagged_at"),
+                "first_tagged_at": s.get("first_tagged_at"),
+                "photo_event_id": photo_event,
+                "photo_url": f"/api/detections/{photo_event}/roi.jpg?size=320" if photo_event else None,
+            })
+        return JSONResponse({"celebrities": out, "count": len(out)})
+
+    @app.get("/api/celebrities/{celebrity_id}")
+    async def get_celebrity(
+        celebrity_id: str,
+        gallery_limit: int = Query(24, ge=1, le=200),
+    ) -> Response:
+        """One celebrity: catalogue entry + sightings count + recent
+        tagged-detection gallery (event_id + ts + reviewer + bbox so
+        the client can render thumbnails via the existing roi.jpg
+        endpoint)."""
+        celebs = state.get("celebrities_by_id") or {}
+        c = celebs.get(celebrity_id)
+        if c is None:
+            return JSONResponse({"error": f"unknown celebrity_id={celebrity_id!r}"}, status_code=404)
+        pool: AsyncConnectionPool | None = state.get("pool")
+        sightings = 0
+        gallery: list[dict] = []
+        first_tagged_at = last_tagged_at = None
+        if pool is not None:
+            async with pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("""
+                        SELECT COUNT(*)::int   AS sightings,
+                               MIN(created_at) AS first_tagged_at,
+                               MAX(created_at) AS last_tagged_at
+                          FROM detection_corrections
+                         WHERE celebrity_id = %s
+                    """, (celebrity_id,))
+                    r = await cur.fetchone()
+                    if r:
+                        sightings = int(r["sightings"] or 0)
+                        first_tagged_at = r["first_tagged_at"].isoformat() if r["first_tagged_at"] else None
+                        last_tagged_at = r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None
+                    # Recent tagged events for the gallery. LEFT JOIN
+                    # so a correction whose event was wiped (e.g. by a
+                    # reset) still surfaces but with image_path NULL.
+                    await cur.execute("""
+                        SELECT dc.event_id, dc.created_at, dc.reviewer, dc.confidence,
+                               dc.corrected_name,
+                               e.ts AS event_ts, e.source_name, e.bbox
+                          FROM detection_corrections dc
+                          LEFT JOIN detection_events e ON e.id = dc.event_id
+                         WHERE dc.celebrity_id = %s
+                         ORDER BY dc.created_at DESC
+                         LIMIT %s
+                    """, (celebrity_id, gallery_limit))
+                    for r in await cur.fetchall():
+                        gallery.append({
+                            "event_id": int(r["event_id"]),
+                            "tagged_at": r["created_at"].isoformat() if r["created_at"] else None,
+                            "reviewer": r["reviewer"],
+                            "confidence": r["confidence"],
+                            "corrected_name": r["corrected_name"],
+                            "event_ts": r["event_ts"].isoformat() if r["event_ts"] else None,
+                            "source_name": r["source_name"],
+                            "bbox": list(r["bbox"]) if r["bbox"] else None,
+                            "roi_url": f"/api/detections/{r['event_id']}/roi.jpg?size=240",
+                        })
+        photo_event = gallery[0]["event_id"] if gallery else None
+        return JSONResponse({
+            **c,
+            "common": common_name(c["binomial"]) if c.get("binomial") else None,
+            "sightings": sightings,
+            "first_tagged_at": first_tagged_at,
+            "last_tagged_at": last_tagged_at,
+            "photo_event_id": photo_event,
+            "photo_url": f"/api/detections/{photo_event}/roi.jpg?size=640" if photo_event else None,
+            "gallery": gallery,
+        })
 
     # ------------------------------------------------------------------
     # Per-camera no-fish-zone admin (polygon mask for false-positive

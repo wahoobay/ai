@@ -1220,3 +1220,114 @@ li.empty { color: var(--muted); font-style: italic; }
   text-align: center;
 }
 .sm-frame img { width: 100%; height: auto; display: block; border-radius: 3px; }
+
+/* ---- Celebrities tab ---- */
+.celeb-help { color: var(--muted); font-size: 12px; margin-bottom: 12px; max-width: 800px; line-height: 1.55; }
+.celeb-help code { background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+.celeb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.celeb-empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+.celeb-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 120ms, transform 120ms;
+  display: flex;
+  flex-direction: column;
+}
+.celeb-card:hover, .celeb-card:focus-visible { border-color: var(--accent); transform: translateY(-1px); }
+.celeb-photo {
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+  background: var(--bg);
+  display: block;
+}
+.celeb-photo-empty {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 11px; padding: 8px; text-align: center;
+}
+.celeb-card-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
+.celeb-name { font-weight: 600; font-size: 13px; color: var(--ink); }
+.celeb-species { font-size: 12px; color: var(--muted); }
+.celeb-species em { font-style: italic; }
+.celeb-idmark {
+  font-size: 11px; color: var(--muted); line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  max-height: 2.8em;
+}
+.celeb-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* Per-celebrity detail modal */
+.celeb-modal-card {
+  background: var(--card);
+  max-width: 900px;
+  max-height: 92vh;
+  width: 92vw;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+}
+.celeb-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  gap: 16px;
+  padding: 16px 16px 8px;
+}
+@media (max-width: 600px) {
+  .celeb-detail-grid { grid-template-columns: 1fr; }
+}
+.celeb-detail-photo .celeb-hero {
+  width: 100%; height: auto; max-height: 320px; object-fit: cover; border-radius: 4px;
+  display: block; background: var(--bg);
+}
+.celeb-detail-info .celeb-name-h2 { margin: 0 0 4px; font-size: 18px; color: var(--accent); }
+.celeb-detail-info .celeb-species { font-size: 14px; margin-bottom: 8px; }
+.celeb-detail-info .celeb-idmark { font-size: 12px; color: var(--ink); margin: 4px 0 12px; }
+.celeb-meta-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  font-size: 12px; color: var(--muted);
+  margin: 0;
+}
+.celeb-meta-dl dt { color: var(--muted); }
+.celeb-meta-dl dd { color: var(--ink); margin: 0; }
+.celeb-section-title { padding: 0 16px; font-size: 13px; color: var(--muted); margin: 12px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+.celeb-gallery {
+  padding: 0 16px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
+}
+.celeb-thumb {
+  display: block;
+  aspect-ratio: 1;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.celeb-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Reviewer-modal: tag-as-celebrity dropdown */
+.cf-celebrity {
+  width: 100%;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
