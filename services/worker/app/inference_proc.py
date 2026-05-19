@@ -1,33 +1,60 @@
-"""Inference subprocess: runs detector + classifier, persistence, and the
-overlay encode in a separate OS process from the FastAPI / FrameTap parent.
+"""Inference subprocess: runs detector + classifier, persistence, and
+the overlay encode in a separate OS process from the FastAPI /
+FrameTap parent.
 
-Why a separate process instead of a thread? The Python GIL. PyTorch and
-numpy ops release the GIL for their core math, but plenty of Python-side
-work (tensor → numpy conversion, dict construction, list comprehensions
-inside the smoother) runs under the GIL. With everything in-process, the
-FrameTap thread that reads RTSP frames was spending up to 50 % of its
-time blocked behind the inference thread and missing native-fps frames.
-Out-of-process means FrameTap gets a whole CPU + GIL to itself.
+Why a separate process instead of a thread? The Python GIL. PyTorch
+and numpy ops release the GIL for their core math, but plenty of
+Python-side work (tensor → numpy conversion, dict construction, list
+comprehensions inside the smoother) runs under the GIL. With
+everything in-process, the FrameTap thread that reads RTSP frames was
+spending up to 50 % of its time blocked behind the inference thread
+and missing native-fps frames. Out-of-process means FrameTap gets a
+whole CPU + GIL to itself.
 
-Communication uses two `multiprocessing.Queue`s under the spawn context
-(no fork, no shared CUDA state):
+Communication uses **shared memory + small metadata queues** under the
+spawn context (no fork, no shared CUDA state). The frame bytes never
+travel through pickle:
 
-  worker process                 inference subprocess
-  ──────────────                 ────────────────────
-   FrameTap ──▶ in_queue ─────▶ run_inference_worker
-                                       │
-                                       ▼
-                            detector + classifier
-                            smoother + persist
-                            annotate + encode JPEG
-                                       │
-              live_annotated ◀──── out_queue
-              (drain thread)
+    worker process (parent)                         inference subprocess
+    ──────────────────────                          ────────────────────
+       FrameTap                                       run_inference_worker
+            │                                              │
+            │ 1. memcpy frame into slot[i] of shm pool      │
+            │ 2. put FrameIn(slot_idx=i, shape, ts)         │
+            │    onto filled_q                              │
+            │                                ────────▶      │ 3. get FrameIn
+            │                                               │ 4. read shm[i] as
+            │                                               │    zero-copy view
+            │                                               │ 5. detector +
+            │                                               │    classifier +
+            │                                               │    smoother +
+            │                                               │    persistence +
+            │                                               │    annotate +
+            │                                               │    JPEG encode
+            │                                               │ 6. put slot_idx
+            │                            ◀──────── empty_q ─┤    back on empty_q
+            │ 7. reuse slot                                 │ 7. put FrameOut on
+            │                            ◀──── out_queue ──┘    out_queue
+            │ 8. drain thread publishes annotated JPEG
+            ▼
+        live_annotated (LiveBuffer)
 
-Frames are pickled across the queue (~3 MB / frame at 720p × ~10 ms
-serialise + ~10 ms deserialise = ~20 ms round-trip). Cheap enough at
-15 fps; a future shared_memory hop is the natural next optimisation if
-this becomes the bottleneck.
+3 shm slots × 6.2 MB each → 18 MB /dev/shm per worker. The annotated
+JPEG bytes coming back (~100-200 KB) DO go through the small
+out_queue via pickle — small enough that the cost is irrelevant.
+
+The classifier backend is selected at subprocess boot from
+`CLASSIFIER_BACKEND`:
+  * `v2` (default) — DINOv2 ViT-S/14 trained from random init
+  * `fishial` — legacy 866-class ArcFace + sub-centre + KNN
+
+Both backends share `pipeline_types.FishDetection`, so the rest of
+the loop is backend-agnostic.
+
+`NegativeRegionFilter` runs immediately after the classifier and
+drops any detection whose bbox closely matches a configured
+no-fish-zone polygon (the SEAHIVE holes, etc.). See
+`negative_regions.py`.
 """
 from __future__ import annotations
 

@@ -1,22 +1,39 @@
 """Inference loop: pull frames, dispatch to the inference subprocess,
 publish annotated overlays.
 
-Three threads + one subprocess:
+Three threads + one subprocess, with a zero-copy shared-memory pool
+sitting between them:
 
-- `FrameTap` (thread)              reads source frames at native fps,
-                                   publishes raw MJPEG immediately, hands
-                                   off the latest non-fallback frame to
-                                   the inference subprocess.
-- `inference_proc.run_inference_worker` (subprocess)
-                                   detector + classifier + persistence +
-                                   overlay encode. See inference_proc.py.
-- `InferenceClient.drain_thread`   pulls FrameOut results from the subprocess
-                                   and publishes the annotated JPEG to the
-                                   `live_annotated` buffer.
+- `FrameTap` (thread, parent process) — reads source frames at native
+  fps, publishes raw MJPEG immediately, writes the BGR bytes into a
+  free shared-memory slot, and pushes a metadata-only `FrameIn`
+  (slot index + shape + ts) onto the filled-queue.
+- `inference_proc.run_inference_worker` (subprocess) — detector +
+  classifier + persistence + overlay encode. See `inference_proc.py`.
+  Reads the frame as a zero-copy numpy view over the same shm slot
+  the parent wrote into; returns the slot to the empty-queue when
+  the iteration completes.
+- `InferenceClient.drain_thread` — pulls `FrameOut` results from the
+  subprocess and publishes the annotated JPEG to the `live_annotated`
+  buffer for the dashboard.
 
-Putting inference in a separate OS process means the FrameTap thread is
-not blocked behind it on the GIL. Raw stream therefore tracks the source
-fps regardless of how heavy inference is.
+Why a separate process for inference: the Python GIL. With everything
+in-process, the FrameTap thread that reads RTSP frames was spending
+up to 50 % of its time blocked behind the inference thread and
+missing native-fps frames. Out-of-process means FrameTap gets a
+whole CPU + GIL to itself.
+
+Why shared memory for the frame hop: a 720p BGR frame is 2.7 MB and
+the original pickle round-trip through `multiprocessing.Queue` cost
+~20 ms per frame (≈30 % of the budget at 15 fps). The shm pool drops
+this to a single memcpy on the producer side and zero-copy on the
+consumer. Throughput on the pier cam went from 13 → 15 fps after
+the swap; see commit 28bc3be for the before/after.
+
+Backpressure: 3 slots × 6.2 MB each (sized for 1080p headroom). When
+all slots are in flight FrameTap pops the oldest queued `FrameIn`
+and recycles its slot (latest-frame-wins), so inference never chases
+stale frames.
 """
 from __future__ import annotations
 

@@ -1,3 +1,23 @@
+"""Single source of truth for every worker env var.
+
+The worker reads its config from environment variables only — no
+config files, no CLI args. This module defines:
+
+  * Type-coerced readers (`_bool`, `_int`, `_float`, `_str`).
+  * A frozen `Config` dataclass that lists every field the worker
+    cares about, with the precise type annotation.
+  * `Config.from_env()` — the canonical "build a Config from current
+    env" entry point used by `main.py` at startup. Every env var the
+    worker reads is named exactly once here, so this file is the
+    authoritative inventory of "what knobs exist."
+
+Adding a new knob: add the field to the `Config` dataclass + the
+matching `_xxx("ENV_NAME", default)` line in `from_env()` + an entry
+in `.env.example` so it's documented externally. The
+`config_hash` provenance column hashes every Config field that isn't
+explicitly excluded (see `provenance.py`), so adding a new field
+ensures rows produced under different settings are distinguishable.
+"""
 from __future__ import annotations
 
 import os

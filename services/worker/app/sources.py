@@ -1,11 +1,29 @@
 """Video source abstraction.
 
-Two kinds:
-- PlaylistSource: iterate files in a directory (with optional loop + realtime pacing)
-- RTSPSource: read a live stream
+Four concrete sources, all yielding `(frame_id, frame_bgr,
+source_name)` tuples:
 
-Both yield (frame_id, frame_bgr, source_name). frame_id is a monotonic counter
-global to the source's lifetime.
+* `PlaylistSource` — iterate files in a directory with optional loop +
+  realtime pacing. Used as the dark-time fallback for both cameras.
+* `RTSPSource` — read a live RTSP stream (Axis PTZ cameras).
+  Auto-reconnects with backoff on cv2 read failures.
+* `HTTPSource` — MJPEG over HTTP / HTTPS (legacy path; unused with
+  the current Axis cameras).
+* `AutoswitchSource` — wraps a primary + fallback source and switches
+  based on rolling mean-luma. When a primary `RTSPSource` is
+  configured with a `FALLBACK_VIDEO_SOURCE`, this is what `main.py`
+  actually hands to the FrameTap.
+
+`frame_id` is a monotonic counter global to the source's lifetime
+(worker restart → restart at 0).
+
+`source_name` is the friendly label that ends up in
+`detection_events.source_name` and on every per-camera filter join.
+It comes from `SOURCE_LABEL_PRIMARY` / `SOURCE_LABEL_FALLBACK` env
+vars (or falls back to the URL's hostname).
+
+The autoswitch logic — including the strict "no video-data writes
+during fallback" rule — is documented in `docs/data_pipeline.md`.
 """
 from __future__ import annotations
 

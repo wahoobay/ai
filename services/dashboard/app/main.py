@@ -1,8 +1,34 @@
-"""Wahoo Bay dashboard.
+"""Wahoo Bay dashboard — FastAPI app + reviewer queue + REST API.
 
-- Proxies the worker's MJPEG stream (so the browser only talks to one origin).
-- Serves a small HTML page with live overlay + species counts + recent events.
-- Queries Postgres directly for detection history.
+Single-file FastAPI app (~2k lines) organized by endpoint group. Major
+surfaces:
+
+  * **Live view**: proxies the worker(s) MJPEG stream + raw/annotated
+    snapshot endpoints so the browser only talks to one origin.
+  * **Reviewer queue**: `/api/events` returns un-reviewed detections;
+    `POST /api/corrections` writes a row (with optional
+    `corrected_bbox`, `celebrity_id`) and drops the event from the
+    queue.
+  * **Aggregates**: `/api/species_counts`, `/api/visitor_stats`,
+    `/api/water_quality/*`, `/api/weather/*`, `/api/celebrities`. Most
+    are backed by Postgres views or materialised views.
+  * **Exports**: `/api/export/*.{csv,parquet}` — streaming downloads,
+    server-side cursor so a year of data doesn't materialise in
+    memory.
+  * **Admin**: `/admin/regions.html` (polygon drawing UI),
+    `POST /api/admin/refresh_sheets`, `POST /api/admin/negative_regions`.
+    All write-token gated.
+  * **Background tasks**: SLO checker, matview refresher, Google
+    Sheet poller. Spawned in the lifespan asynccontextmanager,
+    cancelled cleanly on shutdown.
+
+Mutation endpoints honour `DASHBOARD_WRITE_TOKEN` — when the env var
+is set, they require `Authorization: Bearer <token>`; when unset, all
+endpoints are open (used in dev). The reviewer's local browser stores
+the token in localStorage after first paste.
+
+See `docs/architecture.md` for the process model and
+`docs/operations.md` for the runtime knobs.
 """
 from __future__ import annotations
 

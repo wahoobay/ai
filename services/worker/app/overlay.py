@@ -1,4 +1,12 @@
-"""Draw annotated overlays on frames for the live stream + saved snapshots."""
+"""Draw annotated overlays on frames for the live stream + saved snapshots.
+
+The single public function `annotate(frame_bgr, detections)` returns a
+**fresh buffer** (it copies the input). The inference subprocess relies
+on this — the input `frame_bgr` is a zero-copy numpy view over a
+shared-memory slot that gets recycled after the loop iteration, so
+the returned `annotated` array must be independent of it. Don't
+"optimise" the copy out without auditing all callers.
+"""
 from __future__ import annotations
 
 from collections.abc import Iterable
