@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Accounts — Wahoo Bay admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Accounts</h1>
+  <p>Signed in as {{ me }}.</p>
+
+  <h2>Awaiting approval</h2>
+  <table id="pending-table"><thead><tr>
+    <th>Username</th><th>Name</th><th>Email</th><th>Verified</th>
+    <th>Registered</th><th>Approve as</th></tr></thead><tbody></tbody></table>
+
+  <h2>All accounts</h2>
+  <table id="users-table"><thead><tr>
+    <th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th>
+    <th>Last login</th><th></th><th>Reset link</th></tr></thead><tbody></tbody></table>
+
+  <h2>Active sessions</h2>
+  <table id="sessions-table"><thead><tr>
+    <th>User</th><th>Started</th><th>Last seen</th><th>IP</th><th></th>
+  </tr></thead><tbody></tbody></table>
+
+<script>
+const CSRF = {"Content-Type": "application/json", "X-Requested-With": "wahoobay"};
+const post = (url, body) => fetch(url, {
+  method: "POST", headers: CSRF, credentials: "same-origin",
+  body: JSON.stringify(body || {}),
+}).then(r => r.json());
+
+const ROLES = ["viewer", "reviewer", "admin"];
+
+function roleSelect(current) {
+  const s = document.createElement("select");
+  for (const r of ROLES) {
+    const o = document.createElement("option");
+    o.value = r; o.textContent = r; o.selected = (r === current);
+    s.append(o);
+  }
+  return s;
+}
+
+function cell(row, text) {
+  const td = document.createElement("td");
+  td.textContent = text == null ? "" : String(text);
+  row.append(td);
+  return td;
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, {credentials: "same-origin"});
+  if (!r.ok) {
+    if (r.status === 401 || r.status === 403) {
+      window.location.href = "/login?next=" + encodeURIComponent(location.pathname);
+    }
+    throw new Error(`${url}: ${r.status}`);
+  }
+  return r.json();
+}
+
+async function refresh() {
+  const [pending, users, sessions] = await Promise.all([
+    getJSON("/api/admin/users?status=pending"),
+    getJSON("/api/admin/users"),
+    getJSON("/api/admin/sessions"),
+  ]);
+
+  const pb = document.querySelector("#pending-table tbody");
+  pb.innerHTML = "";
+  for (const u of pending) {
+    const tr = document.createElement("tr");
+    cell(tr, u.username); cell(tr, u.display_name); cell(tr, u.email);
+    cell(tr, u.email_verified_at ? "yes" : "no"); cell(tr, u.created_at);
+    const td = document.createElement("td");
+    const sel = roleSelect("reviewer");
+    const btn = document.createElement("button");
+    btn.textContent = "Approve";
+    btn.onclick = async () => {
+      await post(`/api/admin/users/${u.id}/approve`, {role: sel.value});
+      refresh();
+    };
+    td.append(sel, btn); tr.append(td); pb.append(tr);
+  }
+
+  const ub = document.querySelector("#users-table tbody");
+  ub.innerHTML = "";
+  for (const u of users) {
+    const tr = document.createElement("tr");
+    cell(tr, u.username); cell(tr, u.display_name); cell(tr, u.email);
+    const roleTd = document.createElement("td");
+    const sel = roleSelect(u.role);
+    sel.onchange = () => post(`/api/admin/users/${u.id}/role`, {role: sel.value});
+    roleTd.append(sel); tr.append(roleTd);
+    cell(tr, u.status); cell(tr, u.last_login_at);
+    const actTd = document.createElement("td");
+    const off = document.createElement("button");
+    off.textContent = "Deactivate";
+    off.onclick = async () => {
+      await post(`/api/admin/users/${u.id}/deactivate`, {});
+      refresh();
+    };
+    actTd.append(off); tr.append(actTd);
+
+    // Manual mail backend never actually sends the verification/reset
+    // email (see docs/operations.md) — this is the out-of-band path: mint
+    // a fresh link and show it here for the admin to copy and pass on
+    // themselves. Always textContent, never innerHTML — the link contains
+    // a bearer-style token and must never be parsed as markup.
+    const resetTd = document.createElement("td");
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "Reset link";
+    const resetOut = document.createElement("span");
+    resetOut.className = "reset-link-out";
+    resetBtn.onclick = async () => {
+      const data = await post(`/api/admin/users/${u.id}/reset-link`, {});
+      resetOut.textContent = data.link || data.error || "failed";
+    };
+    resetTd.append(resetBtn, resetOut); tr.append(resetTd);
+
+    ub.append(tr);
+  }
+
+  const sb = document.querySelector("#sessions-table tbody");
+  sb.innerHTML = "";
+  for (const s of sessions) {
+    const tr = document.createElement("tr");
+    cell(tr, s.username); cell(tr, s.created_at); cell(tr, s.last_seen_at); cell(tr, s.ip);
+    const td = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.textContent = "Revoke";
+    btn.onclick = async () => {
+      await post(`/api/admin/sessions/${s.id}/revoke`, {});
+      refresh();
+    };
+    td.append(btn); tr.append(td); sb.append(tr);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", refresh);
+</script>
+</body>
+</html>

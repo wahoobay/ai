@@ -1331,3 +1331,14 @@ li.empty { color: var(--muted); font-style: italic; }
   padding: 6px 10px;
   font-size: 13px;
 }
+
+/* Auth: sign-in page + identity chip */
+.auth-page { display: grid; place-items: center; min-height: 100vh; }
+.auth-card { width: min(28rem, 92vw); padding: 2rem; }
+.auth-card label { display: block; margin-top: 0.75rem; }
+.auth-card input { width: 100%; padding: 0.5rem; }
+.auth-card button { margin-top: 1rem; padding: 0.5rem 1rem; }
+.auth-error { color: #b3261e; }
+.auth-links { margin-top: 1rem; font-size: 0.9rem; }
+#identity-chip { display: flex; gap: 0.5rem; align-items: center; }
+.pending-banner { padding: 0.6rem 1rem; background: #fff4ce; color: #3b3100; }

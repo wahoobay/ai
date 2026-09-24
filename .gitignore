@@ -61,3 +61,6 @@ __pycache__/
 /*.jpg
 /*.jpeg
 /*.webp
+
+# superpowers SDD scratch (ledger, briefs, review packages)
+.superpowers/

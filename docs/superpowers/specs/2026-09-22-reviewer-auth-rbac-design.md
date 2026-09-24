@@ -396,7 +396,7 @@ A daily task deletes sessions past `expires_at` or revoked more than 30 days ago
 
 ### Deploy
 
-Picking up the new code requires restarting the dashboard process, which has run continuously since 2026-05-17. The Cloudflare tunnel targets `localhost:18080` and reconnects by itself, so the outage is a few seconds — but it should be a deliberate, announced restart rather than a surprise during an annotation session.
+Picking up the new code requires restarting the dashboard process, which has run continuously since 2026-05-17. The Cloudflare tunnel targets `localhost:18080` and reconnects by itself once the dashboard is back up. The shutdown itself is bounded but not brief in the worst case: the lifespan cancels four background tasks in sequence, each with up to ~5s to drain before being abandoned, plus the DB pool's own close timeout — worst case ~20-25s, not "a few seconds," if a cancelled task's in-flight Postgres statement (the matview refresher's REFRESH has been observed running 47s-144s) is slow to unwind. See `docs/operations.md`'s "Stopping" section. Either way it should be a deliberate, announced restart rather than a surprise during an annotation session.
 
 Order of operations:
 1. Apply the DDL to the live database via `psql` (additive; safe while the old code runs).

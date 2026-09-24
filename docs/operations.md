@@ -48,8 +48,8 @@ alerts. If the banner is empty, all six health rules are satisfied.
 
 Order matters: postgres → workers → dashboard → poller → tunnel.
 
-All runtime knobs (RTSP URLs + creds, write token, GPU pin, autoswitch
-thresholds, classifier backend, etc.) live in a single `.env` file at
+All runtime knobs (RTSP URLs + creds, account/session settings, GPU pin,
+autoswitch thresholds, classifier backend, etc.) live in a single `.env` file at
 the repo root. Each `scripts/dev/run_*.sh` auto-sources it, so
 cold-start is just "run the script." If `.env` doesn't exist, copy
 `.env.example` and fill in the secrets — the file is gitignored and
@@ -140,10 +140,21 @@ pkill -f 'cloudflared tunnel'
 ./scripts/dev/stop_postgres.sh
 ```
 
-Graceful shutdown gives each subprocess ~5 s to drain in-flight work
-(save queue, frame-stats flush, pg connection close). If you `kill -9`
-you'll get warnings about un-released semaphores in the log; harmless
-but ugly.
+Graceful shutdown gives each subprocess up to ~5 s *per background
+task* to drain in-flight work (save queue, frame-stats flush, pg
+connection close) before that task is abandoned — not a flat ~5 s for
+the whole process. The dashboard alone cancels four background tasks
+(SLO checker, matview refresher, sheet poller, session pruner) in
+sequence on shutdown, then closes its DB pool (its own 5 s default
+timeout), so its worst case is ~20-25 s, not "a few seconds" — this
+matters because a cancelled task's in-flight Postgres statement can be
+slow to unwind (the matview refresher's REFRESH has been observed
+taking 47 s, 75 s, and 144 s) and psycopg has to let that drain before
+honouring the cancellation; it's bounded now (each task gets at most
+~5 s before shutdown moves on and abandons it) rather than blocking on
+the slowest one indefinitely, which is what it did before. If you
+`kill -9` you'll get warnings about un-released semaphores in the log;
+harmless but ugly.
 
 ---
 
@@ -263,7 +274,8 @@ All knobs are env vars. `.env.example` documents every one. Major blocks:
 | Persistence | `DATABASE_URL`, `EVENTS_LOG_DIR`, `FRAMES_DIR` |
 | Image saves (3 modes) | `SAVE_TIMELAPSE_SECONDS`, `SAVE_PER_DETECTION`, `SAVE_INTERESTING_ONLY`, `SAVE_INTERESTING_QUIET_SECONDS`, `SAVE_INTERESTING_MIN_CONF`, `SAVE_MIN_TRACK_GAP_SECONDS` |
 | Negative regions | `NEGATIVE_REGIONS_PATH` |
-| HTTP / dashboard | `WORKER_HTTP_PORT`, `WORKER_HTTP_PORT_PIER`, `WORKER_URL_PIER`, `DASHBOARD_PORT`, `DASHBOARD_HOST`, `DASHBOARD_WRITE_TOKEN`, `JPEG_QUALITY`, `LIVE_STREAM_MAX_FPS` |
+| HTTP / dashboard | `WORKER_HTTP_PORT`, `WORKER_HTTP_PORT_PIER`, `WORKER_URL_PIER`, `DASHBOARD_PORT`, `DASHBOARD_HOST`, `JPEG_QUALITY`, `LIVE_STREAM_MAX_FPS` |
+| Accounts / auth (see "Accounts and roles" below) | `DASHBOARD_COOKIE_SECURE`, `DASHBOARD_SESSION_TTL_H`, `DASHBOARD_SESSION_ABS_TTL_D`, `DASHBOARD_LOGIN_MAX_FAILS`, `DASHBOARD_LOGIN_LOCKOUT_MIN`, `DASHBOARD_REGISTRATION_OPEN`, `DASHBOARD_REGISTER_MAX_PER_IP_H`, `DASHBOARD_RESET_TTL_MIN`, `DASHBOARD_VERIFY_TTL_H`, `DASHBOARD_MAIL_BACKEND`, `DASHBOARD_SMTP_*`, `DASHBOARD_PUBLIC_BASE_URL` |
 | Drift / model-ops | `FRAME_STATS_EVERY_N_FRAMES`, `MATVIEW_REFRESH_INTERVAL_S` |
 | Sheet poller | `SHEET_URL`, `SHEET_POLL_INTERVAL_HOURS` |
 | SenseStream / Wahoo Bay API | `WAHOOBAY_API_URL`, `WAHOOBAY_API_ENABLED`, `WAHOOBAY_SITE_SONDE`, `WAHOOBAY_SITE_WEATHER`, `SENSESTREAM_*`, `OPEN_METEO_*` |
@@ -364,20 +376,98 @@ commit, Save to write the JSON file. **Restart the workers after
 saving** — they load the file once at subprocess start.
 
 The companion API endpoints (read + write) are documented in
-[`docs/architecture.md`](architecture.md). The page is not
-network-authenticated; access it via SSH tunnel rather than through
-the public tunnel.
+[`docs/architecture.md`](architecture.md). Saving now requires an
+authenticated admin session (see "Accounts and roles" below) — the
+page itself still isn't network-authenticated, so access it via SSH
+tunnel rather than through the public tunnel.
 
 ### Force-refresh the Google Sheet
 
+`POST /api/admin/refresh_sheets` requires an admin session cookie plus
+the `X-Requested-With: wahoobay` CSRF header. From a shell, log in and
+reuse the cookie jar:
+
 ```bash
-curl -s -X POST http://127.0.0.1:18080/api/admin/refresh_sheets \
-  -H "Authorization: Bearer <DASHBOARD_WRITE_TOKEN>"
+curl -s -c /tmp/wb_cookies -X POST http://127.0.0.1:18080/api/auth/login \
+  -H "Content-Type: application/json" -H "X-Requested-With: wahoobay" \
+  -d '{"username":"<admin username>","password":"<admin password>"}'
+
+curl -s -b /tmp/wb_cookies -X POST http://127.0.0.1:18080/api/admin/refresh_sheets \
+  -H "X-Requested-With: wahoobay"
 ```
 
 Pulls the sheet now (instead of waiting for the daily auto-poll),
 re-runs the build scripts, and hot-reloads the catalogues. Use this
 after a chatter has named a new fish and you want it live immediately.
+
+---
+
+## Accounts and roles
+
+Three roles: `viewer` (read-only — the default for a freshly-approved
+or self-registered account), `reviewer` (can submit corrections),
+`admin` (can also acknowledge alerts, refresh the sheet, save
+no-fish-zone regions, and manage other accounts at
+`/admin/users.html`). A `pending` account (awaiting approval) or a
+`disabled` one can read the public dashboard but every mutation route
+returns 401/403 regardless of its underlying role — see
+`effective_role()` in `services/dashboard/app/auth.py`.
+
+**Creating the first admin.** Self-registration always creates a
+`pending` account, and approving one requires an admin who doesn't
+exist yet on a fresh database. Bootstrap it from the command line
+instead — this writes the account active and pre-approved, and never
+accepts the password as a CLI argument (prompts with `getpass`, since
+this is a shared machine where `ps` shows other users' command lines):
+
+```bash
+conda activate wahoobay
+python scripts/create_user.py --username admin --display-name "Your Name" \
+  --email you@example.org --role admin
+```
+
+**Approving a registration.** New self-registrations show up under
+"Awaiting approval" at `/admin/users.html` (or
+`GET /api/admin/users?status=pending`). Approving sets `status=active`
+and assigns a role in one step —
+`POST /api/admin/users/{id}/approve` with `{"role": "reviewer"}` (or
+`"viewer"`/`"admin"`). Approval does not require the account's email
+to be verified first; verification and approval are independent
+checks.
+
+**The manual mail backend.** `DASHBOARD_MAIL_BACKEND=manual` (the
+default — there's no SMTP relay configured on the DGX) never actually
+sends the verification/reset email; it logs that a message was held
+and moves on, without ever printing the raw token or link (raw tokens
+never appear in logs), so the link isn't retrievable after the fact.
+In practice this means: don't rely on the email-verification step in
+manual mode — approve reviewers directly from `/admin/users.html` as
+above regardless of whether they've verified their email.
+
+For a forgotten password, an administrator mints the reset link
+directly: the "Reset link" button next to each account on
+`/admin/users.html` (or `POST /api/admin/users/{id}/reset-link`) mints
+a fresh, single-use password-reset token the same way
+`/api/auth/forgot-password` does and returns the full link — pass it
+to the account holder out of band (chat, in person, however). The
+account's existing password is untouched until the link is actually
+redeemed. This is the intended recovery path in manual mode; there is
+deliberately no way to read back a *previously*-issued link (or set a
+password directly), since the raw token is never stored — only its
+hash.
+
+Set `DASHBOARD_MAIL_BACKEND=smtp` and fill in the `DASHBOARD_SMTP_*`
+block in `.env` to send real mail instead; a misconfigured or
+unreachable SMTP relay degrades to `manual` automatically rather than
+500ing a request. Before flipping that switch, see the two
+preconditions noted next to `DASHBOARD_MAIL_BACKEND` in `.env.example`
+(forgot-password isn't rate limited yet, and the STARTTLS context
+fix needs to be in place).
+
+**Closing signups.** `DASHBOARD_REGISTRATION_OPEN=false` closes
+`/register` and `POST /api/auth/register` (403) without a code change
+or restart-time flag — just flip the env var and restart the
+dashboard process. Existing accounts are unaffected either way.
 
 ---
 

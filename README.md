@@ -239,7 +239,7 @@ Toolkit installed:
 ./scripts/fetch_test_videos.sh     # first time only — pulls 18 Wahoo Bay clips for the fallback playlist
 cp .env.example .env
 # Edit .env: set the camera RTSP URLs, GPU pinning (CUDA_VISIBLE_DEVICES),
-# and any optional knobs (DASHBOARD_WRITE_TOKEN, SHEET_URL, etc.)
+# and any optional knobs (DASHBOARD_MAIL_BACKEND, SHEET_URL, etc.)
 docker compose up --build
 ```
 

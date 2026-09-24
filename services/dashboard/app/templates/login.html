@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sign in — Wahoo Bay</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <h1>Wahoo Bay</h1>
+    <p class="auth-sub">Sign in to review detections.</p>
+    <form id="login-form" autocomplete="on">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password"
+             autocomplete="current-password" required>
+      <p class="auth-error" id="login-error" hidden></p>
+      <button type="submit">Sign in</button>
+    </form>
+    <p class="auth-links">
+      <a href="/register">Create an account</a> ·
+      <a href="/forgot-password">Forgot password?</a>
+    </p>
+  </main>
+  <script src="/static/auth.js?v={{ asset_version }}"></script>
+</body>
+</html>

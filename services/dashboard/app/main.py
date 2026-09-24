@@ -17,15 +17,16 @@ surfaces:
     memory.
   * **Admin**: `/admin/regions.html` (polygon drawing UI),
     `POST /api/admin/refresh_sheets`, `POST /api/admin/negative_regions`.
-    All write-token gated.
+    Both require an authenticated admin session.
   * **Background tasks**: SLO checker, matview refresher, Google
-    Sheet poller. Spawned in the lifespan asynccontextmanager,
-    cancelled cleanly on shutdown.
+    Sheet poller, session/token pruner. Spawned in the lifespan
+    asynccontextmanager, cancelled cleanly on shutdown.
 
-Mutation endpoints honour `DASHBOARD_WRITE_TOKEN` — when the env var
-is set, they require `Authorization: Bearer <token>`; when unset, all
-endpoints are open (used in dev). The reviewer's local browser stores
-the token in localStorage after first paste.
+Mutation endpoints are gated by session-based role checks (see
+`auth.py`): `/api/corrections` requires the reviewer or admin role;
+the admin-only endpoints (`refresh_sheets`, `negative_regions`,
+`alerts/*/ack`) require admin. See `docs/operations.md` for account
+provisioning and the `DASHBOARD_*` auth knobs.
 
 See `docs/architecture.md` for the process model and
 `docs/operations.md` for the runtime knobs.
@@ -44,7 +45,7 @@ from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -55,6 +56,7 @@ from pydantic import BaseModel, Field
 
 from .alerts import SLO_RULES, SLOChecker
 from .common_names import common as common_name
+from .common_names import reload_manifest_names
 from .exports import (
     export_alerts,
     export_corrections,
@@ -72,7 +74,6 @@ from .exports import (
     fetch_parquet_bytes,
     query_for,
 )
-from .common_names import reload_manifest_names
 from .matviews import MatviewRefresher
 from .sheet_poller import SheetPoller
 from .stats import (
@@ -89,7 +90,6 @@ class CorrectionIn(BaseModel):
     is_endorsement: bool = False  # reviewer hit "Looks right" — corrected_name == best_name
     corrected_bbox: list[int] | None = None  # [x1,y1,x2,y2] in source pixels if reviewer redrew
     confidence: str = Field("probable", pattern="^(certain|probable|uncertain)$")
-    reviewer: str | None = None
     notes: str | None = None
     # Optional reviewer-assigned celebrity id — slug from assets/celebrities.json
     # (Bobby, Marty, Stumpy, …). Most detections are anonymous, so this is
@@ -220,11 +220,6 @@ class DashboardCfg:
         self.host = _env("DASHBOARD_HOST", "0.0.0.0")
         self.port = int(_env("DASHBOARD_PORT", "8080"))
         self.log_level = _env("LOG_LEVEL", "INFO")
-        # If set, mutation endpoints require Authorization: Bearer <token>.
-        # Read endpoints stay open (so a public tunnel exposes view-only by
-        # default and you only hand the token to people who should be able
-        # to submit corrections / acknowledge alerts).
-        self.write_token = _env("DASHBOARD_WRITE_TOKEN", "").strip()
         # How often to refresh species_sightings_mat. 60 s gives the dashboard
         # near-real-time data; raise on a busy DB to reduce refresh cost.
         self.matview_refresh_interval_s = float(_env("MATVIEW_REFRESH_INTERVAL_S", "60"))
@@ -246,6 +241,33 @@ class DashboardCfg:
             "https://docs.google.com/spreadsheets/d/1Git0Chs3pnEDngCVfDJmQ7noGM90h7uCu3AKecNgiOQ/export?format=xlsx",
         )
         self.sheet_poll_interval_s = float(_env("SHEET_POLL_INTERVAL_HOURS", "24")) * 3600.0
+
+        # --- auth ---
+        self.cookie_secure = _env("DASHBOARD_COOKIE_SECURE", "true").lower() != "false"
+        self.session_ttl_h = int(_env("DASHBOARD_SESSION_TTL_H", "12"))
+        self.session_abs_ttl_d = int(_env("DASHBOARD_SESSION_ABS_TTL_D", "7"))
+        self.login_max_fails = int(_env("DASHBOARD_LOGIN_MAX_FAILS", "8"))
+        self.login_lockout_min = int(_env("DASHBOARD_LOGIN_LOCKOUT_MIN", "15"))
+        # Separate, larger budget than registration's: verify_password runs
+        # (off-loop, but still real CPU) on every attempt, including one for
+        # a nonexistent username, which never trips the per-account lockout.
+        # This is the only thing capping how many scrypt verifications an
+        # anonymous flood can force per hour from one address.
+        self.login_max_per_ip_h = int(_env("DASHBOARD_LOGIN_MAX_PER_IP_H", "60"))
+        self.registration_open = _env("DASHBOARD_REGISTRATION_OPEN", "true").lower() != "false"
+        self.register_max_per_ip_h = int(_env("DASHBOARD_REGISTER_MAX_PER_IP_H", "5"))
+        self.reset_ttl_min = int(_env("DASHBOARD_RESET_TTL_MIN", "30"))
+        self.verify_ttl_h = int(_env("DASHBOARD_VERIFY_TTL_H", "24"))
+        self.mail_backend = _env("DASHBOARD_MAIL_BACKEND", "manual")
+        self.smtp = {
+            "host": _env("DASHBOARD_SMTP_HOST", ""),
+            "port": int(_env("DASHBOARD_SMTP_PORT", "587")),
+            "user": _env("DASHBOARD_SMTP_USER", "") or None,
+            "password": _env("DASHBOARD_SMTP_PASSWORD", "") or None,
+            "starttls": _env("DASHBOARD_SMTP_STARTTLS", "true").lower() != "false",
+        }
+        self.smtp_from = _env("DASHBOARD_SMTP_FROM", "noreply@wahoobay.invalid")
+        self.public_base_url = _env("DASHBOARD_PUBLIC_BASE_URL", "http://localhost:18080")
 
 
 def build_app() -> FastAPI:
@@ -365,15 +387,64 @@ def build_app() -> FastAPI:
         else:
             log.info("sheet poller: disabled (SHEET_URL empty or interval=0)")
 
+        # Sweep expired sessions and stale single-use tokens once a day so
+        # user_sessions/user_tokens don't grow unbounded. Revoked sessions
+        # and used tokens are kept briefly (30d / 7d) for audit purposes
+        # before being purged.
+        async def _prune_sessions() -> None:
+            while True:
+                await asyncio.sleep(86400)
+                pool = state.get("pool")
+                if pool is None:
+                    continue
+                try:
+                    async with pool.connection() as conn:
+                        await conn.execute(
+                            "DELETE FROM user_sessions WHERE expires_at < NOW() "
+                            "OR (revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '30 days')")
+                        await conn.execute(
+                            "DELETE FROM user_tokens WHERE expires_at < NOW() "
+                            "OR (used_at IS NOT NULL AND used_at < NOW() - INTERVAL '7 days')")
+                except Exception:
+                    log.exception("session prune failed")
+
+        state["prune_task"] = asyncio.create_task(_prune_sessions())
+
         try:
             yield
         finally:
-            for t in (slo_task, matview_task, sheet_task):
+            for t in (slo_task, matview_task, sheet_task, state.get("prune_task")):
                 if t is not None:
                     t.cancel()
                     try:
-                        await t
-                    except (asyncio.CancelledError, Exception):
+                        # Bounded: a cancelled task whose statement is
+                        # mid-flight (the matview refresher's REFRESH has
+                        # been observed running 47s-144s) makes psycopg
+                        # drain that statement before honouring the
+                        # cancellation, so an unbounded `await t` here can
+                        # block shutdown for the same duration. 5s per task
+                        # is generous for everything else these tasks do.
+                        await asyncio.wait_for(t, timeout=5)
+                    except asyncio.CancelledError:
+                        # Reaping a task we just cancelled two lines up
+                        # normally *is* a CancelledError here — every
+                        # clean shutdown hits this branch and must not
+                        # raise. Only propagate when this lifespan task's
+                        # own cancellation count is nonzero (Task.
+                        # cancelling(), Python 3.11+, counts pending
+                        # cancel() calls against the CURRENT task —
+                        # unaffected by our cancelling t) — i.e. something
+                        # (e.g. an operator's second Ctrl-C during a stuck
+                        # shutdown) has separately asked to cancel this
+                        # task itself, which must not be silently absorbed
+                        # by this cleanup loop.
+                        if asyncio.current_task().cancelling():
+                            raise
+                    except Exception:
+                        # Covers asyncio.wait_for's TimeoutError (a plain
+                        # Exception subclass as of 3.11) along with any
+                        # exception the task itself raised — both are
+                        # expected here and neither should block shutdown.
                         pass
             await client.aclose()
             if state.get("pool") is not None:
@@ -382,18 +453,30 @@ def build_app() -> FastAPI:
     app = FastAPI(title="Wahoo Bay dashboard", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-    def require_write_token(authorization: str | None = Header(None)) -> None:
-        """Gate mutation endpoints on a static bearer token if one is configured."""
-        if not cfg.write_token:
-            return  # open mode (no token configured)
-        expected = f"Bearer {cfg.write_token}"
-        if authorization != expected:
-            raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+    from .routes_auth import build_auth_router
+    app.include_router(build_auth_router(cfg, state, TEMPLATES))
 
-    @app.get("/api/auth/mode")
-    async def auth_mode() -> dict:
-        """Tells the UI whether mutation endpoints require a token."""
-        return {"write_protected": bool(cfg.write_token)}
+    from .routes_admin_users import build_admin_users_router
+    app.include_router(build_admin_users_router(cfg, state, TEMPLATES))
+
+    from .auth import make_require_role, require_csrf
+    require_role = make_require_role(cfg, state)
+
+    from fastapi.responses import RedirectResponse
+
+    @app.exception_handler(401)
+    async def unauthenticated(request: Request, exc):
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse(f"/login?next={request.url.path}", status_code=302)
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+
+    @app.get("/review", response_class=HTMLResponse)
+    async def review_page(request: Request,
+                          user=Depends(require_role("reviewer", "admin"))):
+        # Placeholder until spec 2 lands the annotation UI. Deliberately
+        # not linked from index.html.
+        return TEMPLATES.TemplateResponse(request, "review.html",
+                                          {"display_name": user.display_name})
 
     # Cache-bust static assets so a new dashboard build doesn't get hidden
     # behind a stale browser cache. We hash the JS+CSS+template mtimes at
@@ -403,6 +486,7 @@ def build_app() -> FastAPI:
         h = md5()
         for p in (
             BASE_DIR / "static" / "app.js",
+            BASE_DIR / "static" / "auth.js",
             BASE_DIR / "static" / "style.css",
             BASE_DIR / "templates" / "index.html",
         ):
@@ -411,6 +495,11 @@ def build_app() -> FastAPI:
             except Exception:
                 pass
         return h.hexdigest()[:10]
+
+    # The auth router renders its own pages (login, register, reset) and
+    # needs the same cache-busting value. It lives in another module and
+    # can't see this closure, so hand it over through `state`.
+    state["asset_version"] = _asset_version
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -1159,8 +1248,10 @@ def build_app() -> FastAPI:
     # Human corrections
     # ------------------------------------------------------------------
 
-    @app.post("/api/corrections", dependencies=[Depends(require_write_token)])
-    async def post_correction(body: CorrectionIn) -> Response:
+    @app.post("/api/corrections",
+              dependencies=[Depends(require_csrf)])
+    async def post_correction(body: CorrectionIn,
+                              user=Depends(require_role("reviewer", "admin"))) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1199,13 +1290,15 @@ def build_app() -> FastAPI:
                     INSERT INTO detection_corrections
                     (event_id, corrected_name, corrected_species_id,
                      not_a_fish, is_endorsement, corrected_bbox,
-                     confidence, reviewer, notes, celebrity_id)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     confidence, reviewer, notes, celebrity_id,
+                     user_id, session_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id, created_at
                     """,
                     (body.event_id, body.corrected_name, body.corrected_species_id,
                      body.not_a_fish, body.is_endorsement, bbox,
-                     body.confidence, body.reviewer, body.notes, celeb_id),
+                     body.confidence, user.display_name, body.notes, celeb_id,
+                     user.id, user.session_id),
                 )
                 row = await cur.fetchone()
         return JSONResponse({
@@ -1258,7 +1351,7 @@ def build_app() -> FastAPI:
 
     @app.post(
         "/api/admin/refresh_sheets",
-        dependencies=[Depends(require_write_token)],
+        dependencies=[Depends(require_csrf), Depends(require_role("admin"))],
     )
     async def refresh_sheets() -> Response:
         """Force-refresh the Wahoo Bay Google Sheet right now. Returns
@@ -1426,7 +1519,7 @@ def build_app() -> FastAPI:
 
     @app.post(
         "/api/admin/negative_regions",
-        dependencies=[Depends(require_write_token)],
+        dependencies=[Depends(require_csrf), Depends(require_role("admin"))],
     )
     async def post_negative_regions(body: dict) -> Response:
         """Replace the full negative-regions JSON. Validates shape so a
@@ -1469,7 +1562,7 @@ def build_app() -> FastAPI:
                     if (
                         not isinstance(v, list)
                         or len(v) != 2
-                        or not all(isinstance(x, (int, float)) for x in v)
+                        or not all(isinstance(x, int | float) for x in v)
                     ):
                         return JSONResponse(
                             {"error": f"vertices must be [x, y] number pairs ({src}#{i})"},
@@ -1549,8 +1642,9 @@ def build_app() -> FastAPI:
                     r[k] = r[k].isoformat()
         return JSONResponse(rows)
 
-    @app.post("/api/alerts/{alert_id}/ack", dependencies=[Depends(require_write_token)])
-    async def ack_alert(alert_id: int, reviewer: str | None = None) -> Response:
+    @app.post("/api/alerts/{alert_id}/ack", dependencies=[Depends(require_csrf)])
+    async def ack_alert(alert_id: int,
+                        user=Depends(require_role("admin"))) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1559,11 +1653,11 @@ def build_app() -> FastAPI:
                 await cur.execute(
                     """
                     UPDATE alerts
-                       SET acknowledged_by = COALESCE(%s, 'anonymous'),
+                       SET acknowledged_by = %s,
                            acknowledged_at = NOW()
                      WHERE id = %s AND resolved_at IS NULL
                     """,
-                    (reviewer, alert_id),
+                    (user.display_name, alert_id),
                 )
                 acked = cur.rowcount
         return JSONResponse({"acknowledged": bool(acked)})

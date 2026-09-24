@@ -89,35 +89,6 @@ async function pollWithCache(url) {
   return fresh;
 }
 
-function writeAuthHeaders() {
-  const tok = (localStorage.getItem("wb_write_token") || "").trim();
-  return tok ? { "Authorization": `Bearer ${tok}` } : {};
-}
-
-let WRITE_PROTECTED = false;
-async function refreshAuthMode() {
-  try {
-    const m = await poll("/api/auth/mode");
-    WRITE_PROTECTED = !!m.write_protected;
-    updateAuthBadge();
-  } catch {}
-}
-function updateAuthBadge() {
-  const badge = document.getElementById("auth-state");
-  if (!badge) return;
-  const tok = (localStorage.getItem("wb_write_token") || "").trim();
-  if (!WRITE_PROTECTED) {
-    badge.textContent = "open";
-    badge.className = "auth-badge reviewer";
-  } else if (tok) {
-    badge.textContent = "reviewer";
-    badge.className = "auth-badge reviewer";
-  } else {
-    badge.textContent = "view-only";
-    badge.className = "auth-badge";
-  }
-}
-
 function renderCurrent(live) {
   const el = document.getElementById("current-list");
   const countEl = document.getElementById("current-count");
@@ -485,7 +456,6 @@ async function endorseEvent(eventId) {
     corrected_bbox: _maybeBbox(eventId),
     celebrity_id: _maybeCelebrity(eventId),
     confidence: "certain",
-    reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
     notes: null,
   };
   await postCorrection(eventId, body, "endorsed");
@@ -501,14 +471,12 @@ async function submitNotAFish(eventId) {
     corrected_bbox: _maybeBbox(eventId),
     celebrity_id: _maybeCelebrity(eventId),
     confidence: document.getElementById(`cf-conf-${eventId}`)?.value || "probable",
-    reviewer: (localStorage.getItem("wb_reviewer") || "").trim() || null,
     notes: (document.getElementById(`cf-notes-${eventId}`)?.value || "").trim() || null,
   };
   await postCorrection(eventId, body, "not a fish");
 }
 
 async function submitCorrection(eventId) {
-  const reviewer = persistReviewerFromInputs();
   const name  = document.getElementById(`cf-name-${eventId}`).value.trim();
   const spid  = document.getElementById(`cf-species-id-${eventId}`).value.trim();
   const conf  = document.getElementById(`cf-conf-${eventId}`).value;
@@ -528,7 +496,6 @@ async function submitCorrection(eventId) {
     corrected_bbox: _maybeBbox(eventId),
     celebrity_id: _maybeCelebrity(eventId),
     confidence: conf,
-    reviewer: reviewer || null,
     notes: notes || null,
   };
   await postCorrection(eventId, body, isEndorsement ? "endorsed" : "corrected");
@@ -538,11 +505,15 @@ async function postCorrection(eventId, body, label) {
   try {
     const resp = await fetch("/api/corrections", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...writeAuthHeaders() },
+      headers: { "Content-Type": "application/json", "X-Requested-With": "wahoobay" },
       body: JSON.stringify(body),
     });
     if (resp.status === 401) {
-      alert("reviewer write token required — set it from the header (Reviewing as: link)");
+      alert("sign in as a reviewer to submit corrections");
+      return;
+    }
+    if (resp.status === 403) {
+      alert("your account isn't approved for corrections yet — an administrator needs to grant reviewer access");
       return;
     }
     if (!resp.ok) throw new Error(`${resp.status}`);
@@ -581,13 +552,6 @@ async function postCorrection(eventId, body, label) {
   }
 }
 
-function persistReviewerFromInputs() {
-  const input = document.getElementById("reviewer-input");
-  const v = (input?.value || "").trim();
-  if (v) localStorage.setItem("wb_reviewer", v);
-  return v || (localStorage.getItem("wb_reviewer") || "");
-}
-
 async function tickCorrectionStats() {
   try {
     const s = await poll("/api/corrections/stats");
@@ -598,63 +562,6 @@ async function tickCorrectionStats() {
       el.textContent = `corrections: ${s.total} total · ${s.reviewers ?? 0} reviewer(s) · ${s.not_a_fish ?? 0} false positives`;
     }
   } catch {}
-}
-
-function initReviewer() {
-  const el = document.getElementById("reviewer-input");
-  if (el) {
-    const saved = localStorage.getItem("wb_reviewer");
-    if (saved) el.value = saved;
-    el.addEventListener("change", () => {
-      if (el.value.trim()) {
-        localStorage.setItem("wb_reviewer", el.value.trim());
-        updateReviewerChip();
-      }
-    });
-  }
-  const tk = document.getElementById("write-token-input");
-  if (tk) {
-    const saved = localStorage.getItem("wb_write_token");
-    if (saved) tk.value = saved;
-    tk.addEventListener("change", () => {
-      const v = tk.value.trim();
-      if (v) localStorage.setItem("wb_write_token", v);
-      else localStorage.removeItem("wb_write_token");
-      updateAuthBadge();
-      updateReviewerChip();
-    });
-  }
-  updateReviewerChip();
-}
-
-// Once a reviewer has saved both their email and write token, collapse the
-// header inputs into a compact "Reviewing as: X" chip with a [change] link
-// to bring the inputs back. Keeps the focus on the actual review queue.
-function updateReviewerChip() {
-  const email = (localStorage.getItem("wb_reviewer") || "").trim();
-  const token = (localStorage.getItem("wb_write_token") || "").trim();
-  const chip = document.getElementById("reviewer-chip");
-  const inputs = document.getElementById("reviewer-inputs");
-  if (!chip || !inputs) return;
-  if (email && (token || !WRITE_PROTECTED)) {
-    chip.innerHTML = `Reviewing as: <strong>${escHtml(email)}</strong> <a href="#" onclick="event.preventDefault();showReviewerInputs()">change</a>`;
-    chip.style.display = "";
-    inputs.style.display = "none";
-  } else {
-    chip.style.display = "none";
-    inputs.style.display = "";
-  }
-}
-
-function showReviewerInputs() {
-  const chip = document.getElementById("reviewer-chip");
-  const inputs = document.getElementById("reviewer-inputs");
-  if (chip) chip.style.display = "none";
-  if (inputs) {
-    inputs.style.display = "";
-    const el = document.getElementById("reviewer-input");
-    if (el) el.focus();
-  }
 }
 
 async function tick() {
@@ -893,12 +800,15 @@ function renderAlerts(rows) {
 }
 
 async function ackAlert(id) {
-  const reviewer = (document.getElementById("reviewer-input")?.value || "").trim() || "anonymous";
   try {
-    const r = await fetch(`/api/alerts/${id}/ack?reviewer=${encodeURIComponent(reviewer)}`,
-      { method: "POST", headers: writeAuthHeaders() });
+    const r = await fetch(`/api/alerts/${id}/ack`,
+      { method: "POST", headers: { "X-Requested-With": "wahoobay" } });
     if (r.status === 401) {
-      alert("write token required to acknowledge alerts");
+      alert("sign in as an admin to acknowledge alerts");
+      return;
+    }
+    if (r.status === 403) {
+      alert("admin role required to acknowledge alerts");
       return;
     }
     tickAlerts();
@@ -2748,7 +2658,6 @@ async function tickReports() {
   }
 }
 
-initReviewer();
 initDownloads();
 initReefToggle();
 initBboxToggle();
@@ -2759,7 +2668,6 @@ _initSpeciesModal();
 _initRoiModal();
 _initCelebrityModal();
 _initCameraToggle();
-refreshAuthMode();
 setInterval(tick, 500);
 setInterval(tickHistory, 5000);
 setInterval(tickWaterQuality, 30000);

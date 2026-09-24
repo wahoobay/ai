@@ -233,16 +233,23 @@ endpoint group). Notable other modules:
 | Page + assets | `GET /`, `GET /static/{app.js,style.css}?v=<mtime-hash>` |
 | Worker proxies | `GET /api/live.json`, `/api/stats`, `/api/snapshot{,_pier}.jpg`, `/api/stream{,_raw,_pier,_pier_raw}.mjpeg` |
 | Read endpoints (Postgres) | `/api/events`, `/api/species_counts`, `/api/species/list`, `/api/water_quality/*`, `/api/weather/*`, `/api/drift/*`, `/api/alerts/*`, `/api/corrections{,/stats}`, `/api/visitor_stats`, `/api/provenance/current`, `/api/celebrities`, `/api/celebrities/{id}` |
-| Mutation endpoints (write-token) | `POST /api/corrections`, `POST /api/alerts/{id}/ack`, `POST /api/admin/negative_regions`, `POST /api/admin/refresh_sheets` |
+| Mutation endpoints (reviewer or admin session) | `POST /api/corrections` |
+| Mutation endpoints (admin session only) | `POST /api/alerts/{id}/ack`, `POST /api/admin/negative_regions`, `POST /api/admin/refresh_sheets`, plus the account-management routes below |
+| Account management (admin session only) | `POST /api/admin/users`, `POST /api/admin/users/{id}/approve`, `POST /api/admin/users/{id}/role`, `POST /api/admin/users/{id}/deactivate`, `POST /api/admin/users/{id}/reset-link`, `GET /api/admin/sessions`, `POST /api/admin/sessions/{id}/revoke` |
 | Detection thumbnails | `GET /api/detections/{event_id}/roi.jpg`, `/frame.jpg` |
 | Streaming exports | `GET /api/export/{events,sightings,hourly_summary,water_quality,weather,frame_stats,saved_frames,corrections,alerts,species_counts,tracks_timeline,topk_long,labeled_corrections}.csv` (Parquet variant where flagged) |
 | Static doc sidecars | `GET /api/export/README.md`, `/api/export/camera_metadata.json` |
-| Admin UI | `GET /admin/regions.html` (interactive polygon-drawing for negative regions) |
+| Admin UI | `GET /admin/regions.html` (interactive polygon-drawing for negative regions), `GET /admin/users.html` (account/session management) |
 
-All read endpoints are open. All mutation endpoints honour
-`DASHBOARD_WRITE_TOKEN` (require `Authorization: Bearer <token>` when
-the env var is set; pass-through when unset, so dev sessions don't need
-the token).
+All read endpoints are open, including to anonymous visitors. Every
+mutation endpoint requires a session cookie from `POST /api/auth/login`
+(see "Accounts and roles" in `docs/operations.md`) — `/api/corrections`
+accepts the `reviewer` or `admin` role, every other mutation endpoint
+requires `admin`. Enforced by the `require_role()` dependency in
+`services/dashboard/app/auth.py`, not by a bearer token — the token
+gate this table used to describe (`DASHBOARD_WRITE_TOKEN`) was retired
+along with the token itself; see "How to extend the system" below for
+how to gate a new endpoint the same way.
 
 ### Background tasks
 
@@ -271,7 +278,7 @@ Three async tasks run inside the dashboard process:
    then hot-reloads the in-memory celebrities catalogue + the manifest
    common-name fallback layer. No dashboard restart needed for the
    chatters' new entries to surface. Manual force: `POST /api/admin/refresh_sheets`
-   (write-token protected).
+   (admin session required).
 
 ### Reviewer queue
 
@@ -423,15 +430,21 @@ reachable from the internet. The worker (8081 / 8083) and poller
 or on FAU's network — `cloudflared` makes an outbound TLS connection
 to Cloudflare and routes return traffic back through it.
 
-The dashboard exposes all read endpoints freely; mutation endpoints
-require a `Bearer` token from `DASHBOARD_WRITE_TOKEN` (stored at
-`/raid/scratch/dzimmerman2021/wahoobay/.dashboard_write_token`,
-mode 600, gitignored). The admin endpoints (`/admin/regions.html`,
-`POST /api/admin/refresh_sheets`, `POST /api/admin/negative_regions`)
-require the same token. **The admin UI is not yet authenticated at
-the network layer** — it's same-token as the reviewer mutations. Per
-the project's stance, the admin endpoints are accessed via SSH tunnel
-rather than through the public tunnel.
+The dashboard exposes all read endpoints freely, including over the
+public Cloudflare tunnel — anonymous visitors see the live fish view
+unchanged. Every mutation endpoint requires an authenticated session
+cookie (`POST /api/auth/login`) carrying the `reviewer` or `admin`
+role; the admin endpoints (`/admin/*.html`, `POST
+/api/admin/refresh_sheets`, `POST /api/admin/negative_regions`, and
+the account/session-management routes) require `admin` specifically.
+This replaced an earlier bearer-token scheme (`DASHBOARD_WRITE_TOKEN`)
+that has since been removed entirely. Unlike that scheme, the admin
+UI and admin endpoints are reachable through the public tunnel the
+same as everything else — the design's whole premise is that
+session/role auth, not network topology, is what has to hold here. See
+"Accounts and roles" in `docs/operations.md` and
+`docs/superpowers/specs/2026-09-22-reviewer-auth-rbac-design.md` for
+the full design.
 
 ---
 
@@ -448,4 +461,4 @@ Common changes, with the file you'd touch:
 | Add a new camera source | Add fields to `.env` (`VIDEO_SOURCE_X`, `SOURCE_LABEL_PRIMARY_X`, `WORKER_HTTP_PORT_X`, `CUDA_VISIBLE_DEVICES_X`) + a `scripts/dev/run_worker_X.sh` script + a dashboard proxy endpoint (`/api/stream_X.mjpeg`, `/api/snapshot_X.jpg`) + a button in the camera-toggle UI |
 | Add a new classifier backend | Mirror `services/worker/app/classifier_v2.py`'s constructor + `process_frame` signature; add a branch in `services/worker/app/inference_proc.py`'s `backend == "..."` dispatch |
 | Change the smoother behaviour | `services/worker/app/tracker.py` |
-| Add a new admin-only page | Drop a template under `services/dashboard/app/templates/`, add `GET /admin/<name>.html` + any companion API endpoints in `main.py` (mutation ones gated on `Depends(require_write_token)`) |
+| Add a new admin-only page | Drop a template under `services/dashboard/app/templates/`, add `GET /admin/<name>.html` + any companion API endpoints (mutation ones gated on `Depends(require_role("admin"))` from `services/dashboard/app/auth.py` — see `routes_admin_users.py` for the pattern: `require_csrf` too, and a `user_audit` row for anything that changes state) |

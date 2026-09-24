@@ -294,7 +294,7 @@ detail_json   JSONB                       -- rule-specific evidence (last seen t
 ```
 
 Auto-resolve when the rule's condition clears. Manual ack is via
-`POST /api/alerts/{id}/ack` (write-token).
+`POST /api/alerts/{id}/ack` (admin session required).
 
 ### `ptz_states`
 

@@ -80,8 +80,6 @@
   </select>
   <button id="refreshSnap" title="Reload snapshot (e.g. if the camera angle changed)">↻ snapshot</button>
   <span style="flex: 1"></span>
-  <label for="token" title="DASHBOARD_WRITE_TOKEN — required for save">Write token:</label>
-  <input id="token" type="password" placeholder="(if write-protected)" style="width: 200px;">
 </div>
 
 <div class="canvas-wrap">
@@ -282,16 +280,14 @@ function renderRegionList() {
 }
 
 $("save").addEventListener("click", async () => {
-  const token = $("token").value.trim();
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const headers = { "Content-Type": "application/json", "X-Requested-With": "wahoobay" };
   setStatus("saving…");
   try {
     const r = await fetch("/api/admin/negative_regions", {
       method: "POST", headers, body: JSON.stringify(regionsConfig),
     });
     if (r.status === 401) {
-      setStatus("save rejected: write token required (set DASHBOARD_WRITE_TOKEN, or fill the token field above)", "err");
+      setStatus("save rejected: sign in as an admin", "err");
       return;
     }
     if (!r.ok) {

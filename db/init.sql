@@ -413,3 +413,80 @@ CREATE OR REPLACE VIEW species_counts_hourly AS
     FROM detection_events
     WHERE best_species_id IS NOT NULL
     GROUP BY 1, 2, 3;
+
+-- ---------------------------------------------------------------------
+-- Accounts, sessions, and one-time tokens for the reviewer tooling.
+-- `status` is checked before `role` everywhere: a pending account
+-- authenticates but is treated as a viewer regardless of its role.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id                BIGSERIAL PRIMARY KEY,
+    username          TEXT        NOT NULL UNIQUE,
+    display_name      TEXT        NOT NULL,
+    email             TEXT        NOT NULL UNIQUE,
+    password_hash     TEXT        NOT NULL,
+    role              TEXT        NOT NULL DEFAULT 'viewer'
+                      CHECK (role IN ('viewer', 'reviewer', 'admin')),
+    status            TEXT        NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'active', 'disabled')),
+    email_verified_at TIMESTAMPTZ,
+    approved_at       TIMESTAMPTZ,
+    approved_by       BIGINT      REFERENCES users(id),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at     TIMESTAMPTZ,
+    failed_logins     INTEGER     NOT NULL DEFAULT 0,
+    locked_until      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS users_pending
+    ON users (created_at DESC) WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id            BIGSERIAL PRIMARY KEY,
+    token_hash    TEXT        NOT NULL UNIQUE,   -- sha256 of the cookie value
+    user_id       BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at    TIMESTAMPTZ NOT NULL,
+    revoked_at    TIMESTAMPTZ,
+    user_agent    TEXT,
+    ip            INET
+);
+
+CREATE INDEX IF NOT EXISTS user_sessions_user_created
+    ON user_sessions (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS user_sessions_expires
+    ON user_sessions (expires_at) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS user_tokens (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose       TEXT        NOT NULL
+                  CHECK (purpose IN ('password_reset', 'email_verify')),
+    token_hash    TEXT        NOT NULL UNIQUE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at    TIMESTAMPTZ NOT NULL,
+    used_at       TIMESTAMPTZ,
+    requested_ip  INET,
+    delivered_via TEXT
+);
+
+CREATE INDEX IF NOT EXISTS user_tokens_user_purpose
+    ON user_tokens (user_id, purpose, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_audit (
+    id              BIGSERIAL PRIMARY KEY,
+    ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor_user_id   BIGINT REFERENCES users(id),
+    action          TEXT   NOT NULL,
+    target_user_id  BIGINT REFERENCES users(id),
+    detail          JSONB
+);
+
+ALTER TABLE detection_corrections
+    ADD COLUMN IF NOT EXISTS user_id    BIGINT REFERENCES users(id),
+    ADD COLUMN IF NOT EXISTS session_id BIGINT REFERENCES user_sessions(id);
+
+CREATE INDEX IF NOT EXISTS detection_corrections_session
+    ON detection_corrections (session_id, created_at DESC)
+    WHERE session_id IS NOT NULL;

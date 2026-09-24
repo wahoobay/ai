@@ -19,6 +19,7 @@
       <span id="stat-infer">inference: —</span>
       <span id="stat-infer-fps">infer fps: —</span>
     </div>
+    <div id="identity-chip" hidden></div>
   </header>
 
   <div id="alerts-banner" class="alerts-banner hidden"></div>
@@ -502,12 +503,6 @@
       <section>
         <h2>Recent events
           <span class="reviewer-line">
-            <span id="auth-state" class="auth-badge">view-only</span>
-            <span id="reviewer-chip" class="reviewer-chip" style="display:none"></span>
-            <span id="reviewer-inputs">
-              reviewer: <input id="reviewer-input" type="text" placeholder="your email">
-              <input id="write-token-input" type="password" placeholder="write token (optional)">
-            </span>
             <span class="save-policy-hint" tabindex="0" role="button" aria-haspopup="true" onclick="openFrameSavePolicy()">
               ⓘ why no thumbnail?
               <span class="save-policy-popover" role="tooltip">
@@ -601,5 +596,6 @@
   </div>
 
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
+  <script src="/static/auth.js?v={{ asset_version }}"></script>
 </body>
 </html>
