@@ -7,12 +7,27 @@ require_role and require_csrf, as everywhere since spec 1."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
+from datetime import date
 
+import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .auth import effective_role, make_require_role, require_csrf
+from .review_browse import (
+    AdjudicateIn,
+    BrowseFilters,
+    WindowIn,
+    agreement,
+    browse,
+    get_window,
+    list_disputes,
+    pool_status,
+    progress_summary,
+    set_window,
+)
 from .review_frames import (
     AddedBoxIn,
     add_box,
@@ -40,6 +55,8 @@ from .review_queue import (
     skip_item,
     submit_verdict,
 )
+
+log = logging.getLogger(__name__)
 
 IMAGE_HEADERS = {"Cache-Control": "private, max-age=86400, immutable"}
 
@@ -269,6 +286,82 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         return await _jpeg(render_zoom, row["image_path"],
                            zoom_region(row["bbox"], width, height))
 
-    _ = admin_only    # used by the admin routes added in Task 9
+    # ---- browse, progress and the admin tools (Task 9) ----
+
+    @router.get("/api/review/progress")
+    async def progress(user=Depends(reviewer)):
+        pool_obj = _pool()
+        stale = False
+        if pool_obj:
+            try:
+                await pool_obj.refresh_progress()
+            except psycopg.errors.QueryCanceled:
+                # The refresh runs under its own 5s statement timeout and
+                # can lose that race under load; the counts it already has
+                # are still worth serving, flagged stale, rather than a 500.
+                stale = True
+                log.warning("review progress: refresh_progress timed out; serving stale counts")
+        async with _db().connection() as conn:
+            summary = await progress_summary(
+                conn, pool_obj=pool_obj, catalogue=_catalogue(), session_id=user.session_id,
+                target=cfg.review_target)
+        summary["stale"] = stale
+        return JSONResponse(summary)
+
+    @router.get("/api/review/browse")
+    async def browse_boxes(status: str = "any", species: str | None = None,
+                           camera: str | None = None, who: str = "anyone", lane: str = "any",
+                           date_from: date | None = None, date_to: date | None = None,
+                           page: int = Query(0, ge=0, le=100000), user=Depends(reviewer)):
+        filters = BrowseFilters(status=status, species=species or None, camera=camera or None,
+                                who=who, lane=lane, date_from=date_from, date_to=date_to)
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(await browse(conn, catalogue=_catalogue(), user=user,
+                                                 filters=filters, page=page))
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.get("/api/review/disputes")
+    async def disputes(user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            return JSONResponse({"disputes": await list_disputes(conn, catalogue=_catalogue())})
+
+    @router.post("/api/review/disputes/{event_id}/adjudicate",
+                 dependencies=[Depends(require_csrf)])
+    async def adjudicate(event_id: int, body: AdjudicateIn, user=Depends(admin_only)):
+        verdict = VerdictIn(event_id=event_id, outcome=body.outcome, label=body.label,
+                            life_stage=body.life_stage, bbox=body.bbox)
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(await submit_verdict(
+                    conn, user=user, body=verdict, catalogue=_catalogue(), spot_rate=0.0,
+                    rng=rng, adjudication=True))
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.get("/api/review/agreement")
+    async def agreement_stats(user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            return JSONResponse(await agreement(conn))
+
+    @router.get("/api/review/status")
+    async def status(user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            return JSONResponse(await pool_status(conn, pool_obj=_pool()))
+
+    @router.get("/api/review/settings/window")
+    async def window_get(user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            return JSONResponse(await get_window(conn))
+
+    @router.put("/api/review/settings/window", dependencies=[Depends(require_csrf)])
+    async def window_put(body: WindowIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(await set_window(conn, admin_id=user.id, start=body.start,
+                                                     end=body.end))
+            except ReviewError as e:
+                return _fail(e)
 
     return router
