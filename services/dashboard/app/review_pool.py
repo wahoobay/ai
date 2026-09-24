@@ -12,14 +12,28 @@ the retire update, the small per-box lookups, and the progress refresh --
 runs inside its own transaction with a 5 s timeout set by
 set_config(..., true): the limit ends with the transaction and never
 reaches the next borrower of the pooled connection (a session-level SET
-would, and the matview refresher's long REFRESH would then die). For the
-same reason every statement here runs inside `conn.transaction()`: a
-statement outside one opens an implicit transaction, the next block
-becomes a savepoint, and its local timeout would outlive it. A cancelled
-statement -- the timeout itself, or a lock wait it gave up on -- is
-logged and counted, never left to end the run; a run is also capped in
-probes and wall time, and a run that finds the previous one still going
-returns at once.
+would, and the matview refresher's long REFRESH would then die; pooled
+connections can also arrive with autocommit already on, so relying on an
+implicit transaction instead of an explicit `conn.transaction()` would
+leave a statement's local setting applying to nothing). For the same
+reason every statement here runs inside `conn.transaction()`: a statement
+outside one opens an implicit transaction, the next block becomes a
+savepoint, and its local timeout would outlive it.
+
+Only `_probe` turns a cancelled statement into a result (`None`): the
+check/identify lanes use that to back a species off rather than treating
+a timeout as "found nothing". Every other statement -- the window read,
+the retire update, the progress refresh, and the small per-box lookups in
+`_rows` -- lets `QueryCanceled` propagate. Catching it there and
+improvising a fallback (an empty free-set, a zero open-count, "no saved
+frames yet") would be worse than not running at all: an open-count of
+zero over-tops-up a lane, `_too_close` failing open double-books a box,
+and a lookup by id silently narrowing to nothing is not the same as that
+id having been checked. `run_once` is the one place that catches it, and
+ends the run the same way for all of them: a warning, a "timed out" stat
+and note, nothing partially written. A run is also capped in probes and
+wall time -- checked before every probe, not only between species -- and
+a run that finds the previous one still going returns at once.
 """
 from __future__ import annotations
 
@@ -163,7 +177,13 @@ class ReviewPool:
         self._baseline_catalogue: object = None
         self._verified: dict[str, int] = {}
         self._empty_until: dict[str, float] = {}
-        self._last_window: tuple[datetime, datetime] | None = None
+        # The admin-configured window ((None, None) when unset), as of the
+        # last run that actually had a window to work with -- NOT the
+        # effective window _window() computes for probing, which moves
+        # every call through its now()-based end clamp and so would never
+        # compare equal twice. Comparing this one is what makes a skip
+        # survive a run that didn't change the setting.
+        self._last_window: tuple[datetime | None, datetime | None] | None = None
         self.last_run: dict | None = None
 
     # ---- progress ---------------------------------------------------------
@@ -198,26 +218,19 @@ class ReviewPool:
                 counts[name] = counts.get(name, 0) + 1
         self._baseline, self._baseline_stamp, self._baseline_catalogue = counts, stamp, catalogue
 
-    async def refresh_progress(self, stats: dict | None = None) -> None:
-        stats = {"timeouts": 0} if stats is None else stats
+    async def refresh_progress(self) -> None:
         self._load_baseline()
-        try:
-            async with self.db.connection() as conn, conn.transaction():
-                await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                                   (str(self.s.statement_timeout_ms),))
-                resolved = await resolve_all(conn)
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        """SELECT label, count(*) FROM review_added_boxes
-                            WHERE removed_at IS NULL AND outcome = 'species'
-                              AND confidence <> 'uncertain'
-                            GROUP BY label""")
-                    added = await cur.fetchall()
-        except psycopg.errors.QueryCanceled:
-            stats["timeouts"] += 1
-            log.warning("review pool: refreshing progress counts hit the %d ms statement "
-                        "timeout; keeping the previous counts", self.s.statement_timeout_ms)
-            return
+        async with self.db.connection() as conn, conn.transaction():
+            await conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                               (str(self.s.statement_timeout_ms),))
+            resolved = await resolve_all(conn)
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """SELECT label, count(*) FROM review_added_boxes
+                        WHERE removed_at IS NULL AND outcome = 'species'
+                          AND confidence <> 'uncertain'
+                        GROUP BY label""")
+                added = await cur.fetchall()
         verified: dict[str, int] = {}
         for r in resolved.values():
             if r.is_verified and r.species and r.confidence != "uncertain":
@@ -266,35 +279,40 @@ class ReviewPool:
             stats = {"check_added": 0, "identify_added": 0, "probes": 0, "retired": 0,
                      "timeouts": 0, "errors": 0}
             try:
-                await self.refresh_progress(stats)
+                await self.refresh_progress()
                 async with self.db.connection() as conn:
-                    window = await self._window(conn, stats)
+                    window, admin_window = await self._window(conn)
                     if window is None:
                         stats["note"] = "no saved frames in the window yet"
                     else:
-                        # A window that moved since the last run makes any
-                        # earlier "found nothing" skip (or timeout backoff)
-                        # unreliable -- it may have looked at data that's no
-                        # longer, or wasn't yet, in range.
-                        if window != self._last_window:
+                        # A real admin change (not the effective window's
+                        # own now()-based drift) makes any earlier "found
+                        # nothing" skip, or timeout backoff, unreliable --
+                        # it may have looked at data that's no longer, or
+                        # wasn't yet, in range.
+                        if admin_window != self._last_window:
                             self._empty_until.clear()
-                            self._last_window = window
-                        try:
-                            async with conn.transaction():
-                                await conn.execute(
-                                    "SELECT set_config('statement_timeout', %s, true)",
-                                    (str(self.s.statement_timeout_ms),))
-                                stats["retired"] = await retire_outside_window(conn, *window)
-                        except psycopg.errors.QueryCanceled:
-                            stats["timeouts"] += 1
-                            log.warning(
-                                "review pool: retiring outside-window items hit the %d ms "
-                                "statement timeout; will retry next run",
-                                self.s.statement_timeout_ms)
+                            self._last_window = admin_window
+                        async with conn.transaction():
+                            await conn.execute(
+                                "SELECT set_config('statement_timeout', %s, true)",
+                                (str(self.s.statement_timeout_ms),))
+                            stats["retired"] = await retire_outside_window(conn, *window)
                         await self._fill_check(conn, window, stats, t0)
                         await self._fill_identify(conn, window, stats, t0)
             except asyncio.CancelledError:
                 raise
+            except psycopg.errors.QueryCanceled:
+                # Every statement except _probe lets this propagate here
+                # rather than improvising a result for it (see the module
+                # docstring). One clean ending for all of them: whatever
+                # this run had already committed stays committed (each
+                # statement was its own transaction), nothing further is
+                # attempted, and the next scheduled run retries.
+                stats["timeouts"] += 1
+                stats["note"] = "a statement timed out; ending this run"
+                log.warning("review pool: a statement hit the %d ms statement timeout; "
+                            "ending this run cleanly", self.s.statement_timeout_ms)
             except Exception:
                 stats["errors"] += 1
                 log.exception("review pool: run failed")
@@ -303,26 +321,26 @@ class ReviewPool:
             self.last_run = stats
             return stats
 
-    async def _window(self, conn, stats: dict) -> tuple[datetime, datetime] | None:
-        try:
-            async with conn.transaction():
-                await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                                   (str(self.s.statement_timeout_ms),))
-                start, end = await read_window(conn)
-                if start is None:
-                    async with conn.cursor() as cur:
-                        await cur.execute("SELECT min(ts) FROM saved_frames")
-                        start = (await cur.fetchone())[0]
-        except psycopg.errors.QueryCanceled:
-            stats["timeouts"] += 1
-            log.warning("review pool: reading the review window hit the %d ms statement "
-                        "timeout", self.s.statement_timeout_ms)
-            return None
+    async def _window(self, conn) -> tuple[tuple[datetime, datetime] | None,
+                                           tuple[datetime | None, datetime | None]]:
+        """(effective, admin). `effective` is the window probes and retire
+        use -- start falls back to min(saved_frames.ts) when unset, end is
+        clamped to now - recent_exclusion_s -- or None when there's
+        nothing to work with yet. `admin` is exactly what's stored in
+        review_settings, unclamped, for run_once's change detection."""
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                               (str(self.s.statement_timeout_ms),))
+            admin_start, admin_end = await read_window(conn)
+            start = admin_start
+            if start is None:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT min(ts) FROM saved_frames")
+                    start = (await cur.fetchone())[0]
         latest = datetime.now(UTC) - timedelta(seconds=self.s.recent_exclusion_s)
-        end = min(end, latest) if end else latest
-        if start is None or start >= end:
-            return None
-        return start, end
+        end = min(admin_end, latest) if admin_end else latest
+        effective = None if start is None or start >= end else (start, end)
+        return effective, (admin_start, admin_end)
 
     def _exhausted(self, stats: dict, t0: float) -> bool:
         return (stats["probes"] >= self.s.max_probes
@@ -332,63 +350,65 @@ class ReviewPool:
         start, end = window
         return start + (end - start) * self.rng.random()
 
-    async def _exec(self, conn, sql: str, params, stats: dict, *, dict_rows: bool = False
-                    ) -> list | None:
-        """Run one statement inside its own transaction-local timeout.
-        None means it was cancelled -- the timeout itself, or a lock wait
-        the timeout gave up on -- which is counted and logged here rather
-        than raised, so one stuck statement can't end the run."""
+    async def _probe(self, conn, sql: str, params, stats: dict) -> list[dict] | None:
+        """One bounded read against the big tables, counted toward the
+        run's probe budget. A cancellation -- the timeout itself, or a
+        lock wait it gave up on -- is converted to None here, unlike
+        every other statement in this module: the check/identify lanes
+        use None to back a species off instead of retrying it forever."""
+        stats["probes"] += 1
         try:
             async with conn.transaction():
                 await conn.execute("SELECT set_config('statement_timeout', %s, true)",
                                    (str(self.s.statement_timeout_ms),))
-                kwargs = {"row_factory": dict_row} if dict_rows else {}
-                async with conn.cursor(**kwargs) as cur:
+                async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute(sql, params)
                     return await cur.fetchall()
         except psycopg.errors.QueryCanceled:
             stats["timeouts"] += 1
-            log.warning("review pool: a statement hit the %d ms statement timeout",
+            log.warning("review pool: a probe hit the %d ms statement timeout",
                         self.s.statement_timeout_ms)
             return None
 
-    async def _probe(self, conn, sql: str, params, stats: dict) -> list[dict] | None:
-        """One bounded read against the big tables, counted toward the
-        run's probe budget. None means it timed out."""
-        stats["probes"] += 1
-        return await self._exec(conn, sql, params, stats, dict_rows=True)
-
-    async def _rows(self, conn, sql: str, params, stats: dict) -> list:
+    async def _rows(self, conn, sql: str, params) -> list:
         """One bounded read against a small, already-indexed table --
         review_items or detection_corrections by id, never a scan of the
-        big tables -- so it isn't counted against the probe budget. A
-        timeout here means lock contention, not table size, and is
-        treated the same as finding nothing."""
-        return await self._exec(conn, sql, params, stats) or []
+        big tables. Runs under the same transaction-local timeout as
+        everything else here, but a cancellation is NOT converted to an
+        empty result: that would silently zero an open-item count, let
+        `_too_close` fail open, or turn a single-row count into an
+        IndexError instead of the timeout it actually was. It propagates
+        to run_once."""
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                               (str(self.s.statement_timeout_ms),))
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                return await cur.fetchall()
 
-    async def _free(self, conn, ids: list[int], stats: dict) -> set[int]:
+    async def _free(self, conn, ids: list[int]) -> set[int]:
         if not ids:
             return set()
-        return {r[0] for r in await self._rows(conn, _FREE_EVENTS_SQL, (ids, ids, ids), stats)}
+        return {r[0] for r in await self._rows(conn, _FREE_EVENTS_SQL, (ids, ids, ids))}
 
-    async def _too_close(self, conn, stats: dict, *, source: str, lane: str, ts: datetime,
+    async def _too_close(self, conn, *, source: str, lane: str, ts: datetime,
                          species: str | None) -> bool:
         gap = timedelta(seconds=self.s.spacing_s)
         return bool(await self._rows(conn, _TOO_CLOSE_SQL,
-                                     (source, lane, ts - gap, ts + gap, species, species), stats))
+                                     (source, lane, ts - gap, ts + gap, species, species)))
 
-    async def _insert(self, conn, stats: dict, *, event_id, lane, saved_frame_id, source, ts,
-                      bbox, predicted, predicted_p, route) -> bool:
+    async def _insert(self, conn, *, event_id, lane, saved_frame_id, source, ts, bbox,
+                      predicted, predicted_p, route) -> bool:
         return bool(await self._rows(conn, _INSERT_ITEM_SQL, (
             event_id, lane, saved_frame_id, source, ts, list(bbox), predicted, predicted_p,
-            route), stats))
+            route)))
 
     async def _fill_check(self, conn, window, stats: dict, t0: float) -> None:
         catalogue = self.catalogue_store.get()
         open_counts = {name: n for name, n in await self._rows(conn, """
             SELECT route_species, count(*) FROM review_items
              WHERE lane = 'check' AND pass = 1 AND status IN ('open', 'claimed')
-             GROUP BY route_species""", None, stats)}
+             GROUP BY route_species""", None)}
         # The model writes class names with spaces (classifier_v2.py): folder
         # 'Pomatomus_saltarix' appears in detection_events as 'Pomatomus
         # saltarix' and counts toward the accepted name.
@@ -436,16 +456,15 @@ class ReviewPool:
         if not rows:
             return 0
         rows = [r for r in rows if big_enough(r["bbox"], self.s.min_box_px)]
-        free = await self._free(conn, [r["id"] for r in rows], stats)
+        free = await self._free(conn, [r["id"] for r in rows])
         added = 0
         for r in rows:
             if added >= need:
                 break
             if r["id"] not in free or await self._too_close(
-                    conn, stats, source=r["source_name"], lane="check", ts=r["ts"],
-                    species=name):
+                    conn, source=r["source_name"], lane="check", ts=r["ts"], species=name):
                 continue
-            if await self._insert(conn, stats, event_id=r["id"], lane="check",
+            if await self._insert(conn, event_id=r["id"], lane="check",
                                   saved_frame_id=r["saved_frame_id"], source=r["source_name"],
                                   ts=r["ts"], bbox=r["bbox"], predicted=name,
                                   predicted_p=r["best_accuracy"], route=name):
@@ -457,12 +476,14 @@ class ReviewPool:
         open_n = (await self._rows(conn, """
             SELECT count(*) FROM review_items
              WHERE lane = 'identify' AND pass = 1 AND status IN ('open', 'claimed')""",
-                                   None, stats))[0][0]
+                                   None))[0][0]
         while open_n < self.s.identify_open and not self._exhausted(stats, t0):
             frames = await self._probe(conn, IDENTIFY_FRAMES_SQL,
                                        (self._probe_time(window), window[0]), stats)
             if not frames:
                 continue
+            if self._exhausted(stats, t0):
+                break
             boxes = await self._probe(conn, IDENTIFY_BOXES_SQL, (
                 [f["id"] for f in frames], [f["source_name"] for f in frames],
                 [f["ts"] for f in frames], [f["frame_id"] for f in frames],
@@ -470,7 +491,7 @@ class ReviewPool:
             if not boxes:
                 continue
             boxes = [b for b in boxes if big_enough(b["bbox"], self.s.min_box_px)]
-            free = await self._free(conn, [b["id"] for b in boxes], stats)
+            free = await self._free(conn, [b["id"] for b in boxes])
             best: dict[int, dict] = {}
             for b in boxes:
                 current = best.get(b["saved_frame_id"])
@@ -480,10 +501,10 @@ class ReviewPool:
             for saved_frame_id, b in best.items():
                 if open_n >= self.s.identify_open:
                     break
-                if await self._too_close(conn, stats, source=b["source_name"], lane="identify",
+                if await self._too_close(conn, source=b["source_name"], lane="identify",
                                          ts=b["ts"], species=None):
                     continue
-                if await self._insert(conn, stats, event_id=b["id"], lane="identify",
+                if await self._insert(conn, event_id=b["id"], lane="identify",
                                       saved_frame_id=saved_frame_id, source=b["source_name"],
                                       ts=b["ts"], bbox=b["bbox"], predicted=None,
                                       predicted_p=None, route=None):

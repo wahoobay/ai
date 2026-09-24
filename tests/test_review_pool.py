@@ -9,6 +9,7 @@ import time
 from datetime import timedelta
 
 import pytest
+from app import review_pool
 from app.review_catalogue import CatalogueStore
 from app.review_images import frame_size, render_zoom, zoom_region, zoom_scale
 from app.review_pool import TIMEOUT_BACKOFF_S, PoolSettings, ReviewPool
@@ -75,7 +76,7 @@ async def test_check_lane_takes_guessed_boxes_that_have_a_saved_frame(rdb, revie
     assert [r[0] for r in rows] == saved["event_ids"]
     # stored under the accepted name, so it counts toward the right species
     assert rows[0][3] == rows[0][4] == "Pomatomus saltatrix"
-    assert stats["check_added"] == 1 and stats["errors"] == 0
+    assert stats["check_added"] == 1 and stats["errors"] == 0 and stats["probes"] > 0
 
 
 @pytestmark_db
@@ -85,7 +86,8 @@ async def test_a_reused_frame_id_is_matched_by_timestamp(rdb, review_assets, tmp
     before = await seed_frame(rdb, tmp_path, ts=T0, frame_id=500,
                               boxes=[{"bbox": [100, 100, 300, 250], "species": "Seriola zonata"}])
     await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=3), frame_id=500, boxes=[])
-    await _pool(rdb, review_assets).run_once()
+    stats = await _pool(rdb, review_assets).run_once()
+    assert stats["errors"] == 0 and stats["probes"] > 0 and stats["check_added"] == 1
     rows = await _items(rdb, "check")
     assert [(r[0], r[2]) for r in rows] == [(before["event_ids"][0], before["saved_frame_id"])]
 
@@ -103,7 +105,8 @@ async def test_small_boxes_close_neighbours_and_answered_boxes_are_skipped(rdb, 
                                 boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}])
     uid = await make_user(rdb, "one")
     await add_verdict(rdb, answered["event_ids"][0], uid, name="Seriola zonata")
-    await _pool(rdb, review_assets).run_once()
+    stats = await _pool(rdb, review_assets).run_once()
+    assert stats["errors"] == 0 and stats["probes"] > 0 and stats["check_added"] == 1
     got = {r[0] for r in await _items(rdb, "check")}
     # newest first: 'near' is taken, so 'kept' (30 s earlier) is too close to it
     assert near["event_ids"][0] in got
@@ -117,6 +120,8 @@ async def test_species_at_target_are_not_topped_up(rdb, review_assets, tmp_path)
                                             "species": "Acanthurus coeruleus"}])
     stats = await _pool(rdb, review_assets).run_once()
     assert stats["errors"] == 0
+    assert stats["probes"] > 0          # the other, genuinely-empty species still get probed
+    assert stats["check_added"] == 0
     assert await _items(rdb, "check") == []
 
 
@@ -134,6 +139,7 @@ async def test_identify_lane_takes_the_largest_confident_unguessed_box(rdb, revi
             ]))
     pool = _pool(rdb, review_assets, identify_open=10)
     stats = await pool.run_once()
+    assert stats["errors"] == 0
     rows = await _items(rdb, "identify")
     assert sorted(r[0] for r in rows) == sorted(f["event_ids"][1] for f in frames)
     assert all(r[3] is None and r[4] is None for r in rows)
@@ -166,15 +172,17 @@ async def test_the_date_window_retires_items_outside_it(rdb, review_assets, tmp_
     late = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(days=2), frame_id=2,
                             boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}])
     pool = _pool(rdb, review_assets)
-    await pool.run_once()
+    stats1 = await pool.run_once()
+    assert stats1["errors"] == 0 and stats1["probes"] > 0 and stats1["check_added"] == 2
     async with rdb.connection() as conn:
         await conn.execute(
             "INSERT INTO review_settings (key, value) VALUES ('window', %s)",
             (Jsonb({"start": (T0 + timedelta(days=1)).isoformat(),
                     "end": (T0 + timedelta(days=3)).isoformat()}),))
-    stats = await pool.run_once()
+    stats2 = await pool.run_once()
+    assert stats2["errors"] == 0 and stats2["probes"] > 0
     status = {r[0]: r[5] for r in await _items(rdb, "check")}
-    assert status[early["event_ids"][0]] == "retired" and stats["retired"] == 1
+    assert status[early["event_ids"][0]] == "retired" and stats2["retired"] == 1
     assert status[late["event_ids"][0]] == "open"
 
 
@@ -204,47 +212,63 @@ async def test_the_statement_timeout_never_outlives_a_probe(rdb, review_assets, 
 
 
 @pytestmark_db
-async def test_a_probe_timeout_backs_the_species_off_instead_of_a_day_long_skip(
+async def test_a_real_probe_timeout_backs_the_species_off_and_survives_a_second_run(
         rdb, review_assets, tmp_path, monkeypatch):
-    """Fix round 1, Finding 4: a timed-out probe must not be treated as
-    'found nothing' (the 24 h skip) nor silently retried every run -- it
-    gets a much shorter backoff so a lock-contention blip doesn't starve a
-    thin species for a day, and doesn't burn the run's budget retrying it
-    every cycle either."""
+    """Fix round 2: the re-review found the round-1 backoff test monkeypatched
+    `_probe` itself, so the real QueryCanceled path was never exercised, and
+    it only ran once, so nothing proved the backoff survived a second run.
+    This one forces a REAL Postgres cancellation through the real _probe
+    code path (a slow statement under a tiny statement_timeout) and checks
+    both a first run (backs off, no fallback, nothing inserted) and a
+    second, window-unchanged run (does not re-probe it)."""
     await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
                                             "species": "Seriola zonata"}])
+    slow_sql = "SELECT pg_sleep(0.5), %s::text, %s::timestamptz, %s::timestamptz"
+    monkeypatch.setattr(review_pool, "CHECK_PROBE_SQL", slow_sql)
+    pool = _pool(rdb, review_assets, statement_timeout_ms=200)
 
-    async def _always_times_out(self, conn, sql, params, stats):
-        # Mirrors exactly what the real _probe does on a QueryCanceled.
-        stats["probes"] += 1
-        stats["timeouts"] += 1
-        return None
-
-    monkeypatch.setattr(ReviewPool, "_probe", _always_times_out)
-    pool = _pool(rdb, review_assets)
-    stats = await pool.run_once()
-    assert stats["errors"] == 0
-    # 4 catalogue species are below target (Acanthurus coeruleus is not);
-    # each gets exactly one (timed-out) probe and no fallback.
-    assert stats["probes"] == 4 and stats["timeouts"] == 4
+    stats1 = await pool.run_once()
+    assert stats1["errors"] == 0
+    # 4 catalogue species are below target; each gets exactly one probe
+    # (no fallback is attempted after a timeout) and every one times out.
+    assert stats1["probes"] == 4 and stats1["timeouts"] == 4
+    assert stats1["check_added"] == 0
     assert await _items(rdb, "check") == []
-    backoff = pool._empty_until["Seriola zonata"] - time.time()
-    assert 0 < backoff <= TIMEOUT_BACKOFF_S < 86400
+    backoff_at = pool._empty_until.get("Seriola zonata")
+    assert backoff_at is not None
+    assert 0 < backoff_at - time.time() <= TIMEOUT_BACKOFF_S < 86400
+
+    # A second run, with no admin window change, must not re-probe a
+    # species that's still inside its backoff window.
+    stats2 = await pool.run_once()
+    assert stats2["errors"] == 0
+    assert stats2["probes"] == 0 and stats2["timeouts"] == 0
 
 
 @pytestmark_db
-async def test_a_window_change_clears_the_empty_species_skip(rdb, review_assets, tmp_path):
-    """Fix round 1, Finding 5: a skip recorded under one window must not
-    survive into a run against a different window."""
+async def test_the_empty_species_skip_survives_an_unchanged_window_and_clears_on_a_real_change(
+        rdb, review_assets, tmp_path):
+    """Fix round 2, New Breakage 1: comparing the effective window (whose
+    end moves every run through the now()-based recent_exclusion_s clamp)
+    instead of the admin-configured one wiped every skip on every run.
+    Deleting the admin-window INSERT below must make this test fail: both
+    the 'survives' and the 'clears' halves are asserted."""
     await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [10, 10, 90, 90],
                                                     "species": "Seriola zonata"}])
     pool = _pool(rdb, review_assets)
     await pool.run_once()
     assert pool._last_window is not None
-    # Poke in a skip as if an earlier, narrower window had found nothing --
-    # a key no real species can ever produce, so its removal can only be
-    # the window-change clear, not the ordinary fill logic.
+
+    # Poke in a skip as if an earlier probe had found nothing (or timed
+    # out) -- a key no real species can ever produce, so it can only
+    # disappear via the window-comparison logic under test.
     pool._empty_until["sentinel"] = time.time() + 90000
+
+    # No admin window is set before this run either: the skip must survive it.
+    await pool.run_once()
+    assert "sentinel" in pool._empty_until
+
+    # Now the admin actually changes the window: the skip must clear.
     async with rdb.connection() as conn:
         await conn.execute(
             "INSERT INTO review_settings (key, value) VALUES ('window', %s)",
@@ -265,6 +289,47 @@ async def test_the_probe_budget_is_checked_before_the_fallback_probe(rdb, review
     # species alone would spend 2 probes (initial + fallback, both empty)
     # before the next species' loop-top check ever saw the budget was gone.
     assert stats["probes"] == 1
+
+
+@pytestmark_db
+async def test_the_identify_lane_checks_the_probe_budget_before_the_boxes_probe(
+        rdb, review_assets, tmp_path):
+    """Fix round 2, Finding 2/6 (still open after round 1): the frames
+    probe and the boxes probe are two separate 5 s statements; the run's
+    budget must be checked between them too, not only at the top of the
+    while loop and only on the check lane's fallback."""
+    await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [10, 10, 90, 90]}])  # unguessed
+    stats = await _pool(rdb, review_assets, target=0, identify_open=5,
+                        max_probes=1).run_once()
+    assert stats["errors"] == 0
+    # target=0 empties the check lane's work with zero probes. Without the
+    # check before the boxes probe, the frames probe (which succeeds)
+    # would be followed unconditionally by the boxes probe, making this 2.
+    assert stats["probes"] == 1
+
+
+@pytestmark_db
+async def test_a_timed_out_non_probe_statement_ends_the_run_cleanly(
+        rdb, review_assets, tmp_path, monkeypatch):
+    """Fix round 2, controller finding 4: only _probe may turn a timeout
+    into a usable result. Every other statement -- here, the small _free
+    lookup that runs right after a successful probe -- must let
+    QueryCanceled propagate to run_once, which ends the run with a
+    warning, a timeouts count and a clear note, and inserts nothing,
+    rather than treating the failed lookup as 'nothing is claimed yet'
+    and over-inserting."""
+    await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [100, 100, 300, 250],
+                                                    "species": "Seriola zonata"}])
+    slow_sql = "SELECT pg_sleep(0.5), %s::bigint[], %s::bigint[], %s::bigint[]"
+    monkeypatch.setattr(review_pool, "_FREE_EVENTS_SQL", slow_sql)
+    pool = _pool(rdb, review_assets, statement_timeout_ms=200)
+
+    stats = await pool.run_once()
+    assert stats["errors"] == 0
+    assert stats["timeouts"] == 1
+    assert "timed out" in (stats.get("note") or "").lower()
+    assert stats["check_added"] == 0
+    assert await _items(rdb, "check") == []
 
 
 @pytestmark_db
