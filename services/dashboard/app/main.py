@@ -274,9 +274,13 @@ class DashboardCfg:
         self.public_base_url = _env("DASHBOARD_PUBLIC_BASE_URL", "http://localhost:18080")
 
         # --- database pool ---
-        # The review pool task holds a connection for up to 30 s per run, and
-        # the matview refresher holds one through each REFRESH; 6 leaves the
-        # public endpoints room.
+        # The review pool task holds a connection for roughly max_run_s
+        # (default 30 s) per run -- every statement it issues is capped at
+        # its own 5 s timeout, so the connection is never held past a run
+        # indefinitely, though the run's own budget is only checked between
+        # probes and can run somewhat past it -- and the matview refresher
+        # holds one through each REFRESH; 6 leaves the public endpoints
+        # room.
         self.db_pool_max = int(_env("DASHBOARD_DB_POOL_MAX", "6"))
 
         # --- review tool (docs/superpowers/specs/2026-09-24-...) ---

@@ -1,17 +1,28 @@
 """The review pool (spec §6) and the image helpers it relies on."""
 from __future__ import annotations
 
+import csv
 import io
+import os
 import random
+import time
 from datetime import timedelta
 
 import pytest
 from app.review_catalogue import CatalogueStore
 from app.review_images import frame_size, render_zoom, zoom_region, zoom_scale
-from app.review_pool import PoolSettings, ReviewPool
+from app.review_pool import TIMEOUT_BACKOFF_S, PoolSettings, ReviewPool
 from PIL import Image
 from psycopg.types.json import Jsonb
-from review_fixtures import T0, add_verdict, catalogue_paths, jpeg, make_user, seed_frame
+from review_fixtures import (
+    T0,
+    TAXONOMY_FIELDS,
+    add_verdict,
+    catalogue_paths,
+    jpeg,
+    make_user,
+    seed_frame,
+)
 
 
 def test_zoom_region_adds_half_a_box_of_margin_and_clamps():
@@ -104,7 +115,8 @@ async def test_species_at_target_are_not_topped_up(rdb, review_assets, tmp_path)
     # the fixture training set already has 10 Blue Tang crops; target is 5
     await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
                                             "species": "Acanthurus coeruleus"}])
-    await _pool(rdb, review_assets).run_once()
+    stats = await _pool(rdb, review_assets).run_once()
+    assert stats["errors"] == 0
     assert await _items(rdb, "check") == []
 
 
@@ -186,5 +198,98 @@ async def test_the_statement_timeout_never_outlives_a_probe(rdb, review_assets, 
     before = await timeouts()
     await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
                                             "species": "Seriola zonata"}])
-    await _pool(rdb, review_assets, identify_open=5).run_once()
+    stats = await _pool(rdb, review_assets, identify_open=5).run_once()
+    assert stats["errors"] == 0 and stats["probes"] > 0
     assert await timeouts() == before
+
+
+@pytestmark_db
+async def test_a_probe_timeout_backs_the_species_off_instead_of_a_day_long_skip(
+        rdb, review_assets, tmp_path, monkeypatch):
+    """Fix round 1, Finding 4: a timed-out probe must not be treated as
+    'found nothing' (the 24 h skip) nor silently retried every run -- it
+    gets a much shorter backoff so a lock-contention blip doesn't starve a
+    thin species for a day, and doesn't burn the run's budget retrying it
+    every cycle either."""
+    await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                            "species": "Seriola zonata"}])
+
+    async def _always_times_out(self, conn, sql, params, stats):
+        # Mirrors exactly what the real _probe does on a QueryCanceled.
+        stats["probes"] += 1
+        stats["timeouts"] += 1
+        return None
+
+    monkeypatch.setattr(ReviewPool, "_probe", _always_times_out)
+    pool = _pool(rdb, review_assets)
+    stats = await pool.run_once()
+    assert stats["errors"] == 0
+    # 4 catalogue species are below target (Acanthurus coeruleus is not);
+    # each gets exactly one (timed-out) probe and no fallback.
+    assert stats["probes"] == 4 and stats["timeouts"] == 4
+    assert await _items(rdb, "check") == []
+    backoff = pool._empty_until["Seriola zonata"] - time.time()
+    assert 0 < backoff <= TIMEOUT_BACKOFF_S < 86400
+
+
+@pytestmark_db
+async def test_a_window_change_clears_the_empty_species_skip(rdb, review_assets, tmp_path):
+    """Fix round 1, Finding 5: a skip recorded under one window must not
+    survive into a run against a different window."""
+    await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [10, 10, 90, 90],
+                                                    "species": "Seriola zonata"}])
+    pool = _pool(rdb, review_assets)
+    await pool.run_once()
+    assert pool._last_window is not None
+    # Poke in a skip as if an earlier, narrower window had found nothing --
+    # a key no real species can ever produce, so its removal can only be
+    # the window-change clear, not the ordinary fill logic.
+    pool._empty_until["sentinel"] = time.time() + 90000
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "INSERT INTO review_settings (key, value) VALUES ('window', %s)",
+            (Jsonb({"start": T0.isoformat(), "end": (T0 + timedelta(days=1)).isoformat()}),))
+    await pool.run_once()
+    assert "sentinel" not in pool._empty_until
+
+
+@pytestmark_db
+async def test_the_probe_budget_is_checked_before_the_fallback_probe(rdb, review_assets,
+                                                                      tmp_path):
+    """Fix round 1, Finding 9: _probe_check must not spend a second 5 s
+    probe once the run's budget is already gone."""
+    await seed_frame(rdb, tmp_path, ts=T0, boxes=[])  # a valid window, no detections at all
+    stats = await _pool(rdb, review_assets, max_probes=1).run_once()
+    assert stats["errors"] == 0
+    # Without the budget check before the fallback, the first (thinnest)
+    # species alone would spend 2 probes (initial + fallback, both empty)
+    # before the next species' loop-top check ever saw the budget was gone.
+    assert stats["probes"] == 1
+
+
+@pytestmark_db
+async def test_the_baseline_cache_follows_the_catalogue_not_just_the_manifest_mtime(
+        rdb, review_assets, tmp_path):
+    """Fix round 1, Finding 2: a live catalogue rebuild (the sheet poller
+    rewrites species_manifest.json / taxonomy.csv) can change which
+    accepted name a baseline label resolves to without the baseline
+    manifest file itself changing."""
+    pool = _pool(rdb, review_assets)
+    await pool.refresh_progress()
+    assert pool.baseline("Pomatomus saltatrix") == 1
+
+    path = review_assets["assets"] / "taxonomy.csv"
+    rows = list(csv.DictReader(path.open(newline="")))
+    for r in rows:
+        if r["raw_name"] == "Pomatomus saltarix":
+            r["accepted_name"] = "Pomatomus saltatrix2"
+    with path.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=TAXONOMY_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    later = time.time_ns() + 10**9
+    os.utime(path, ns=(later, later))
+
+    await pool.refresh_progress()
+    assert pool.baseline("Pomatomus saltatrix2") == 1
+    assert pool.baseline("Pomatomus saltatrix") == 0

@@ -47,7 +47,16 @@ def main() -> int:
     ]
     bad = False
     with psycopg.connect(_dsn(args.env)) as conn:
-        conn.execute("SET default_transaction_read_only = on")
+        # Setting this by SET, after connecting, would run it as the first
+        # statement of an already-open read-write transaction -- too late
+        # to make that transaction read-only. read_only must be set on the
+        # connection before anything else executes on it.
+        conn.read_only = True
+        status = conn.execute("SHOW transaction_read_only").fetchone()[0]
+        if status != "on":
+            print(f"RESULT: read-only guard failed (transaction_read_only={status}); "
+                  "refusing to run EXPLAIN against this database")
+            return 1
         for title, sql, params in probes:
             plan = "\n".join(r[0] for r in conn.execute("EXPLAIN " + sql, params))
             print(f"== {title}\n{plan}\n")
