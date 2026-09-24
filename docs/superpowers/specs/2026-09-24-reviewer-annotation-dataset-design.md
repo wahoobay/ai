@@ -56,7 +56,7 @@ Measured on 2026-09-23 and 2026-09-24 against the live database and disk unless 
 | `labeled_corrections.csv` exports the model's box, not `corrected_bbox`. `build_finetuning_dataset.py` crops that box, uses every verdict instead of the latest, and advertises a `--output coco` option it does not implement. | Box corrections have never reached training data. The new builder replaces this path (§11, §12). |
 | The correction form's species autocomplete lists only species the model predicted in the last 30 days. | The picker uses the Species Log and the classifier's classes (§9). |
 | The Species Log (`assets/species_manifest.json`, 281 entries, rebuilt daily by the sheet poller) has 239 distinct names, including misspellings and entries that are not species (`Pomatomus saltarix`, `Apylsia morio`, `Alligatoridae mississippiensis`, `Anilocra ./Renocila`). Seven classifier classes are not in it. | Labels are reconciled to WoRMS accepted names (§9). |
-| `/api/corrections`, `/api/export/corrections.csv`, `/api/export/labeled_corrections.csv` and their Parquet variants are public and include `reviewer`, now an account's display name, and free-text `notes`. | Identity and notes become admin-only (§12). |
+| `/api/corrections`, `/api/export/corrections.csv` and `/api/export/labeled_corrections.csv` are public and include `reviewer`, now an account's display name, and free-text `notes`. (Neither export has a Parquet variant; `PARQUET_RESOURCES` covers four other resources.) | Identity and notes become admin-only (§12). |
 | `detection_corrections.event_id` is `ON DELETE CASCADE` (and was added `NOT VALID`). | Changed to `RESTRICT` (§5). |
 | The Wahoo Bay API's latest sonde reading is 2026-06-25 10:30 UTC, and the database's last live sonde row matches it. SenseStream returned an error for both later windows tried (tonight, and a July window). The poller logs `sonde fetch HTTP 404` on every five-minute poll in its recent log, and the database holds synthetic sonde rows up to 2026-09-23 05:34 EDT. Weather has live readings every five minutes through today. | Real water conditions exist only from 2026-04-15 to 2026-06-25. Saved frames start 2026-05-17 (§11). |
 | The DGX clock is 17 s slow against three external servers; `timedatectl` reports "System clock synchronized: no". Both cameras' burned-in overlays read 16–17 s later than the database timestamps. | Capture times carry a stated uncertainty (§11). |
@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS review_items (
     predicted_p         REAL,
     hints               JSONB,                         -- [{"name": ..., "p": ...}] x3; NULL until scored
     hints_model         TEXT,                          -- classifier_sha256 that produced the hints
+    hinted_at           TIMESTAMPTZ,                   -- when the scorer wrote them (status page)
     route_species       TEXT,                          -- species this box counts toward for ordering
     status              TEXT        NOT NULL DEFAULT 'open'
                         CHECK (status IN ('open', 'claimed', 'done', 'retired')),
@@ -327,9 +328,9 @@ On success the verdict row is written with `user_id` and `session_id`. Every ope
 
 ### Whole-frame mode
 
-`GET /api/review/frames/{saved_frame_id}` returns every model box in the frame (exact `source_name`, `frame_id`, `ts` match), each with its resolved state, plus any added boxes.
+`GET /api/review/frames/{saved_frame_id}` returns every model box in the frame (exact `source_name`, `frame_id`, `ts` match), each with its resolved state, plus any added boxes. It has no side effects.
 
-- Opening the mode claims the frame's open pool items for U. Boxes held by someone else are shown locked.
+- Opening the mode (`POST /api/review/frames/{saved_frame_id}/open`) claims the frame's open pool items for U and returns the same state. Boxes held by someone else are shown locked.
 - Boxes with a pending spot-check show as "answered" without revealing the answer, so viewing the frame cannot contaminate the second opinion.
 - The volunteer gives each unanswered model box a verdict through the same endpoint, and draws boxes the model missed: `POST /api/review/frames/{id}/boxes`, with `PATCH` and `DELETE` for the box's creator before completion and for admins at any time. Removal sets `removed_at`.
 - `POST /api/review/frames/{id}/complete` succeeds only when every model box has a first-pass verdict from anyone and every added box is labelled.
@@ -408,6 +409,8 @@ All mutations require the `X-Requested-With: wahoobay` header (spec 1).
 | GET | `/api/review/boxes/{event_id}` | reviewer, admin (reopen) |
 | GET | `/api/review/mine/recent` | reviewer, admin |
 | GET | `/api/review/frames/{saved_frame_id}` | reviewer, admin |
+| POST | `/api/review/frames/{saved_frame_id}/open` | reviewer, admin (claims the frame's open boxes) |
+| GET | `/api/review/added/{box_id}/zoom.jpg` | reviewer, admin |
 | POST, PATCH, DELETE | `/api/review/frames/{id}/boxes[/{box_id}]` | reviewer (own boxes, before completion), admin |
 | POST | `/api/review/frames/{id}/complete` | reviewer, admin |
 | DELETE | `/api/review/frames/{id}/complete` | admin |
@@ -543,7 +546,7 @@ Labels without a `class_dir` are reported and skipped unless `--allow-new-classe
 
 ## 12. Changes to existing code
 
-1. **Privacy.** `/api/corrections`, `/api/export/corrections.csv`, `/api/export/labeled_corrections.csv` and the `corrections` and `labeled_corrections` Parquet exports return `reviewer`, `notes`, `user_id` and `session_id` only to admins. For everyone else those columns are removed, not blanked. The `?reviewer=` filter becomes admin-only. This ships in phase 1, before named verdicts accumulate.
+1. **Privacy.** `/api/corrections`, `/api/export/corrections.csv` and `/api/export/labeled_corrections.csv` return `reviewer`, `notes`, `user_id` and `session_id` only to admins. For everyone else those columns are removed, not blanked. The `?reviewer=` filter becomes admin-only. This ships in phase 1, before named verdicts accumulate.
 2. **`labeled_corrections` export.** Adds `corrected_bbox`, `is_endorsement`, `unidentifiable`, `life_stage`, `label_source`, `review_item_id` and `is_adjudication`, and joins the frame on exact `ts`.
 3. **Exact-timestamp frame lookup** in `/api/events`, `/api/detections/{id}/roi.jpg`, `/api/detections/{id}/frame.jpg` and the export `LATERAL` join. They gain `AND sf.ts = de.ts`.
 4. **`build_finetuning_dataset.py`.** Its correction path is superseded. It prints a deprecation notice pointing to `build_verified_dataset.py`, and the docs change accordingly.
