@@ -273,6 +273,49 @@ class DashboardCfg:
         self.smtp_from = _env("DASHBOARD_SMTP_FROM", "noreply@wahoobay.invalid")
         self.public_base_url = _env("DASHBOARD_PUBLIC_BASE_URL", "http://localhost:18080")
 
+        # --- database pool ---
+        # The review pool task holds a connection for up to 30 s per run, and
+        # the matview refresher holds one through each REFRESH; 6 leaves the
+        # public endpoints room.
+        self.db_pool_max = int(_env("DASHBOARD_DB_POOL_MAX", "6"))
+
+        # --- review tool (docs/superpowers/specs/2026-09-24-...) ---
+        repo_root = Path(__file__).resolve().parents[3]
+        self.review_pool_enabled = _env("REVIEW_POOL_ENABLED", "true").lower() != "false"
+        self.review_pool_interval_s = float(_env("REVIEW_POOL_TOPUP_INTERVAL_S", "300"))
+        self.review_pool_max_probes = int(_env("REVIEW_POOL_MAX_PROBES", "200"))
+        self.review_pool_max_run_s = float(_env("REVIEW_POOL_MAX_RUN_S", "30"))
+        self.review_check_open_per_species = int(_env("REVIEW_POOL_CHECK_OPEN_PER_SPECIES", "20"))
+        self.review_identify_open = int(_env("REVIEW_POOL_IDENTIFY_OPEN", "500"))
+        self.review_spacing_s = int(_env("REVIEW_POOL_SPACING_S", "120"))
+        self.review_min_box_px = int(_env("REVIEW_MIN_BOX_PX", "32"))
+        self.review_identify_min_det_conf = float(_env("REVIEW_IDENTIFY_MIN_DET_CONF", "0.4"))
+        self.review_target = int(_env("REVIEW_TARGET_PER_SPECIES", "200"))
+        self.review_claim_s = int(_env("REVIEW_CLAIM_S", "600"))
+        self.review_spotcheck_rate = float(_env("REVIEW_SPOTCHECK_RATE", "0.10"))
+        self.review_spotcheck_serve_rate = float(_env("REVIEW_SPOTCHECK_SERVE_RATE", "0.10"))
+        self.review_assets_dir = Path(_env("REVIEW_ASSETS_DIR", str(repo_root / "assets")))
+        self.review_taxonomy_csv = Path(_env(
+            "REVIEW_TAXONOMY_CSV", str(self.review_assets_dir / "taxonomy.csv")))
+        self.review_classes_json = Path(_env(
+            "CLASSIFIER_V2_CLASSES_JSON",
+            str(repo_root / "data" / "models" / "classifier_v2" / "classes.json")))
+        self.review_baseline_manifest = Path(_env(
+            "REVIEW_BASELINE_MANIFEST",
+            str(repo_root / "data" / "fine_tune" / "_dataset_manifest.json")))
+
+    def review_catalogue_paths(self):
+        from .review_catalogue import CataloguePaths
+
+        a = self.review_assets_dir
+        return CataloguePaths(
+            species_manifest=a / "species_manifest.json",
+            classes_json=self.review_classes_json,
+            taxonomy_csv=self.review_taxonomy_csv,
+            inat_manifest=a / "inat_manifest.json",
+            celebrities_json=a / "celebrities.json",
+            photo_root=a.parent)
+
 
 def build_app() -> FastAPI:
     cfg = DashboardCfg()
@@ -284,7 +327,8 @@ def build_app() -> FastAPI:
         client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
         state["client"] = client
         try:
-            pool = AsyncConnectionPool(cfg.database_url, min_size=1, max_size=4, open=False)
+            pool = AsyncConnectionPool(cfg.database_url, min_size=1, max_size=cfg.db_pool_max,
+                                       open=False)
             await pool.open()
             state["pool"] = pool
             log.info("dashboard: postgres pool open")
@@ -414,10 +458,28 @@ def build_app() -> FastAPI:
 
         state["prune_task"] = asyncio.create_task(_prune_sessions())
 
+        # Review tool: the species catalogue is read from disk on demand
+        # (and rebuilt when the sheet poller rewrites it); the pool task
+        # keeps review_items topped up.
+        from .review_catalogue import CatalogueStore
+        from .review_pool import PoolSettings, ReviewPool
+
+        state["review_catalogue"] = CatalogueStore(cfg.review_catalogue_paths())
+        review_task: asyncio.Task | None = None
+        if state.get("pool") is not None:
+            state["review_pool"] = ReviewPool(
+                state["pool"], PoolSettings.from_cfg(cfg), state["review_catalogue"],
+                cfg.review_baseline_manifest)
+            if cfg.review_pool_enabled:
+                review_task = asyncio.create_task(
+                    state["review_pool"].run_forever(), name="review-pool")
+            else:
+                log.info("review pool: disabled (REVIEW_POOL_ENABLED=false)")
+
         try:
             yield
         finally:
-            for t in (slo_task, matview_task, sheet_task, state.get("prune_task")):
+            for t in (slo_task, matview_task, sheet_task, state.get("prune_task"), review_task):
                 if t is not None:
                     t.cancel()
                     try:
