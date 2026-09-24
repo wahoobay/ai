@@ -1163,3 +1163,61 @@ def test_write_token_machinery_is_gone():
            / "services" / "dashboard" / "app" / "main.py").read_text()
     assert "require_write_token" not in src
     assert "DASHBOARD_WRITE_TOKEN" not in src
+
+
+@pytest.mark.anyio
+async def test_forgot_password_is_rate_limited_per_ip(pool, monkeypatch):
+    # /api/auth/forgot-password is the one unauthenticated endpoint that
+    # makes the server send mail to an address the CALLER chooses. Without
+    # a cap, anyone who finds the public URL can mail-bomb a victim and
+    # burn the sending domain's reputation. Small distinct budget so the
+    # test needs three requests rather than eleven.
+    from app.main import build_app
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("DASHBOARD_COOKIE_SECURE", "false")
+    monkeypatch.setenv("DASHBOARD_FORGOT_MAX_PER_IP_H", "2")
+
+    await _make_user(pool, username="dan")
+
+    # TestClient's default client tuple is ("testclient", 50000), which
+    # _client_ip() cannot parse as an address — the limiter would no-op.
+    with TestClient(build_app(), client=("203.0.113.9", 51000)) as c:
+        body = {"email": "dan@example.org"}
+        first = c.post("/api/auth/forgot-password", json=body, headers=CSRF)
+        second = c.post("/api/auth/forgot-password", json=body, headers=CSRF)
+        third = c.post("/api/auth/forgot-password", json=body, headers=CSRF)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+
+    # The cap must not become an enumeration side channel: it is keyed on
+    # the caller's IP, so an unknown address is throttled identically.
+    with TestClient(build_app(), client=("203.0.113.10", 51000)) as c:
+        ghost = {"email": "nobody-here@example.org"}
+        for _ in range(2):
+            c.post("/api/auth/forgot-password", json=ghost, headers=CSRF)
+        assert c.post("/api/auth/forgot-password",
+                      json=ghost, headers=CSRF).status_code == 429
+
+
+@pytest.mark.anyio
+async def test_forgot_password_message_is_honest_about_the_manual_backend(pool, client):
+    # conftest pins the mail backend to `manual`, where nothing is sent.
+    # Telling a user "a reset link is on its way" would leave them waiting
+    # on mail that never arrives, with no hint that an administrator is the
+    # actual channel. The message must still be identical for every address
+    # so it cannot reveal whether an account exists.
+    await _make_user(pool, username="dan")
+
+    known = client.post("/api/auth/forgot-password",
+                        json={"email": "dan@example.org"}, headers=CSRF)
+    unknown = client.post("/api/auth/forgot-password",
+                          json={"email": "ghost@example.org"}, headers=CSRF)
+
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json()
+
+    message = known.json()["message"]
+    assert "on its way" not in message
+    assert "administrator" in message.lower()

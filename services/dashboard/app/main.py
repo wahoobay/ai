@@ -256,6 +256,10 @@ class DashboardCfg:
         self.login_max_per_ip_h = int(_env("DASHBOARD_LOGIN_MAX_PER_IP_H", "60"))
         self.registration_open = _env("DASHBOARD_REGISTRATION_OPEN", "true").lower() != "false"
         self.register_max_per_ip_h = int(_env("DASHBOARD_REGISTER_MAX_PER_IP_H", "5"))
+        # Forgot-password is the one unauthenticated endpoint that makes the
+        # server send mail to an address the caller chooses, so an unlimited
+        # one is a mail-bombing vector the moment a real relay is configured.
+        self.forgot_max_per_ip_h = int(_env("DASHBOARD_FORGOT_MAX_PER_IP_H", "10"))
         self.reset_ttl_min = int(_env("DASHBOARD_RESET_TTL_MIN", "30"))
         self.verify_ttl_h = int(_env("DASHBOARD_VERIFY_TTL_H", "24"))
         self.mail_backend = _env("DASHBOARD_MAIL_BACKEND", "manual")

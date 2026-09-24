@@ -143,6 +143,7 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
 
     _rate_limited = _make_rate_limiter(cfg.register_max_per_ip_h)
     _login_rate_limited = _make_rate_limiter(cfg.login_max_per_ip_h)
+    _forgot_rate_limited = _make_rate_limiter(cfg.forgot_max_per_ip_h)
 
     # Same body for every outcome: created, username taken, email taken.
     REG_OK = {"ok": True, "message":
@@ -389,8 +390,20 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
             "status": user.status,
         }
 
-    FORGOT_OK = {"ok": True, "message":
-                 "If that address has an account, a reset link is on its way."}
+    # One constant message for every address, so the response cannot reveal
+    # whether an account exists -- but it must also be TRUE. With the manual
+    # backend nothing is sent, and telling someone a link is on its way
+    # leaves them waiting on mail that will never arrive, with no hint that
+    # an administrator is the actual channel. Keyed off the mailer's
+    # *effective* backend, not the configured one, because a misconfigured
+    # relay degrades to manual at construction.
+    FORGOT_OK = {"ok": True, "message": (
+        "If that address has an account, a reset link is on its way."
+        if mailer.backend == "smtp" else
+        "If that address has an account, an administrator can issue a reset "
+        "link for it. Automatic email is not enabled on this deployment, so "
+        "please contact an administrator."
+    )}
 
     @router.get("/forgot-password", response_class=HTMLResponse)
     async def forgot_page(request: Request):
@@ -399,6 +412,13 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     @router.post("/api/auth/forgot-password", dependencies=[Depends(require_csrf)])
     async def forgot_password(body: ForgotIn, request: Request):
         pool = _pool()
+        # Before the lookup: this endpoint makes the server send mail to an
+        # address the caller picks, so without a cap anyone who finds the
+        # public URL can mail-bomb a victim and burn the sending domain's
+        # reputation. Keyed on IP, so it cannot leak whether an account
+        # exists -- the limit is the same for every address.
+        if _forgot_rate_limited(_client_ip(request)):
+            return JSONResponse({"error": "Too many attempts. Try later."}, status_code=429)
         email = body.email.strip().lower()
         async with pool.connection() as conn:
             cur = await conn.execute("SELECT id FROM users WHERE email = %s", (email,))

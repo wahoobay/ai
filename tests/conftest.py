@@ -32,3 +32,14 @@ def _isolate_network(monkeypatch):
     monkeypatch.setenv("SHEET_URL", "")
     monkeypatch.setenv("WORKER_URL", "http://127.0.0.1:1")
     monkeypatch.setenv("POLLER_URL", "http://127.0.0.1:1")
+
+    # Mail is the same hazard wearing different clothes. Once a real relay
+    # is configured in .env, a test run from a shell that sourced it would
+    # build the app with the smtp backend and send genuine mail through the
+    # project's account -- to whatever addresses the tests happen to use,
+    # against a metered quota, from a domain whose sending reputation is
+    # shared with the organisation. Pin the backend to `manual` and blank
+    # the relay so no test can reach a mail server by accident.
+    monkeypatch.setenv("DASHBOARD_MAIL_BACKEND", "manual")
+    monkeypatch.setenv("DASHBOARD_SMTP_HOST", "")
+    monkeypatch.setenv("DASHBOARD_SMTP_PASSWORD", "")
