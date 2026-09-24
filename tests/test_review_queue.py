@@ -17,6 +17,7 @@ from app.review_queue import (
     Invalid,
     ReviewError,
     VerdictIn,
+    _duplicate_verdict,
     build_payload,
     fetch_one,
     next_item,
@@ -337,8 +338,7 @@ async def test_accept_is_validated_exactly_like_a_chosen_species(rdb, tmp_path, 
     with pytest.raises(Invalid) as bad_stage:
         await _verdict(rdb, cat, user, event_id=eid, review_item_id=item, outcome="accept",
                        life_stage="adlut")
-    assert bad_stage.value.message == ("the model's guess is not in the species list; "
-                                       "pick the species instead")
+    assert bad_stage.value.message == "Pomacanthus paru has no 'adlut' entry in the species list"
     out = await _verdict(rdb, cat, user, event_id=eid, review_item_id=item, outcome="accept",
                          life_stage="juvenile")
     assert out["label"] == "Pomacanthus paru"
@@ -468,6 +468,30 @@ async def test_pass_2_recheck_still_applies_even_with_a_genuine_claim(rdb, tmp_p
     assert exc.value.message == "you gave the first verdict on this box"
 
 
+async def test_pass_2_already_answered_recheck_fires_even_with_a_genuine_claim(rdb, tmp_path,
+                                                                                cat):
+    """Defence in depth, the other pass-2 branch: a user who is not the
+    excluded first reviewer but already has their own earlier verdict on
+    this event is still refused, even holding a genuine live claim on the
+    pass-2 item. Built directly with the fixtures, as next_item's own
+    _SPOT_ELIGIBLE would never hand this user that claim."""
+    [(f, _i)] = await _boxes(rdb, tmp_path, n=1, status="done")
+    one = await make_user(rdb, "one")
+    two = await make_user(rdb, "two")
+    first = await add_verdict(rdb, f["event_ids"][0], one, name="Seriola zonata")
+    await add_verdict(rdb, f["event_ids"][0], two, name="Pomatomus saltatrix")
+    spot = await add_item(rdb, f, pass_=2, exclude_user_id=one, first_correction_id=first)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """UPDATE review_items SET status = 'claimed', claimed_by = %s,
+                      claimed_until = now() + interval '10 minutes' WHERE id = %s""",
+            (two, spot))
+    with pytest.raises(Forbidden) as exc:
+        await _verdict(rdb, cat, as_user(two), event_id=f["event_ids"][0], review_item_id=spot,
+                       outcome="species", label="Seriola zonata", label_source="search")
+    assert exc.value.message == "you already answered this box"
+
+
 async def test_a_finished_or_held_box_is_a_conflict(rdb, tmp_path, cat):
     [(f, item)] = await _boxes(rdb, tmp_path, n=1)
     one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
@@ -576,6 +600,60 @@ async def test_a_box_reclaimed_after_your_claim_lapsed_is_a_conflict_while_live(
                        outcome="accept")
 
 
+async def test_skipping_after_the_sweep_still_clears_the_claimant(rdb, tmp_path, cat):
+    """The sweep keeps claimed_by on a lapse (round 2), so once a box has
+    been swept back to 'open' it still reads as "yours" until something
+    clears it. Giving it up after that point must clear it too, or the
+    volunteer who gave it up could still answer it."""
+    [(f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
+    await _next(rdb, one)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE review_items SET claimed_until = now() - interval '1 minute' WHERE id = %s",
+            (item,))
+    await _next(rdb, two, lane="identify")    # any next_item call sweeps every lane
+    async with rdb.connection() as conn:
+        row = await fetch_one(conn, "SELECT status, claimed_by FROM review_items WHERE id = %s",
+                              (item,))
+    assert row["status"] == "open" and row["claimed_by"] == one    # swept, still "his"
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=one, item_id=item)
+    async with rdb.connection() as conn:
+        row = await fetch_one(conn, "SELECT status, claimed_by FROM review_items WHERE id = %s",
+                              (item,))
+    assert row["status"] == "open" and row["claimed_by"] is None
+    with pytest.raises(Forbidden) as exc:
+        await _verdict(rdb, cat, as_user(one), event_id=f["event_ids"][0], review_item_id=item,
+                       outcome="accept")
+    assert exc.value.message == "this box was not served to you"
+
+
+async def test_releasing_after_the_sweep_still_clears_the_claimant(rdb, tmp_path, cat):
+    [(f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
+    await _next(rdb, one)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE review_items SET claimed_until = now() - interval '1 minute' WHERE id = %s",
+            (item,))
+    await _next(rdb, two, lane="identify")
+    async with rdb.connection() as conn:
+        row = await fetch_one(conn, "SELECT status, claimed_by FROM review_items WHERE id = %s",
+                              (item,))
+    assert row["status"] == "open" and row["claimed_by"] == one
+    async with rdb.connection() as conn:
+        await release_item(conn, user_id=one, item_id=item)
+    async with rdb.connection() as conn:
+        row = await fetch_one(conn, "SELECT status, claimed_by FROM review_items WHERE id = %s",
+                              (item,))
+    assert row["status"] == "open" and row["claimed_by"] is None
+    with pytest.raises(Forbidden) as exc:
+        await _verdict(rdb, cat, as_user(one), event_id=f["event_ids"][0], review_item_id=item,
+                       outcome="accept")
+    assert exc.value.message == "this box was not served to you"
+
+
 async def test_without_an_item_you_can_only_answer_boxes_nobody_else_has(rdb, tmp_path, cat):
     f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
                                                 "species": "Seriola zonata"}])
@@ -651,22 +729,106 @@ async def test_a_changed_confidence_within_the_window_is_not_deduplicated(rdb, t
     assert row == ("uncertain",)
 
 
-async def test_a_changed_celebrity_or_notes_within_the_window_is_not_deduplicated(rdb, tmp_path,
-                                                                                   cat):
+async def test_a_changed_celebrity_id_within_the_window_is_not_deduplicated(rdb, tmp_path, cat):
+    """One field at a time: changing celebrity_id alone must not be swallowed
+    by a dedup match on everything else, so this pins celebrity_id
+    specifically rather than alongside notes (deleting either comparison
+    alone must not still pass this test)."""
     f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
                                                 "species": "Acanthurus coeruleus"}])
     one = await make_user(rdb, "one")
     eid = f["event_ids"][0]
     first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept")
     changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept",
-                             celebrity_id="bobby", notes="a note")
+                             celebrity_id="bobby")
     assert changed["duplicate"] is False and changed["id"] != first["id"]
-    row = await _row(rdb, "SELECT celebrity_id, notes FROM detection_corrections WHERE id = %s",
+    row = await _row(rdb, "SELECT celebrity_id FROM detection_corrections WHERE id = %s",
                      changed["id"])
-    assert row == ("bobby", "a note")
+    assert row == ("bobby",)
 
 
-async def test_a_duplicate_response_describes_the_stored_row(rdb, tmp_path, cat):
+async def test_a_changed_notes_within_the_window_is_not_deduplicated(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept")
+    changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept",
+                             notes="a note")
+    assert changed["duplicate"] is False and changed["id"] != first["id"]
+    row = await _row(rdb, "SELECT notes FROM detection_corrections WHERE id = %s", changed["id"])
+    assert row == ("a note",)
+
+
+async def test_a_changed_box_within_the_window_is_not_deduplicated(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept",
+                           bbox=[10, 10, 90, 90])
+    changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept",
+                             bbox=[20, 20, 100, 100])
+    assert changed["duplicate"] is False and changed["id"] != first["id"]
+    row = await _row(rdb, "SELECT corrected_bbox FROM detection_corrections WHERE id = %s",
+                     changed["id"])
+    assert list(row[0]) == [20, 20, 100, 100]
+
+
+async def test_a_changed_label_source_is_not_deduplicated_and_the_dedup_response_would_lie(
+        rdb, tmp_path, cat):
+    """label_source is the ONLY stored difference between 'accept' and a
+    'species' pick of the exact same name -- so without comparing it, an
+    accept followed by the same species chosen from search is wrongly
+    merged, and a (pre-fix) dedup response describing it would say
+    outcome: 'species' about a row whose label_source is still
+    'model_guess'. This is also the response-describes-the-stored-row
+    test: on the pre-fix code (round 2, 851dd12) this whole test fails,
+    because the second call comes back duplicate: true with outcome
+    'species' instead of inserting a new row."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept")
+    assert first["duplicate"] is False and first["outcome"] == "accept"
+    changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="species",
+                             label="Seriola zonata", label_source="search")
+    assert changed["duplicate"] is False and changed["id"] != first["id"]
+    assert changed["outcome"] == "species"
+    rows = await _row(rdb, """SELECT count(*) FROM detection_corrections
+                               WHERE event_id = %s AND user_id = %s""", eid, one)
+    assert rows == (2,)
+    row = await _row(rdb, "SELECT label_source FROM detection_corrections WHERE id = %s",
+                     first["id"])
+    assert row == ("model_guess",)    # the accept row is untouched by the later search pick
+
+
+async def test_duplicate_verdict_reads_outcome_from_the_stored_row_not_the_argument(rdb,
+                                                                                     tmp_path):
+    """Once label_source is part of the identity, no request submit_verdict
+    would ever validate can reach _duplicate_verdict with an `outcome`
+    argument that disagrees with the stored row it matches -- that's the
+    whole point of comparing it. So the only way left to pin the response's
+    own outcome-from-stored-row rule is to call _duplicate_verdict directly
+    with a mismatched outcome argument that still matches on every stored
+    identity column: this fails on the pre-fix code, where the response
+    echoes the argument ("species") instead of the stored row ("accept")."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    await add_verdict(rdb, eid, one, name="Seriola zonata", label_source="model_guess")
+    v = {"name": "Seriola zonata", "life_stage": None, "label_source": "model_guess",
+         "confidence": "certain", "celebrity_id": None, "notes": None, "bbox": None}
+    async with rdb.connection() as conn:
+        dup = await _duplicate_verdict(conn, event_id=eid, user_id=one, v=v, outcome="species")
+    assert dup is not None
+    assert dup["outcome"] == "accept"    # the stored row's outcome, not the "species" passed in
+
+
+async def test_a_duplicate_response_describes_the_stored_rows_label_and_counts(rdb, tmp_path,
+                                                                                cat):
     f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
                                                 "species": "Seriola zonata"}])
     one = await make_user(rdb, "one")
@@ -676,6 +838,7 @@ async def test_a_duplicate_response_describes_the_stored_row(rdb, tmp_path, cat)
     again = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="species",
                            label="Seriola zonata", label_source="search", not_sure=True)
     assert again["duplicate"] is True and again["id"] == first["id"]
+    assert again["outcome"] == "species"
     row = await _row(rdb, """SELECT corrected_name, confidence FROM detection_corrections
                                WHERE id = %s""", again["id"])
     assert row == ("Seriola zonata", "uncertain")

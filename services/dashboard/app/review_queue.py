@@ -293,8 +293,10 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
         if not guess:
             raise Invalid("this box has no model guess to accept")
         if not catalogue.entry(guess, body.life_stage):
-            if not body.life_stage and catalogue.has_name(guess):
-                raise Invalid(f"choose a life stage for {guess}")
+            if catalogue.has_name(guess):
+                if not body.life_stage:
+                    raise Invalid(f"choose a life stage for {guess}")
+                raise Invalid(f"{guess} has no '{body.life_stage}' entry in the species list")
             raise Invalid("the model's guess is not in the species list; "
                           "pick the species instead")
         name, life_stage, label_source = guess, body.life_stage, "model_guess"
@@ -321,18 +323,57 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
             "celebrity_id": celebrity_id, "notes": (body.notes or "").strip() or None}
 
 
+# Every stored field that identifies a verdict as "the same answer" for
+# dedup purposes, other than corrected_bbox (handled separately below --
+# it needs list-normalization, not a plain equality). A future column
+# that changes what a verdict means belongs in this one tuple: both the
+# SELECT and the comparison in _duplicate_verdict read it from here, so
+# adding a column to one and not the other cannot happen silently.
+_VERDICT_IDENTITY_COLUMNS = ("not_a_fish", "unidentifiable", "corrected_name", "life_stage",
+                             "label_source", "confidence", "celebrity_id", "notes")
+
+
+def _verdict_identity(v: dict, outcome: str) -> dict:
+    """The column values submit_verdict is about to store for this
+    request, keyed exactly like _VERDICT_IDENTITY_COLUMNS, so the two are
+    compared column for column rather than field by field by hand."""
+    return {"not_a_fish": outcome == "no_animal", "unidentifiable": outcome == "unidentifiable",
+            "corrected_name": v["name"], "life_stage": v["life_stage"],
+            "label_source": v["label_source"], "confidence": v["confidence"],
+            "celebrity_id": v["celebrity_id"], "notes": v["notes"]}
+
+
+def _stored_outcome(row: dict) -> str:
+    """The API-level outcome ('accept'/'species'/'unidentifiable'/
+    'no_animal') a stored detection_corrections row represents. accept and
+    species store identically -- a name, not_a_fish=False,
+    unidentifiable=False -- except for label_source ('model_guess' vs
+    'hint'/'search'), so a dedup response describing the stored row needs
+    this rather than _outcome_word's three-way collapse (used elsewhere,
+    for a reviewer's own history and reopening, where accept and species
+    are shown the same way either way)."""
+    if row["not_a_fish"]:
+        return "no_animal"
+    if row["unidentifiable"]:
+        return "unidentifiable"
+    return "accept" if row["label_source"] == "model_guess" else "species"
+
+
 async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outcome: str
                              ) -> dict | None:
-    """A same-user resubmit within DUPLICATE_WINDOW_S naming the same
-    outcome, label, life stage, box, confidence, celebrity and notes as
+    """A same-user resubmit within DUPLICATE_WINDOW_S whose stored columns
+    -- every one of _VERDICT_IDENTITY_COLUMNS, plus the box -- all match
     their own last verdict on this event: return that existing verdict's
-    response instead of inserting a second row. A double click or a
-    retried request on the no-item path must not insert twice, double-
-    count progress, or silently drop a change to any stored field. None
-    means: insert normally, this is not a duplicate."""
-    recent = await fetch_one(conn, """
-        SELECT id, created_at, corrected_name, not_a_fish, unidentifiable, life_stage,
-               corrected_bbox, confidence, celebrity_id, notes
+    response, read from the stored row throughout, instead of inserting a
+    second row. A double click or a retried request on the no-item path
+    must not insert twice, double-count progress, or silently drop a
+    change to any stored field -- an accept followed within the window by
+    the same species chosen from search is a *different* verdict (a
+    different label_source), not a duplicate of it. None means: insert
+    normally, this is not a duplicate."""
+    cols = ", ".join(_VERDICT_IDENTITY_COLUMNS)
+    recent = await fetch_one(conn, f"""
+        SELECT id, created_at, corrected_bbox, {cols}
           FROM detection_corrections
          WHERE event_id = %s AND user_id = %s AND NOT is_adjudication
          ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user_id))
@@ -340,22 +381,18 @@ async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outc
             seconds=DUPLICATE_WINDOW_S):
         return None
     same_bbox = (list(recent["corrected_bbox"]) if recent["corrected_bbox"] else None) == v["bbox"]
-    if not (recent["not_a_fish"] == (outcome == "no_animal")
-            and recent["unidentifiable"] == (outcome == "unidentifiable")
-            and recent["corrected_name"] == v["name"]
-            and recent["life_stage"] == v["life_stage"]
-            and recent["confidence"] == v["confidence"]
-            and recent["celebrity_id"] == v["celebrity_id"]
-            and recent["notes"] == v["notes"]
-            and same_bbox):
+    current = _verdict_identity(v, outcome)
+    if not same_bbox or any(recent[col] != current[col] for col in _VERDICT_IDENTITY_COLUMNS):
         return None
     spot = await fetch_one(conn, """SELECT id FROM review_items
                                      WHERE event_id = %s AND pass = 2
                                         AND first_correction_id = %s""",
                            (event_id, recent["id"]))
-    # Describes the stored row, not the incoming (now known-identical) one.
+    # Every field below is read from the stored row, not the (now
+    # known-identical) incoming one.
     return {"id": recent["id"], "created_at": recent["created_at"].isoformat(),
-            "outcome": outcome, "label": recent["corrected_name"], "first_pass": True,
+            "outcome": _stored_outcome(recent), "label": recent["corrected_name"],
+            "first_pass": True,
             "counts": recent["corrected_name"] is not None
             and recent["confidence"] != "uncertain",
             "spot_check_scheduled": spot is not None, "duplicate": True}
@@ -496,7 +533,13 @@ async def skip_item(conn, *, user_id: int, item_id: int) -> None:
         async with conn.cursor() as cur:
             await cur.execute("""INSERT INTO review_skips (item_id, user_id) VALUES (%s, %s)
                                  ON CONFLICT DO NOTHING""", (item_id, user_id))
-            if item["status"] == "claimed" and item["claimed_by"] == user_id:
+            # Clear the claimant whenever it's this user's, 'claimed' or
+            # already swept to 'open': giving a box up must mean it was
+            # never served to you again, not just while the claim looked
+            # live (spec Sec 7/15/16; the sweep deliberately keeps
+            # claimed_by on a lapse, so this is the one place besides
+            # release that has to un-keep it).
+            if item["status"] in ("claimed", "open") and item["claimed_by"] == user_id:
                 await cur.execute(
                     """UPDATE review_items SET status = 'open', claimed_by = NULL,
                               claimed_until = NULL WHERE id = %s""", (item_id,))
@@ -506,7 +549,8 @@ async def release_item(conn, *, user_id: int, item_id: int) -> None:
     async with conn.transaction(), conn.cursor() as cur:
         await cur.execute(
             """UPDATE review_items SET status = 'open', claimed_by = NULL, claimed_until = NULL
-                WHERE id = %s AND status = 'claimed' AND claimed_by = %s""", (item_id, user_id))
+                WHERE id = %s AND status IN ('claimed', 'open') AND claimed_by = %s""",
+            (item_id, user_id))
 
 
 def _outcome_word(row: dict) -> str:
