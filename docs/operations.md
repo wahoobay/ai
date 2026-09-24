@@ -62,7 +62,11 @@ mkdir -p logs/app
 
 # 1. postgres
 ./scripts/dev/start_postgres.sh
-# (idempotent: starts the cluster if not running, applies db/init.sql)
+# Starts the cluster if not running, then applies ALL of db/init.sql —
+# on every run, even when postgres was already up. Safe here because
+# nothing is reading the database yet. Do NOT run it against a live,
+# in-use cluster "to be safe": see "Applying a schema change to the
+# live database" below for why, and for what to do instead.
 
 # 2. workers (one per camera)
 nohup ./scripts/dev/run_worker.sh      > logs/app/worker.log      2>&1 &
@@ -192,8 +196,14 @@ nohup ./scripts/dev/run_worker_pier.sh > logs/app/worker_pier.log 2>&1 &
 
 # Just the dashboard
 ss -ltnp 2>/dev/null | grep ':18080' | grep -oP 'pid=\K\d+' | xargs -r kill -TERM
-sleep 3
-nohup ./scripts/dev/run_dashboard.sh > logs/app/dashboard.log 2>&1 &
+# Wait for the port to actually free rather than sleeping a fixed time:
+# graceful shutdown cancels four background tasks with a 5 s bound each,
+# so it can take ~20 s when a matview refresh is mid-flight. Relaunching
+# while the old process still holds :18080 fails to bind and leaves the
+# dashboard down.
+while ss -ltn 2>/dev/null | grep -q ':18080 '; do sleep 1; done
+# >> not >: the dashboard log is months of history; > truncates it.
+nohup ./scripts/dev/run_dashboard.sh >> logs/app/dashboard.log 2>&1 &
 ```
 
 The smoother resets on worker restart (which is fine — its in-memory
@@ -210,12 +220,69 @@ IDs restart at 1 after the restart.
 | Dashboard Python code | dashboard | **Yes** — restart dashboard |
 | Worker Python code | worker(s) | **Yes** — restart worker(s) |
 | `.env` value | depends on knob — all if shared | **Yes** for the affected service(s) |
-| `db/init.sql` | none directly | **No** — but you must also apply the new DDL to the running DB (e.g. via `psql`); init.sql is just what a fresh deploy starts from |
+| `db/init.sql` | none directly | **No** — but the new DDL must also reach the running DB. Apply *only the new statements*, never the whole file — see "Applying a schema change to the live database" below |
 | `data/camera_negative_regions.json` (polygon mask) | worker(s) | **Yes** — workers load the file at subprocess startup |
 | `assets/celebrities.json` | dashboard | **No** — hot-reloaded automatically by the sheet poller; manual force: `POST /api/admin/refresh_sheets` |
 | `assets/species_manifest.json` (common-name fallbacks) | dashboard | **No** — same hot-reload path |
 | Curated `COMMON_NAMES` dict in `common_names.py` | dashboard | **Yes** — Python code change, restart |
 | New classifier checkpoint at `data/models/classifier_v2/checkpoint_best.pt` | worker(s) | **Yes** — restart worker(s); torch.compile re-warms (~25 s) |
+
+### Applying a schema change to the live database
+
+`db/init.sql` is **idempotent** — re-running it converges the schema —
+but that is not the same as **safe to re-run against a database that
+is serving traffic**. Don't `psql -f db/init.sql` against the live
+cluster, and don't run `start_postgres.sh` "to be safe" while the
+dashboard and workers are up (it applies the whole file too).
+
+Why: the file contains four `CREATE OR REPLACE VIEW` statements
+(`frame_stats_hourly`, `frame_stats_drift`, `species_sightings`,
+`species_counts_hourly`). Replacing a view takes an `ACCESS EXCLUSIVE`
+lock even when the definition is unchanged. The dashboard reads those
+views constantly, and the matview refresher runs
+`REFRESH MATERIALIZED VIEW CONCURRENTLY` over a multi-GB view for
+anywhere from tens of seconds to minutes. The replacement queues behind
+that refresh — and while it queues, **every other query on that view
+queues behind it**. The public species endpoints stall for the length
+of the refresh.
+
+Instead, apply only the statements you added, as one guarded
+transaction:
+
+```bash
+# new_ddl.sql = just your new statements, prefixed with:
+#   SET lock_timeout = '5s';
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f new_ddl.sql
+```
+
+- `-1` wraps the file in one transaction, and `ON_ERROR_STOP=1` makes
+  any failure roll the whole thing back — no half-applied schema.
+  (Without it, `psql -f` carries on past errors and still exits 0.)
+- `lock_timeout` makes it give up after 5 s rather than queue behind a
+  long refresh and block every reader behind it. If it times out,
+  nothing changed; retry in a minute.
+- Add the same statements to `db/init.sql` so a fresh deploy gets them.
+
+Before touching production, check what would actually be created — a
+statement in `init.sql` whose object already exists is a no-op, and one
+whose object is missing will do real work:
+
+```sql
+-- objects init.sql declares that this database lacks
+SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
+UNION SELECT matviewname FROM pg_matviews
+UNION SELECT tablename FROM pg_tables WHERE schemaname = 'public';
+```
+
+**Known issue — fresh databases.** Three `ALTER TABLE saved_frames ADD
+COLUMN IF NOT EXISTS ...` statements (model_version, config_hash,
+pipeline_git_sha) appear *above* the `CREATE TABLE saved_frames` further
+down the file, so on an empty database they fail. `start_postgres.sh`
+applies the file without `ON_ERROR_STOP`, so the error scrolls past and
+the rest succeeds — leaving `saved_frames` **without those three
+columns**. Production has them only because the table already existed
+when those lines were added. Anyone standing up a fresh deployment
+should check `\d saved_frames` afterwards until the file is reordered.
 
 ---
 

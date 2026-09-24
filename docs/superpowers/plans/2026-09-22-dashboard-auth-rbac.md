@@ -2876,7 +2876,8 @@ git commit -m "auth: enforce roles on mutation routes, retire DASHBOARD_WRITE_TO
 
 ## Deployment (after all tasks pass)
 
-1. Apply the DDL to production: `psql "$DATABASE_URL" -f db/init.sql` — additive and safe while the old code runs.
+1. ~~Apply the DDL to production: `psql "$DATABASE_URL" -f db/init.sql` — additive and safe while the old code runs.~~
+   **Corrected at deploy time (2026-09-23): this step was wrong.** Running the whole file against production is not safe — its four `CREATE OR REPLACE VIEW` statements take exclusive locks on views the live dashboard and matview refresher are reading, and queue behind a long refresh while blocking every reader. The deploy applied only the auth block (`db/init.sql` lines 417–492) as one transaction with `SET lock_timeout = '5s'` and `psql -v ON_ERROR_STOP=1 -1`. See "Applying a schema change to the live database" in `docs/operations.md`.
 2. Create the first admin: `python scripts/create_user.py --username <you> --display-name "<Your Name>" --email <you@fau.edu> --role admin`.
 3. Restart the dashboard. This ends an uptime that began 2026-05-17; the Cloudflare tunnel targets `localhost:18080` and reconnects on its own within seconds.
 4. Verify in this order: anonymous `GET /` still renders; anonymous `POST /api/corrections` returns 401; admin login works; `/admin/users.html` loads; `/review` redirects when signed out.

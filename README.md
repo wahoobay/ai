@@ -319,7 +319,7 @@ as the system evolves.
 | Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard (or hand-edit `data/camera_negative_regions.json`); restart worker |
 | Curated Latin→common-name overrides | `services/dashboard/app/common_names.py` `COMMON_NAMES` dict (no restart hot-reload yet for the curated layer) |
 | Reviewer flow / correction modal | `services/dashboard/app/static/app.js` (`correctionFormHtml`, `submitCorrection`, `_enterBboxEdit`) |
-| Postgres schema | `db/init.sql` (idempotent; safe to re-run). For a live DB edit, run the equivalent `ALTER TABLE`s manually and update init.sql too. |
+| Postgres schema | `db/init.sql` (idempotent on an idle database — but **not** safe to re-run against the live one: its `CREATE OR REPLACE VIEW`s lock views the dashboard is reading). For a live DB change, apply only your new statements in one guarded transaction and update init.sql too — see "Applying a schema change to the live database" in `docs/operations.md`. |
 
 ---
 
