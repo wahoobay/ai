@@ -20,11 +20,14 @@ reason every statement here runs inside `conn.transaction()`: a statement
 outside one opens an implicit transaction, the next block becomes a
 savepoint, and its local timeout would outlive it.
 
-Only `_probe` turns a cancelled statement into a result (`None`): the
-check/identify lanes use that to back a species off rather than treating
-a timeout as "found nothing". Every other statement -- the window read,
-the retire update, the progress refresh, and the small per-box lookups in
-`_rows` -- lets `QueryCanceled` propagate. Catching it there and
+Only `_probe` turns a cancelled statement into a result (`None`) rather
+than letting it propagate: the check lane uses that to back a species off
+rather than treating a timeout as "found nothing" (the identify lane has
+no per-species key to back off by, so it treats `None` the same as an
+empty result and simply tries again, still bounded by the run's own
+probe/time budget -- it does not retry forever). Every other statement --
+the window read, the retire update, the progress refresh, and the small
+per-box lookups in `_rows` -- lets `QueryCanceled` propagate. Catching it there and
 improvising a fallback (an empty free-set, a zero open-count, "no saved
 frames yet") would be worse than not running at all: an open-count of
 zero over-tops-up a lane, `_too_close` failing open double-books a box,
@@ -354,8 +357,11 @@ class ReviewPool:
         """One bounded read against the big tables, counted toward the
         run's probe budget. A cancellation -- the timeout itself, or a
         lock wait it gave up on -- is converted to None here, unlike
-        every other statement in this module: the check/identify lanes
-        use None to back a species off instead of retrying it forever."""
+        every other statement in this module. The check lane uses None
+        to back a species off; the identify lane has no per-species key
+        to back off by, so it treats None the same as an empty result
+        and simply tries again, still bounded by the run's own
+        probe/time budget."""
         stats["probes"] += 1
         try:
             async with conn.transaction():

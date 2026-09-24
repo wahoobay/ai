@@ -248,15 +248,24 @@ async def test_a_real_probe_timeout_backs_the_species_off_and_survives_a_second_
 @pytestmark_db
 async def test_the_empty_species_skip_survives_an_unchanged_window_and_clears_on_a_real_change(
         rdb, review_assets, tmp_path):
-    """Fix round 2, New Breakage 1: comparing the effective window (whose
+    """Fix round 2/3, New Breakage 1: comparing the effective window (whose
     end moves every run through the now()-based recent_exclusion_s clamp)
     instead of the admin-configured one wiped every skip on every run.
     Deleting the admin-window INSERT below must make this test fail: both
-    the 'survives' and the 'clears' halves are asserted."""
+    the 'survives' and the 'clears' halves are asserted. Fix round 3 also
+    checks each run's own stats, so a run that silently did nothing --
+    rather than genuinely reaching the skip check -- can't pass either
+    half vacuously."""
     await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [10, 10, 90, 90],
                                                     "species": "Seriola zonata"}])
-    pool = _pool(rdb, review_assets)
-    await pool.run_once()
+    # check_open_per_species=1: run 1 finds and claims Seriola zonata's one
+    # detection, satisfying its own need too, so an entirely unprobed run 2
+    # (every species either skipped via _empty_until or already satisfied)
+    # is unambiguous: probes == 0.
+    pool = _pool(rdb, review_assets, check_open_per_species=1)
+    stats1 = await pool.run_once()
+    assert stats1["errors"] == 0 and stats1["timeouts"] == 0
+    assert stats1["probes"] > 0 and stats1["check_added"] == 1
     assert pool._last_window is not None
 
     # Poke in a skip as if an earlier probe had found nothing (or timed
@@ -264,16 +273,24 @@ async def test_the_empty_species_skip_survives_an_unchanged_window_and_clears_on
     # disappear via the window-comparison logic under test.
     pool._empty_until["sentinel"] = time.time() + 90000
 
-    # No admin window is set before this run either: the skip must survive it.
-    await pool.run_once()
+    # No admin window is set before this run either: the skip must survive
+    # it, and the run's own stats must show it actually reached the fill
+    # logic and skipped every species, rather than bailing out early.
+    stats2 = await pool.run_once()
+    assert stats2["errors"] == 0 and stats2["timeouts"] == 0
+    assert "note" not in stats2           # did not take the "no saved frames" exit
+    assert stats2["probes"] == 0          # every species was skipped, none re-probed
     assert "sentinel" in pool._empty_until
 
-    # Now the admin actually changes the window: the skip must clear.
+    # Now the admin actually changes the window: the skip must clear, and
+    # the next run must actually probe again.
     async with rdb.connection() as conn:
         await conn.execute(
             "INSERT INTO review_settings (key, value) VALUES ('window', %s)",
             (Jsonb({"start": T0.isoformat(), "end": (T0 + timedelta(days=1)).isoformat()}),))
-    await pool.run_once()
+    stats3 = await pool.run_once()
+    assert stats3["errors"] == 0 and stats3["timeouts"] == 0
+    assert stats3["probes"] > 0
     assert "sentinel" not in pool._empty_until
 
 
@@ -311,13 +328,23 @@ async def test_the_identify_lane_checks_the_probe_budget_before_the_boxes_probe(
 @pytestmark_db
 async def test_a_timed_out_non_probe_statement_ends_the_run_cleanly(
         rdb, review_assets, tmp_path, monkeypatch):
-    """Fix round 2, controller finding 4: only _probe may turn a timeout
+    """Fix round 2/3, controller finding 4: only _probe may turn a timeout
     into a usable result. Every other statement -- here, the small _free
     lookup that runs right after a successful probe -- must let
     QueryCanceled propagate to run_once, which ends the run with a
-    warning, a timeouts count and a clear note, and inserts nothing,
-    rather than treating the failed lookup as 'nothing is claimed yet'
-    and over-inserting."""
+    warning, a timeouts count and a clear note, rather than completing as
+    if nothing had gone wrong.
+
+    _free timing out can never over-insert, here or under round 1's
+    removed catch-and-convert behaviour: an empty free-set makes every
+    row look claimed, not free, so 'no inserts' alone does not
+    discriminate the fix (round 1's code inserted nothing here too). What
+    does: the note, and the probes count. Three catalogue species have no
+    detections at all (2 probes each: initial + fallback); Seriola zonata
+    has this test's one real detection, whose probe succeeds (1 more) —
+    then _free's own statement times out. probes == 7 pins the failure to
+    _free specifically, ruling out an earlier statement (refresh_progress,
+    the window read) having been the one that actually failed."""
     await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [100, 100, 300, 250],
                                                     "species": "Seriola zonata"}])
     slow_sql = "SELECT pg_sleep(0.5), %s::bigint[], %s::bigint[], %s::bigint[]"
@@ -327,6 +354,7 @@ async def test_a_timed_out_non_probe_statement_ends_the_run_cleanly(
     stats = await pool.run_once()
     assert stats["errors"] == 0
     assert stats["timeouts"] == 1
+    assert stats["probes"] == 7           # one probe succeeded before _free failed
     assert "timed out" in (stats.get("note") or "").lower()
     assert stats["check_added"] == 0
     assert await _items(rdb, "check") == []
