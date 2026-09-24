@@ -1,232 +1,247 @@
-species,genus,family,order,class,phylum,kingdom,lowest
-acuminatus,Pareques,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-adustus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-alatus,Strombus,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
-albigutta,Paralichthys,Paralichthyidae,Pleuronectiformes,Teleostei,Chordata,Animalia,species
-Alligatoridae,Alligatoridae,Alligatoridae,,Crocodylia,Chordata,Animalia,family
-americana,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
-americanus,Octopus,Octopodidae,Octopoda,Cephalopoda,Mollusca,Animalia,species
-analis,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-Anamobaea,Anamobaea,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,genus
-anhinga,Anhinga,Anhingidae,Pelecaniformes,Aves,Chordata,Animalia,species
-Anilocra,Anilocra,Cymothoidae,Isopoda,Malacostraca,Arthropoda,Animalia,genus
-antillarum,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-apodus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-arctifrons,Calamus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-arcuatus,Pomacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-argenteus,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-argus,Panulirus,Palinuridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-atlanticus,Megalops,Megalopidae,Elopiformes,Teleostei,Chordata,Animalia,species
-atomarium,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-aurita,Aurelia,Ulmaridae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
-aurofrenatum,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-aurolineatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-badionotus,Isostichopus,Stichopodidae,Synallactida,Holothuroidea,Echinodermata,Animalia,species
-bahianus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-barracuda,Sphyraena,Sphyraenidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
-bartholomaei,Carangoides,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-bermudensis,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-bermudensis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-bicaudalis,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-bifasciatum,Thalassoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-birostris,Mobula,Mobulidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
-bivittatus,Halichoeres,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-bonaci,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
-bonariense,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-borealis,Sphyraena,Sphyraenidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
-breviceps,Myrichthys,Ophichthidae,Anguilliformes,Teleostei,Chordata,Animalia,species
-brevidactylus,Pagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-brevirostris,Negaprion,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-brevis,Lolliguncula,Loliginidae,Myopsida,Cephalopoda,Mollusca,Animalia,species
-capistratus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-capriscus,Balistes,Balistidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-carbonarium,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-caretta,Caretta,Cheloniidae,Testudines,,Chordata,Animalia,species
-carolinus,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-centroura,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
-cephalus,Mugil,Mugilidae,Mugiliformes,Teleostei,Chordata,Animalia,species
-chirurgus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-chrysargyreum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-chrysoptera,Orthopristis,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-chrysopterum,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-chrysurus,Chloroscombrus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-chrysurus,Ocyurus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-ciliaris,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-ciliata,Pseudosquilla,Pseudosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
-cinerascens,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
-cinereus,Gerres,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-cirratum,Ginglymostoma,Ginglymostomatidae,Orectolobiformes,Elasmobranchii,Chordata,Animalia,species
-clupeola,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
-coeruleus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-coeruleus,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-complanata,Eurythoe,Amphinomidae,Amphinomida,Polychaeta,Annelida,Animalia,species
-coroides,Umbrina,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-cristata,Arenicola,Arenicolidae,,Polychaeta,Annelida,Animalia,species
-crocodilus,Tylosurus,Belonidae,Beloniformes,Teleostei,Chordata,Animalia,species
-crysos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-cubifrons,Ogcocephalus,Ogcocephalidae,Lophiiformes,Teleostei,Chordata,Animalia,species
-curema,Mugil,Mugilidae,Mugiliformes,Teleostei,Chordata,Animalia,species
-cyanea,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-cyanopterus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-depressa,Plagusia,Plagusiidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-diencaeus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-Diodon,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,genus
-diogenes,Petrochirus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-dubia,Libinia,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-dumerili,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-faber,Chaetodipterus,Ephippidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-falcatus,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-flammea,Calappa,Calappidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-flavolineatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-floridanus,Achelous,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-forceps,Mithraculus,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-formosum,Diplectrum,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
-frondosa,Cassiopea,Cassiopeidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
-funebris,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
-galloides,Calappa,Calappidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-gibbesi,Percnon,Percnidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-giganteus,Triplofusus,Fasciolariidae,Neogastropoda,Gastropoda,Mollusca,Animalia,species
-gigas,Aliger,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
-glaucofraenum,Coryphopterus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
-goodei,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-griseus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-guacamaia,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-hellerii,Charybdis,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-hians,Ablennes,Belonidae,Beloniformes,Teleostei,Chordata,Animalia,species
-hippos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-hispida,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-hispidus,Stenopus,Stenopodidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-histrio,Histrio,Antennariidae,Lophiiformes,Teleostei,Chordata,Animalia,species
-Holacanthus,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,genus
-holbrookii,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-holocanthus,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-Homo,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,genus
-horsti,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
-humeralis,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
-inermis,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
-intermedius,Synodus,Synodontidae,Aulopiformes,Teleostei,Chordata,Animalia,species
-iseri,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-itajara,Epinephelus,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
-jaguana,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
-jamaicensis,Urobatis,Urotrygonidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
-jocu,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
-latus,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-leucas,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-leucostictus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-limbatus,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-lugubris,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-macarellus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-macclurei,Ophioblennius,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-macrostomum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-maculata,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,species
-maculatus,Apogon,Apogonidae,Apogoniformes,Teleostei,Chordata,Animalia,species
-maculatus,Aulostomus,Aulostomidae,Syngnathiformes,Teleostei,Chordata,Animalia,species
-maculatus,Pseudupeneus,Mullidae,Mulliformes,Teleostei,Chordata,Animalia,species
-maculipinna,Halichoeres,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-mahogoni,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-manatus,Trichechus,Trichechidae,Sirenia,Mammalia,Chordata,Animalia,species
-marmoreus,Parablennius,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-martinicus,Mulloidichthys,Mullidae,Mulliformes,Teleostei,Chordata,Animalia,species
-maximus,Lachnolaimus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-melanopterus,Eucinostomus,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-meleagris,Stomolophus,Stomolophidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
-mercenaria,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-mercenaria,Mercenaria,Veneridae,Venerida,Bivalvia,Mollusca,Animalia,species
-mexicana,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
-microlepis,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
-mitchilli,Anchoa,Engraulidae,Clupeiformes,Teleostei,Chordata,Animalia,species
-Mithrax,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,genus
-mokorran,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-moringa,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
-morio,Aplysia,Aplysiidae,Aplysiida,Gastropoda,Mollusca,Animalia,species
-multilineata,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-mydas,Chelonia,Cheloniidae,Testudines,,Chordata,Animalia,species
-narinari,Aetobatus,Aetobatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
-naucrates,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
-Neogonodactylus,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,genus
-Neopomacentrus,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,genus
-neucratoides,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
-nigricinctus,Brockius,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-nigromaculatum,Branchiomma,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,species
-nodifrons,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-nuchipinnis,Labrisomus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-oceanops,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
-ocellatus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-Ocyropsis,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,genus
-Ophiothrix,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,genus
-ophryas,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
-ornatus,Callinectes,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-parra,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-paru,Pomacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
-perversum,Sinistrofulgur,Busyconidae,Neogastropoda,Gastropoda,Mollusca,Animalia,species
-planifrons,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-plumbeus,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-plumieri,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
-plumierii,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-polyphemus,Limulus,Limulidae,Xiphosurida,Merostomata,Arthropoda,Animalia,species
-probatocephalus,Archosargus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-pseudoaequipinnis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-pullus,Cantherhines,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-punctatus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-quadricornis,Acanthostracion,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-quinquecirrha,Chrysaora,Pelagiidae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
-regalis,Scomberomorus,Scombridae,Scombriformes,Teleostei,Chordata,Animalia,species
-reticulatus,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-reticulatus,Iridopagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-retusa,Camposcia,Inachidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-rhomboidalis,Archosargus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-rhomboides,Lagodon,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-rivoliana,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-rostrata,Canthigaster,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-ruber,Carangoides,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-ruber,Cronius,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-rubripinne,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-rugosa,Trachycaris,Hippolytidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-saltatrix,Pomatomus,Pomatomidae,Scombriformes,Teleostei,Chordata,Animalia,species
-saponaceus,Rypticus,Grammistidae,Perciformes,Teleostei,Chordata,Animalia,species
-saurus,Elops,Elopidae,Elopiformes,Teleostei,Chordata,Animalia,species
-saurus,Oligoplites,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-saxatilis,Abudefduf,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-scabricauda,Lysiosquilla,Lysiosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
-schoepfi,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-schomburgkii,Pempheris,Pempheridae,Acropomatiformes,Teleostei,Chordata,Animalia,species
-scitulus,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
-sciurus,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-scriptus,Aluterus,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-secunda,Uraspis,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-sepioidea,Sepioteuthis,Loliginidae,Myopsida,Cephalopoda,Mollusca,Animalia,species
-seticornis,Stenorhynchus,Inachoididae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-setifer,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-sidneyi,Coryrhynchus,Inachidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-spengleri,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-spinosissimus,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-striatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-suensonii,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,species
-surinamensis,Anisotremus,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-synagris,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-taeniopterus,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-taurus,Abudefduf,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-testudineus,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-thomasi,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
-tiburo,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-tigrinus,Serranus,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
-triangulatus,Malacoctenus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
-triqueter,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-trispinosum,Macrocoeloma,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-tuckeri,Monacanthus,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
-undecimalis,Centropomus,Centropomidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
-vaigiensis,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
-variegata,Charonia,Charoniidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
-venenosa,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
-venosus,Dardanus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
-vetula,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-vicinus,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
-virginicus,Anisotremus,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-viride,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-volitans,Pterois,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
-vomer,Selene,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-xamachana,Cassiopea,Cassiopeidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
-xanthurus,Leiostomus,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
-xanthurus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-zonata,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+raw_name,aphia_id,accepted_name,authority,rank,match_type,status,species,genus,family,order,class,phylum,kingdom,lowest
+Ablennes hians,159246,Ablennes hians,"(Valenciennes, 1846)",Species,exact,accepted,hians,Ablennes,Belonidae,Beloniformes,Teleostei,Chordata,Animalia,species
+Abudefduf saxatilis,159288,Abudefduf saxatilis,"(Linnaeus, 1758)",Species,exact,accepted,saxatilis,Abudefduf,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Abudefduf taurus,273701,Abudefduf taurus,"(Müller & Troschel, 1848)",Species,exact,accepted,taurus,Abudefduf,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Acanthostracion quadricornis,158920,Acanthostracion quadricornis,"(Linnaeus, 1758)",Species,exact,accepted,quadricornis,Acanthostracion,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Acanthurus bahianus,159578,Acanthurus bahianus,"Castelnau, 1855",Species,exact,accepted,bahianus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Acanthurus chirurgus,159580,Acanthurus chirurgus,"(Bloch, 1787)",Species,exact,accepted,chirurgus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Acanthurus coeruleus,159581,Acanthurus coeruleus,"Bloch & Schneider, 1801",Species,exact,accepted,coeruleus,Acanthurus,Acanthuridae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Achelous floridanus,557882,Achelous floridanus,"(Rathbun, 1930)",Species,exact,accepted,floridanus,Achelous,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Aetobatus narinari,217426,Aetobatus narinari,"(Euphrasen, 1790)",Species,exact,accepted,narinari,Aetobatus,Aetobatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+Aliger gigas,1429769,Aliger gigas,"(Linnaeus, 1758)",Species,exact,accepted,gigas,Aliger,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
+Alligatoridae mississippiensis,886663,Alligatoridae,"Gray, 1845",Family,exact,accepted,Alligatoridae,Alligatoridae,Alligatoridae,,Crocodylia,Chordata,Animalia,family
+Aluterus scriptus,159491,Aluterus scriptus,"(Osbeck, 1765)",Species,exact,accepted,scriptus,Aluterus,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Anamobaea,325068,Anamobaea,"Krøyer, 1856",Genus,exact,accepted,Anamobaea,Anamobaea,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,genus
+Anamobaea .,325068,Anamobaea,"Krøyer, 1856",Genus,exact,accepted,Anamobaea,Anamobaea,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,genus
+Anchoa mitchilli,158699,Anchoa mitchilli,"(Valenciennes, 1848)",Species,exact,accepted,mitchilli,Anchoa,Engraulidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+Anhinga anhinga,422576,Anhinga anhinga,"(Linnaeus, 1766)",Species,exact,accepted,anhinga,Anhinga,Anhingidae,Pelecaniformes,Aves,Chordata,Animalia,species
+Anilocra ./Renocila,146493,Anilocra,"Leach, 1818",Genus,exact,accepted,Anilocra,Anilocra,Cymothoidae,Isopoda,Malacostraca,Arthropoda,Animalia,genus
+Anisotremus surinamensis,279623,Anisotremus surinamensis,"(Bloch, 1791)",Species,exact,accepted,surinamensis,Anisotremus,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Anisotremus virginicus,279625,Anisotremus virginicus,"(Linnaeus, 1758)",Species,exact,accepted,virginicus,Anisotremus,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Apogon maculatus,159589,Apogon maculatus,"(Poey, 1860)",Species,exact,accepted,maculatus,Apogon,Apogonidae,Apogoniformes,Teleostei,Chordata,Animalia,species
+Apylsia morio,160031,Aplysia morio,"(A. E. Verrill, 1901)",Species,near_1,accepted,morio,Aplysia,Aplysiidae,Aplysiida,Gastropoda,Mollusca,Animalia,species
+Archosargus probatocephalus,159238,Archosargus probatocephalus,"(Walbaum, 1792)",Species,exact,accepted,probatocephalus,Archosargus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Archosargus rhomboidalis,159239,Archosargus rhomboidalis,"(Linnaeus, 1758)",Species,exact,accepted,rhomboidalis,Archosargus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Arenicola cristata,129866,Arenicola cristata,"Stimpson, 1856",Species,exact,accepted,cristata,Arenicola,Arenicolidae,,Polychaeta,Annelida,Animalia,species
+Aulostomus maculatus,278080,Aulostomus maculatus,"Valenciennes, 1841",Species,exact,accepted,maculatus,Aulostomus,Aulostomidae,Syngnathiformes,Teleostei,Chordata,Animalia,species
+Aurelia aurita,135306,Aurelia aurita,"(Linnaeus, 1758)",Species,exact,accepted,aurita,Aurelia,Ulmaridae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
+Balistes capriscus,154721,Balistes capriscus,"Gmelin, 1789",Species,exact,accepted,capriscus,Balistes,Balistidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Branchiomma nigromaculata,209930,Branchiomma nigromaculatum,"(Baird, 1865)",Species,near_2,accepted,nigromaculatum,Branchiomma,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,species
+Brockius nigricinctus,993097,Brockius nigricinctus,"(Howell Rivero, 1936)",Species,exact,accepted,nigricinctus,Brockius,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Calamus arctifrons,275966,Calamus arctifrons,"Goode & Bean, 1882",Species,exact,accepted,arctifrons,Calamus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Calappa flammea,158052,Calappa flammea,"(Herbst, 1794)",Species,exact,accepted,flammea,Calappa,Calappidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Calappa galloides,241042,Calappa galloides,"Stimpson, 1859",Species,exact,accepted,galloides,Calappa,Calappidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Callinectes ornatus,158053,Callinectes ornatus,"Ordway, 1863",Species,exact,accepted,ornatus,Callinectes,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Camposcia retusa,208891,Camposcia retusa,"(Latreille, 1829)",Species,exact,accepted,retusa,Camposcia,Inachidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Cantherhines pullus,159493,Cantherhines pullus,"(Ranzani, 1842)",Species,exact,accepted,pullus,Cantherhines,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Canthigaster rostrata,127411,Canthigaster rostrata,"(Bloch, 1786)",Species,exact,accepted,rostrata,Canthigaster,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Carangoides bartholomaei,302312,Caranx bartholomaei,"Cuvier, 1833",Species,exact,unaccepted,bartholomaei,Carangoides,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Carangoides ruber,302432,Caranx ruber,"(Bloch, 1793)",Species,exact,unaccepted,ruber,Carangoides,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Caranx crysos,126802,Caranx crysos,"(Mitchill, 1815)",Species,exact,accepted,crysos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Caranx hippos,126803,Caranx hippos,"(Linnaeus, 1766)",Species,exact,accepted,hippos,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Caranx latus,126804,Caranx latus,"Agassiz, 1831",Species,exact,accepted,latus,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Caranx lugubrious,126805,Caranx lugubris,"Poey, 1860",Species,near_2,accepted,lugubris,Caranx,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Carcharhinus leucas,105792,Carcharhinus leucas,"(Valenciennes, 1839)",Species,exact,accepted,leucas,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+Carcharhinus limbatus,105793,Carcharhinus limbatus,"(Valenciennes, 1839)",Species,exact,accepted,limbatus,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+Carcharhinus plumbeus,105797,Carcharhinus plumbeus,"(Nardo, 1827)",Species,exact,accepted,plumbeus,Carcharhinus,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+Caretta caretta,137205,Caretta caretta,"(Linnaeus, 1758)",Species,exact,accepted,caretta,Caretta,Cheloniidae,Testudines,,Chordata,Animalia,species
+Cassiopea frondosa,287166,Cassiopea frondosa,"(Pallas, 1774)",Species,exact,accepted,frondosa,Cassiopea,Cassiopeidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
+Cassiopea xamachana,287172,Cassiopea xamachana,"Bigelow, 1892",Species,exact,accepted,xamachana,Cassiopea,Cassiopeidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
+Centropomus undecimalis,280068,Centropomus undecimalis,"(Bloch, 1792)",Species,exact,accepted,undecimalis,Centropomus,Centropomidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
+Chaetodipterus faber,159703,Chaetodipterus faber,"(Broussonet, 1782)",Species,exact,accepted,faber,Chaetodipterus,Ephippidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Chaetodon capistratus,159661,Chaetodon capistratus,"Linnaeus, 1758",Species,exact,accepted,capistratus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Chaetodon ocellatus,159662,Chaetodon ocellatus,"Bloch, 1787",Species,exact,accepted,ocellatus,Chaetodon,Chaetodontidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Charonia variegata,181006,Charonia variegata,"(Lamarck, 1816)",Species,exact,accepted,variegata,Charonia,Charoniidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
+Charybdis hellerii,107382,Charybdis (Charybdis) hellerii,"(A. Milne-Edwards, 1867)",Species,exact_subgenus,accepted,hellerii,Charybdis,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Chelonia mydas,137206,Chelonia mydas,"(Linnaeus, 1758)",Species,exact,accepted,mydas,Chelonia,Cheloniidae,Testudines,,Chordata,Animalia,species
+Chilomycterus antillarum,275240,Chilomycterus antillarum,"Jordan & Rutter, 1897",Species,exact,accepted,antillarum,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Chilomycterus reticulatus,219964,Chilomycterus reticulatus,"(Linnaeus, 1758)",Species,exact,accepted,reticulatus,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Chilomycterus schoepfi,159488,Chilomycterus schoepfii,"(Walbaum, 1792)",Species,exact,unaccepted,schoepfii,Chilomycterus,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Chloeia euglochis,336227,Chloeia euglochis,"Ehlers, 1887",Species,exact,accepted,euglochis,Chloeia,Amphinomidae,Amphinomida,Polychaeta,Annelida,Animalia,species
+Chloroscombrus chrysurus,159483,Chloroscombrus chrysurus,"(Linnaeus, 1766)",Species,exact,accepted,chrysurus,Chloroscombrus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Chromis cyanea,1565681,Azurina cyanea,"(Poey, 1860)",Species,exact,junior objective synonym,cyanea,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Chromis multilineata,1623786,Azurina multilineata,"(Guichenot, 1853)",Species,exact,superseded combination,multilineata,Chromis,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Chrysaora quinquecirrha,220476,Chrysaora quinquecirrha,"(Desor, 1848)",Species,exact,accepted,quinquecirrha,Chrysaora,Pelagiidae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
+Coryphopterus glaucofraenum,159736,Coryphopterus glaucofraenum,"Gill, 1863",Species,exact,accepted,glaucofraenum,Coryphopterus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
+Coryrhynchus sidneyi,441866,Coryrhynchus sidneyi,"(Rathbun, 1924)",Species,exact,accepted,sidneyi,Coryrhynchus,Inachidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Cronious ruber,241109,Cronius ruber,"(Lamarck, 1818)",Species,near_1,accepted,ruber,Cronius,Portunidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Dardanus venosus,367596,Dardanus venosus,"(H. Milne Edwards, 1848)",Species,exact,accepted,venosus,Dardanus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Dasyatis americana,1042856,Hypanus americanus,"(Hildebrand & Schroeder, 1928)",Species,exact,unaccepted,americanus,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+Dasyatis centroura,1017389,Bathytoshia centroura,"(Mitchill, 1815)",Species,exact,unaccepted,centroura,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+Decapterus macarellus,126807,Decapterus macarellus,"(Cuvier, 1833)",Species,exact,accepted,macarellus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Decapterus punctatus,126808,Decapterus punctatus,"(Cuvier, 1829)",Species,exact,accepted,punctatus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Diodon Hystrix,126231,Diodon,"Linnaeus, 1758",Genus,exact,accepted,Diodon,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,genus
+Diodon holocanthus,127402,Diodon holocanthus,"Linnaeus, 1758",Species,exact,accepted,holocanthus,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Diplectrum formosum,159350,Diplectrum formosum,"(Linnaeus, 1766)",Species,exact,accepted,formosum,Diplectrum,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
+Diplodus argenteus,293578,Diplodus argenteus,"(Valenciennes, 1830)",Species,exact,accepted,argenteus,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Diplodus holbrookii,273972,Diplodus holbrookii,"(Bean, 1878)",Species,exact,accepted,holbrookii,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Echeneis naucrates,126848,Echeneis naucrates,"Linnaeus, 1758",Species,exact,accepted,naucrates,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Echeneis neucratoides,159678,Echeneis neucratoides,"Zuiew, 1789",Species,exact,accepted,neucratoides,Echeneis,Echeneidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Elacatinus horsti,280605,Elacatinus horsti,"(Metzelaar, 1922)",Species,exact,accepted,horsti,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
+Elacatinus oceanops,280616,Elacatinus oceanops,"Jordan, 1904",Species,exact,accepted,oceanops,Elacatinus,Gobiidae,Gobiiformes,Teleostei,Chordata,Animalia,species
+Elops saurus,157875,Elops saurus,"Linnaeus, 1766",Species,exact,accepted,saurus,Elops,Elopidae,Elopiformes,Teleostei,Chordata,Animalia,species
+Epinephelus itajara,159353,Epinephelus itajara,"(Lichtenstein, 1822)",Species,exact,accepted,itajara,Epinephelus,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+Epinephelus morio,159354,Epinephelus morio,"(Valenciennes, 1828)",Species,exact,accepted,morio,Epinephelus,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+Eques punctatus,276097,Equetus punctatus,"(Bloch & Schneider, 1801)",Species,exact,unaccepted,punctatus,Eques,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Eucinostomus melanopterus,276423,Eucinostomus melanopterus,"(Bleeker, 1863)",Species,exact,accepted,melanopterus,Eucinostomus,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Eucinostomus/Ulaema lefroyi,,,,,,,,,Gerreidae,,,,,unknown
+EucinostomusUlaema lefroyi,,,,,,,,,,,,,,unknown
+Eurythoe complanata,129829,Eurythoe complanata,"(Pallas, 1766)",Species,exact,accepted,complanata,Eurythoe,Amphinomidae,Amphinomida,Polychaeta,Annelida,Animalia,species
+Gerres cinereus,276954,Gerres cinereus,"(Walbaum, 1792)",Species,exact,accepted,cinereus,Gerres,Gerreidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Ginglymostoma cirratum,105846,Ginglymostoma cirratum,"(Bonnaterre, 1788)",Species,exact,accepted,cirratum,Ginglymostoma,Ginglymostomatidae,Orectolobiformes,Elasmobranchii,Chordata,Animalia,species
+Gymnothorax funebris,158583,Gymnothorax funebris,"Ranzani, 1839",Species,exact,accepted,funebris,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+Gymnothorax moringa,158584,Gymnothorax moringa,"(Cuvier, 1829)",Species,exact,accepted,moringa,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+Gymnothorax vicinus,126302,Gymnothorax vicinus,"(Castelnau, 1855)",Species,exact,accepted,vicinus,Gymnothorax,Muraenidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+Gymnura lessae,1385198,Gymnura lessae,"Yokota & Carvalho, 2017",Species,exact,accepted,lessae,Gymnura,Gymnuridae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+Haemulon aurolineatum,158807,Haemulon aurolineatum,"Cuvier, 1830",Species,exact,accepted,aurolineatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon bonariense,275722,Haemulon bonariense,"Cuvier, 1830",Species,exact,accepted,bonariense,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon carbonarium,275724,Haemulon carbonarium,"Poey, 1860",Species,exact,accepted,carbonarium,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon chrysargyreum,1841028,Brachygenys chrysargyrea,"(Günther, 1859)",Species,exact,superseded combination,chrysargyrea,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon flavolineatum,275727,Haemulon flavolineatum,"(Desmarest, 1823)",Species,exact,accepted,flavolineatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon macrostomum,275728,Haemulon macrostomum,"Günther, 1859",Species,exact,accepted,macrostomum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon parra,275731,Haemulon parra,"(Desmarest, 1823)",Species,exact,accepted,parra,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon plumierii,158808,Haemulon plumierii,"(Lacepède, 1801)",Species,exact,accepted,plumierii,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon sciurus,275733,Haemulon sciurus,"(Shaw, 1803)",Species,exact,accepted,sciurus,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Haemulon striatum,275739,Haemulon striatum,"(Linnaeus, 1758)",Species,exact,accepted,striatum,Haemulon,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Halichoeres bivittatus,158815,Halichoeres bivittatus,"(Bloch, 1791)",Species,exact,accepted,bivittatus,Halichoeres,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Halichoeres maculipinna,275772,Halichoeres maculipinna,"(Müller & Troschel, 1848)",Species,exact,accepted,maculipinna,Halichoeres,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Harengula clupeola,277549,Harengula clupeola,"(Cuvier, 1829)",Species,exact,accepted,clupeola,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+Harengula humeralis,367197,Harengula humeralis,"(Cuvier, 1829)",Species,exact,accepted,humeralis,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+Harengula jaguana,277551,Harengula jaguana,"Poey, 1865",Species,exact,accepted,jaguana,Harengula,Dorosomatidae,Clupeiformes,Teleostei,Chordata,Animalia,species
+Histrio histrio,126533,Histrio histrio,"(Linnaeus, 1758)",Species,exact,accepted,histrio,Histrio,Antennariidae,Lophiiformes,Teleostei,Chordata,Animalia,species
+Holacanthus bermudensis,159284,Holacanthus bermudensis,"Goode, 1876",Species,exact,accepted,bermudensis,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Holacanthus ciliaris,276012,Holacanthus ciliaris,"(Linnaeus, 1758)",Species,exact,accepted,ciliaris,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Holacanthus townsendi,159282,Holacanthus,"Lacepède, 1802",Genus,exact,accepted,Holacanthus,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,genus
+Holothuria mexicana,125180,Holothuria (Halodeima) mexicana,"Ludwig, 1875",Species,exact,alternative representation,mexicana,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
+Holothuria thomasi,241876,Holothuria (Thymiosycia) thomasi,"Pawson & Caycedo, 1980",Species,exact_subgenus,accepted,thomasi,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
+Homo Sapiens,1455976,Homo,"Linnaeus, 1758",Genus,exact,accepted,Homo,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,genus
+Hypleurochilus bermudensis,276312,Hypleurochilus bermudensis,"Beebe & Tee-Van, 1933",Species,exact,accepted,bermudensis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Hypleurochilus pseudoaequipinnis,276317,Hypleurochilus pseudoaequipinnis,"Bath, 1994",Species,exact,accepted,pseudoaequipinnis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Iridopagurus reticulatus,366484,Iridopagurus reticulatus,"García-Gómez, 1983",Species,exact,accepted,reticulatus,Iridopagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Isostichopus badionotus,367868,Isostichopus badionotus,"(Selenka, 1867)",Species,exact,accepted,badionotus,Isostichopus,Stichopodidae,Synallactida,Holothuroidea,Echinodermata,Animalia,species
+Kyphosus cinerascens,218708,Kyphosus cinerascens,"(Forsskål, 1775)",Species,exact,accepted,cinerascens,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
+Kyphosus sectatrix/bigibbus,126015,Kyphosus,"Lacepède, 1801",Genus,exact,accepted,Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
+Kyphosus sectatrixbigibbus,126015,Kyphosus,"Lacepède, 1801",Genus,exact,accepted,Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
+Kyphosus vaigiensis,218706,Kyphosus vaigiensis,"(Quoy & Gaimard, 1825)",Species,exact,accepted,vaigiensis,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
+Labrisomus nuchipinnis,281260,Labrisomus nuchipinnis,"(Quoy & Gaimard, 1824)",Species,exact,accepted,nuchipinnis,Labrisomus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Labrisomus nuchipinnius,281260,Labrisomus nuchipinnis,"(Quoy & Gaimard, 1824)",Species,phonetic,accepted,nuchipinnis,Labrisomus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Lachnolaimus maximus,158822,Lachnolaimus maximus,"(Walbaum, 1792)",Species,exact,accepted,maximus,Lachnolaimus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lactophrys bicaudalis,275874,Lactophrys bicaudalis,"(Linnaeus, 1758)",Species,exact,accepted,bicaudalis,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Lactophrys triqueter,158932,Lactophrys triqueter,"(Linnaeus, 1758)",Species,exact,accepted,triqueter,Lactophrys,Ostraciidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Lagodon rhomboides,159249,Lagodon rhomboides,"(Linnaeus, 1766)",Species,exact,accepted,rhomboides,Lagodon,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Leiostomus xanthurus,159322,Leiostomus xanthurus,"Lacepède, 1802",Species,exact,accepted,xanthurus,Leiostomus,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Libinia dubia,107335,Libinia dubia,"H. Milne Edwards, 1834",Species,exact,accepted,dubia,Libinia,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Limulus polyphemus,150514,Limulus polyphemus,"(Linnaeus, 1758)",Species,exact,accepted,polyphemus,Limulus,Limulidae,Xiphosurida,Merostomata,Arthropoda,Animalia,species
+Lolliguncula brevis,157028,Lolliguncula brevis,"(Blainville, 1823)",Species,exact,accepted,brevis,Lolliguncula,Loliginidae,Myopsida,Cephalopoda,Mollusca,Animalia,species
+Lutjanus analis,159792,Lutjanus analis,"(Cuvier, 1828)",Species,exact,accepted,analis,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lutjanus apodus,159793,Lutjanus apodus,"(Walbaum, 1792)",Species,exact,accepted,apodus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lutjanus cyanopterus,159796,Lutjanus cyanopterus,"(Cuvier, 1828)",Species,exact,accepted,cyanopterus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lutjanus griseus,159797,Lutjanus griseus,"(Linnaeus, 1758)",Species,exact,accepted,griseus,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lutjanus jocu,159798,Lutjanus jocu,"(Bloch & Schneider, 1801)",Species,exact,accepted,jocu,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lutjanus mahogoni,159799,Lutjanus mahogoni,"(Cuvier, 1828)",Species,exact,accepted,mahogoni,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lutjanus synagris,159800,Lutjanus synagris,"(Linnaeus, 1758)",Species,exact,accepted,synagris,Lutjanus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Lysiosquilla scabricauda,409037,Lysiosquilla scabricauda,"(Lamarck, 1818)",Species,exact,accepted,scabricauda,Lysiosquilla,Lysiosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
+Macrocoeloma trispinosum,421982,Macrocoeloma trispinosum,"(Latreille, 1825)",Species,exact,accepted,trispinosum,Macrocoeloma,Epialtidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Malacoctenus triangulatus,281503,Malacoctenus triangulatus,"Springer, 1959",Species,exact,accepted,triangulatus,Malacoctenus,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Megalops atlanticus,126430,Megalops atlanticus,"Valenciennes, 1847",Species,exact,accepted,atlanticus,Megalops,Megalopidae,Elopiformes,Teleostei,Chordata,Animalia,species
+Menippe mercenaria,422070,Menippe mercenaria,"(Say, 1818)",Species,exact,accepted,mercenaria,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Menippe nodifrons,241128,Menippe nodifrons,"Stimpson, 1859",Species,exact,accepted,nodifrons,Menippe,Menippidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Mercenaria mercenaria,141919,Mercenaria mercenaria,"(Linnaeus, 1758)",Species,exact,accepted,mercenaria,Mercenaria,Veneridae,Venerida,Bivalvia,Mollusca,Animalia,species
+Mithraculus forceps,421988,Mithraculus forceps,"A. Milne-Edwards, 1875",Species,exact,accepted,forceps,Mithraculus,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Mithrax cinctimanus,158428,Mithrax,"Latreille, 1816",Genus,exact,accepted,Mithrax,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,genus
+Mithrax spinosissimus,987079,Maguimithrax spinosissimus,"(Lamarck, 1818)",Species,exact,superseded combination,spinosissimus,Mithrax,Mithracidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Mobula birostris,1026118,Mobula birostris,"(Walbaum, 1792)",Species,exact,accepted,birostris,Mobula,Mobulidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+Monacanthus tuckeri,159499,Monacanthus tuckeri,"Bean, 1906",Species,exact,accepted,tuckeri,Monacanthus,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Mugil cephalus,126983,Mugil cephalus,"Linnaeus, 1758",Species,exact,accepted,cephalus,Mugil,Mugilidae,Mugiliformes,Teleostei,Chordata,Animalia,species
+Mugil curema,159416,Mugil curema,"Valenciennes, 1836",Species,exact,accepted,curema,Mugil,Mugilidae,Mugiliformes,Teleostei,Chordata,Animalia,species
+Mulloidichthys martinicus,277991,Mulloidichthys martinicus,"(Cuvier, 1829)",Species,exact,accepted,martinicus,Mulloidichthys,Mullidae,Mulliformes,Teleostei,Chordata,Animalia,species
+Mycteroperca bonaci,159231,Mycteroperca bonaci,"(Poey, 1860)",Species,exact,accepted,bonaci,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+Mycteroperca microlepis,273880,Mycteroperca microlepis,"(Goode & Bean, 1879)",Species,exact,accepted,microlepis,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+Mycteroperca venenosa,273885,Mycteroperca venenosa,"(Linnaeus, 1758)",Species,exact,accepted,venenosa,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
+Myrichthys breviceps,158637,Myrichthys breviceps,"(Richardson, 1848)",Species,exact,accepted,breviceps,Myrichthys,Ophichthidae,Anguilliformes,Teleostei,Chordata,Animalia,species
+Negaprion brevirostris,105800,Negaprion brevirostris,"(Poey, 1868)",Species,exact,accepted,brevirostris,Negaprion,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+Neogonodactylus Wennerae,408934,Neogonodactylus,"Manning, 1995",Genus,exact,accepted,Neogonodactylus,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,genus
+Neopomacentrus cyanomos,218839,Neopomacentrus cyanomos,"(Bleeker, 1856)",Species,exact,accepted,cyanomos,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Neopomacentrus cyanomos.,206462,Neopomacentrus,"Allen, 1975",Genus,exact,accepted,Neopomacentrus,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,genus
+Octopus americanus,749548,Octopus americanus,"Froriep, 1806",Species,exact,accepted,americanus,Octopus,Octopodidae,Octopoda,Cephalopoda,Mollusca,Animalia,species
+Ocyropsis immaculata,106356,Ocyropsis,"Mayer, 1912",Genus,exact,accepted,Ocyropsis,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,genus
+Ocyropsis maculata,106402,Ocyropsis maculata,"(Rang, 1827)",Species,exact,accepted,maculata,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,species
+Ocyurus chrysurus,159803,Ocyurus chrysurus,"(Bloch, 1791)",Species,exact,accepted,chrysurus,Ocyurus,Lutjanidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Ogcocephalus cubifrons,275905,Ogcocephalus cubifrons,"(Richardson, 1836)",Species,exact,accepted,cubifrons,Ogcocephalus,Ogcocephalidae,Lophiiformes,Teleostei,Chordata,Animalia,species
+Oligoplites saurus,159645,Oligoplites saurus,"(Bloch & Schneider, 1801)",Species,exact,accepted,saurus,Oligoplites,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Ophioblennius macclurei,273125,Ophioblennius macclurei,"(Silvester, 1915)",Species,exact,accepted,macclurei,Ophioblennius,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Ophiothrix,123626,Ophiothrix,"Müller & Troschel, 1840",Genus,exact,accepted,Ophiothrix,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,genus
+Ophiothrix .,123626,Ophiothrix,"Müller & Troschel, 1840",Genus,exact,accepted,Ophiothrix,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,genus
+Ophiothrix suensonii,244148,Ophiothrix (Acanthophiothrix) suensonii,"Lütken, 1856",Species,exact,alternative representation,suensonii,Ophiothrix,Ophiotrichidae,Amphilepidida,Ophiuroidea,Echinodermata,Animalia,species
+Orthopristis chrysoptera,158810,Orthopristis chrysoptera,"(Linnaeus, 1766)",Species,exact,accepted,chrysoptera,Orthopristis,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Pagurus brevidactylus,366662,Pagurus brevidactylus,"(Stimpson, 1859)",Species,exact,accepted,brevidactylus,Pagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Panulirus argus,382891,Panulirus argus,"(Latreille, 1804)",Species,exact,accepted,argus,Panulirus,Palinuridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Parablennius marmoreus,159609,Parablennius marmoreus,"(Poey, 1876)",Species,exact,accepted,marmoreus,Parablennius,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
+Paralichthys albigutta,158825,Paralichthys albigutta,"Jordan & Gilbert, 1882",Species,exact,accepted,albigutta,Paralichthys,Paralichthyidae,Pleuronectiformes,Teleostei,Chordata,Animalia,species
+Pareques acuminatus,282139,Pareques acuminatus,"(Bloch & Schneider, 1801)",Species,exact,accepted,acuminatus,Pareques,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Pempheris schomburgkii,277068,Pempheris schomburgkii,"Müller & Troschel, 1848",Species,exact,accepted,schomburgkii,Pempheris,Pempheridae,Acropomatiformes,Teleostei,Chordata,Animalia,species
+Percnon gibbesi,107458,Percnon gibbesi,"(H. Milne Edwards, 1853)",Species,exact,accepted,gibbesi,Percnon,Percnidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Petrochirus diogenes,368346,Petrochirus diogenes,"(Linnaeus, 1758)",Species,exact,accepted,diogenes,Petrochirus,Diogenidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Plagusia depressa,107459,Plagusia depressa,"(Fabricius, 1775)",Species,exact,accepted,depressa,Plagusia,Plagusiidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Pomacanthus arcuatus,159287,Pomacanthus arcuatus,"(Linnaeus, 1758)",Species,exact,accepted,arcuatus,Pomacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Pomacanthus paru,276025,Pomacanthus paru,"(Bloch, 1787)",Species,exact,accepted,paru,Pomacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,species
+Pomatomus saltarix,151482,Pomatomus saltatrix,"(Linnaeus, 1766)",Species,near_1,accepted,saltatrix,Pomatomus,Pomatomidae,Scombriformes,Teleostei,Chordata,Animalia,species
+Pomatomus saltatrix,151482,Pomatomus saltatrix,"(Linnaeus, 1766)",Species,exact,accepted,saltatrix,Pomatomus,Pomatomidae,Scombriformes,Teleostei,Chordata,Animalia,species
+Prionotus ophryas,159573,Prionotus ophryas,"Jordan & Swain, 1885",Species,exact,accepted,ophryas,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
+Prionotus scitulus,159575,Prionotus scitulus,"Jordan & Gilbert, 1882",Species,exact,accepted,scitulus,Prionotus,Triglidae,Perciformes,Teleostei,Chordata,Animalia,species
+Pseudosquilla ciliata,210232,Pseudosquilla ciliata,"(Fabricius, 1787)",Species,exact,accepted,ciliata,Pseudosquilla,Pseudosquillidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
+Pseudupeneus maculatus,159421,Pseudupeneus maculatus,"(Bloch, 1793)",Species,exact,accepted,maculatus,Pseudupeneus,Mullidae,Mulliformes,Teleostei,Chordata,Animalia,species
+Pterois volitans,159559,Pterois volitans,"(Linnaeus, 1758)",Species,exact,accepted,volitans,Pterois,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
+Rypticus saponaceus,275963,Rypticus saponaceus,"(Bloch & Schneider, 1801)",Species,exact,accepted,saponaceus,Rypticus,Grammistidae,Perciformes,Teleostei,Chordata,Animalia,species
+Scarus coeruleus,159300,Scarus coeruleus,"(Edwards, 1771)",Species,exact,accepted,coeruleus,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Scarus guacamaia,276049,Scarus guacamaia,"Cuvier, 1829",Species,exact,accepted,guacamaia,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Scarus iseri,276052,Scarus iseri,"(Bloch, 1789)",Species,exact,accepted,iseri,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Scarus taeniopterus,276062,Scarus taeniopterus,"Lesson, 1829",Species,exact,accepted,taeniopterus,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Scarus vetula,276064,Scarus vetula,"Bloch & Schneider, 1801",Species,exact,accepted,vetula,Scarus,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Scomberomorus regalis,273819,Scomberomorus regalis,"(Bloch, 1793)",Species,exact,accepted,regalis,Scomberomorus,Scombridae,Scombriformes,Teleostei,Chordata,Animalia,species
+Scorpaena inermis,274717,Scorpaena inermis,"Cuvier, 1829",Species,exact,accepted,inermis,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
+Scorpaena plumieri,159564,Scorpaena plumieri,"Bloch, 1789",Species,exact,accepted,plumieri,Scorpaena,Scorpaenidae,Perciformes,Teleostei,Chordata,Animalia,species
+Selene vomer,159649,Selene vomer,"(Linnaeus, 1758)",Species,exact,accepted,vomer,Selene,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Sepioteuthis sepioidea,342241,Sepioteuthis sepioidea,"(Blainville, 1823)",Species,exact,accepted,sepioidea,Sepioteuthis,Loliginidae,Myopsida,Cephalopoda,Mollusca,Animalia,species
+Seriola dumerili,126816,Seriola dumerili,"(Risso, 1810)",Species,exact,accepted,dumerili,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Seriola rivoliana,126818,Seriola rivoliana,"Valenciennes, 1833",Species,exact,accepted,rivoliana,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Seriola zonata,159650,Seriola zonata,"(Mitchill, 1815)",Species,exact,accepted,zonata,Seriola,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Serranus tigrinus,273909,Serranus tigrinus,"(Bloch, 1790)",Species,exact,accepted,tigrinus,Serranus,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
+Sinistrofulgur perversum,862937,Sinistrofulgur perversum,"(Linnaeus, 1758)",Species,exact,accepted,perversum,Sinistrofulgur,Busyconidae,Neogastropoda,Gastropoda,Mollusca,Animalia,species
+Sparisoma atomarium,273771,Sparisoma atomarium,"(Poey, 1861)",Species,exact,accepted,atomarium,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sparisoma aurofrenatum,273772,Sparisoma aurofrenatum,"(Valenciennes, 1840)",Species,exact,accepted,aurofrenatum,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sparisoma chrysopterum,273774,Sparisoma chrysopterum,"(Bloch & Schneider, 1801)",Species,exact,accepted,chrysopterum,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sparisoma rubripinne,159301,Sparisoma rubripinne,"(Valenciennes, 1840)",Species,exact,accepted,rubripinne,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sparisoma viride,273780,Sparisoma viride,"(Bonnaterre, 1788)",Species,exact,accepted,viride,Sparisoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sphoeroides spengleri,158935,Sphoeroides spengleri,"(Bloch, 1785)",Species,exact,accepted,spengleri,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Sphoeroides testudineus,158936,Sphoeroides testudineus,"(Linnaeus, 1758)",Species,exact,accepted,testudineus,Sphoeroides,Tetraodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Sphyraena barracuda,345843,Sphyraena barracuda,"(Edwards, 1771)",Species,exact,accepted,barracuda,Sphyraena,Sphyraenidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sphyraena borealis,159813,Sphyraena borealis,"DeKay, 1842",Species,exact,accepted,borealis,Sphyraena,Sphyraenidae,Carangaria incertae sedis,Teleostei,Chordata,Animalia,species
+Sphyrna mokorran,105817,Sphyrna mokarran,"(Rüppell, 1837)",Species,exact,unaccepted,mokarran,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+Sphyrna tiburo,158517,Sphyrna tiburo,"(Linnaeus, 1758)",Species,exact,accepted,tiburo,Sphyrna,Sphyrnidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
+Stegastes adustus,276659,Stegastes adustus,"(Troschel, 1865)",Species,exact,accepted,adustus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Stegastes diencaeus,276666,Stegastes diencaeus,"(Jordan & Rutter, 1897)",Species,exact,accepted,diencaeus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Stegastes leucostictus,159291,Stegastes leucostictus,"(Müller & Troschel, 1848)",Species,exact,accepted,leucostictus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Stegastes planifrons,276679,Stegastes planifrons,"(Cuvier, 1830)",Species,exact,accepted,planifrons,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Stegastes xanthurus,1021260,Stegastes xanthurus,"(Poey, 1860)",Species,exact,accepted,xanthurus,Stegastes,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
+Stenopus hispiduss,210370,Stenopus hispidus,"(Olivier, 1811)",Species,phonetic,accepted,hispidus,Stenopus,Stenopodidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Stenorhynchus seticornis,421957,Stenorhynchus seticornis,"(Herbst, 1788)",Species,exact,accepted,seticornis,Stenorhynchus,Inachoididae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Stephanolepis hispida,307126,Stephanolepis hispida,"(Linnaeus, 1766)",Species,exact,accepted,hispida,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Stephanolepis setifer,159500,Stephanolepis setifer,"(Bennett, 1831)",Species,exact,accepted,setifer,Stephanolepis,Monacanthidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Stomolophus meleagris,291140,Stomolophus meleagris,"Agassiz, 1860",Species,exact,accepted,meleagris,Stomolophus,Stomolophidae,Rhizostomeae,Scyphozoa,Cnidaria,Animalia,species
+Strombus alatus,419695,Strombus pugilis,"Linnaeus, 1758",Species,exact,junior subjective synonym,pugilis,Strombus,Strombidae,Littorinimorpha,Gastropoda,Mollusca,Animalia,species
+Synodus intermedius,158759,Synodus intermedius,"(Spix & Agassiz, 1829)",Species,exact,accepted,intermedius,Synodus,Synodontidae,Aulopiformes,Teleostei,Chordata,Animalia,species
+TBC,,,,,,,,,Polyclad,,,,,unknown
+TBC -,,,,,,,,,Actiniaria,,,,,unknown
+Thalassoma bifasciatum,159786,Thalassoma bifasciatum,"(Bloch, 1791)",Species,exact,accepted,bifasciatum,Thalassoma,Labridae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Trachinotus carolinus,159652,Trachinotus carolinus,"(Linnaeus, 1766)",Species,exact,accepted,carolinus,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Trachinotus falcatus,367285,Trachinotus falcatus,"(Linnaeus, 1758)",Species,exact,accepted,falcatus,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Trachinotus goodei,159654,Trachinotus goodei,"Jordan & Evermann, 1896",Species,exact,accepted,goodei,Trachinotus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Trachycaris rugosa,421786,Trachycaris rugosa,"(Spence Bate, 1888)",Species,exact,accepted,rugosa,Trachycaris,Hippolytidae,Decapoda,Malacostraca,Arthropoda,Animalia,species
+Trichechus manatus,159509,Trichechus manatus,"Linnaeus, 1758",Species,exact,accepted,manatus,Trichechus,Trichechidae,Sirenia,Mammalia,Chordata,Animalia,species
+Triplofusus giganteus,420051,Triplofusus giganteus,"(Kiener, 1840)",Species,exact,accepted,giganteus,Triplofusus,Fasciolariidae,Neogastropoda,Gastropoda,Mollusca,Animalia,species
+Tylosurus crocodilus,159259,Tylosurus crocodilus,"(Péron & Lesueur, 1821)",Species,exact,accepted,crocodilus,Tylosurus,Belonidae,Beloniformes,Teleostei,Chordata,Animalia,species
+Umbrina coroides,159338,Umbrina coroides,"Cuvier, 1830",Species,exact,accepted,coroides,Umbrina,Sciaenidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
+Uraspis secunda,159658,Uraspis secunda,"(Poey, 1860)",Species,exact,accepted,secunda,Uraspis,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
+Urobatis jamaicensis,283086,Urobatis jamaicensis,"(Cuvier, 1816)",Species,exact,accepted,jamaicensis,Urobatis,Urotrygonidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
+poss. Gobioclinus,,,,,,,,,Labrisomidae,,,,,unknown

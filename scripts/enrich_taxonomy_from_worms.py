@@ -1,35 +1,27 @@
-"""Enrich the species manifest with full Linnaean taxonomy (kingdom →
-phylum → class → order → family → genus → species) from WoRMS — the
-World Register of Marine Species (https://www.marinespecies.org/rest/).
+"""Map every species name the project uses to its WoRMS record.
 
-Reads ``assets/species_manifest.json`` (built by build_species_manifest.py),
-deduplicates by binomial, batch-queries WoRMS, and writes
-``assets/taxonomy.csv`` with one row per unique taxon. The CSV is the
-input for the taxonomically-aware loss function: given two predicted
-species, walk up each row's columns to find the lowest shared rank and
-compute tree distance from there.
+Inputs: the Species Log manifest (``assets/species_manifest.json``) and
+the classifier's ``classes.json``. Both contain names as typed by
+people, misspellings included. Every distinct name becomes one row of
+``assets/taxonomy.csv``, keyed by ``raw_name``, carrying the WoRMS
+AphiaID and accepted name, so labels can be stored under the accepted
+name while training folders keep their original spelling.
 
 CSV schema (order is fixed):
+    raw_name,aphia_id,accepted_name,authority,rank,match_type,status,
     species,genus,family,order,class,phylum,kingdom,lowest
 
-``species`` is the species epithet only (e.g. ``paru``), to match
-Linnaean convention; the binomial is reconstructible as ``genus +
-species``. ``lowest`` records the most-specific rank we resolved
-(``species`` for full matches; ``genus`` / ``family`` for partial
-matches where WoRMS recognised the higher rank but couldn't pin down
-the species).
+``accepted_name`` is empty when WoRMS found nothing. The last eight
+columns keep their earlier meaning (``species`` is the epithet;
+``lowest`` is the most specific rank resolved). Names that WoRMS could
+not resolve, matched only fuzzily, or matched only to a genus are
+written to ``assets/taxonomy_unresolved.txt`` for the Species Log's
+maintainers.
 
 WoRMS is the gold-standard taxonomy authority for marine taxa, but it
 also accepts terrestrial / freshwater species. We pass
 ``marine_only=false`` so birds (Anhinga anhinga from the Pier cam
 spotting list), terrestrial crustaceans, etc. resolve correctly.
-
-Fallback chain when a binomial has no match:
-  1. Try ``/AphiaRecordsByMatchNames`` on the binomial (batch).
-  2. If empty, try the same endpoint with just the genus.
-  3. If empty, try the family.
-  4. Otherwise emit a row with only the manifest-known fields and
-     ``lowest=unknown``.
 
 Run idempotently — re-running with the same inputs reproduces the same
 CSV. WoRMS responses are cached per-batch (in-memory only) within a
@@ -37,11 +29,14 @@ run so a partial failure on one batch doesn't retry every name.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +57,13 @@ except ImportError as e:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "assets" / "species_manifest.json"
 OUT_CSV = REPO_ROOT / "assets" / "taxonomy.csv"
+DEFAULT_CLASSES = Path(os.environ.get(
+    "CLASSIFIER_V2_CLASSES_JSON",
+    str(REPO_ROOT / "data" / "models" / "classifier_v2" / "classes.json")))
+OUT_UNRESOLVED = REPO_ROOT / "assets" / "taxonomy_unresolved.txt"
+FIELDNAMES = ["raw_name", "aphia_id", "accepted_name", "authority", "rank", "match_type",
+              "status", "species", "genus", "family", "order", "class", "phylum",
+              "kingdom", "lowest"]
 
 WORMS_BASE = "https://www.marinespecies.org/rest"
 WORMS_BATCH_SIZE = 50            # API supports up to 50 names per call
@@ -116,93 +118,6 @@ def worms_match_batch(
         rec = pick_best_match(matches if isinstance(matches, list) else [])
         result[name] = rec
     return result
-
-
-def fetch_taxonomy(unique_binomials: list[str],
-                   fallback_genera: dict[str, str],
-                   fallback_families: dict[str, str]) -> dict[str, dict[str, Any]]:
-    """Resolve every binomial to a taxonomy dict.
-
-    ``fallback_genera``: {binomial: genus_string} for the genus fallback path.
-    ``fallback_families``: {binomial: family_string} for the family fallback path.
-
-    Returns {binomial: {kingdom, phylum, class, order, family, genus,
-    species, lowest}} where ``species`` is the species epithet (last
-    word of the binomial) when known.
-    """
-    out: dict[str, dict[str, Any]] = {}
-    with httpx.Client() as client:
-        # Stage 1: batch match the full binomials.
-        for i in range(0, len(unique_binomials), WORMS_BATCH_SIZE):
-            batch = unique_binomials[i:i + WORMS_BATCH_SIZE]
-            print(f"  worms batch {i // WORMS_BATCH_SIZE + 1}: {len(batch)} names")
-            res = worms_match_batch(client, batch)
-            time.sleep(0.5)   # polite pause between batches
-            for name, rec in res.items():
-                if rec:
-                    out[name] = _flatten(rec, lowest="species",
-                                         fallback_species=_species_epithet(name))
-                else:
-                    out[name] = None
-
-        # Stage 2: genus-only fallback for the still-unresolved.
-        unresolved = [n for n, v in out.items() if v is None]
-        unresolved_genera = sorted({fallback_genera[n] for n in unresolved if fallback_genera.get(n)})
-        if unresolved_genera:
-            print(f"  worms genus fallback: {len(unresolved_genera)} unique genera")
-            for i in range(0, len(unresolved_genera), WORMS_BATCH_SIZE):
-                batch = unresolved_genera[i:i + WORMS_BATCH_SIZE]
-                res = worms_match_batch(client, batch)
-                time.sleep(0.5)
-                for genus, rec in res.items():
-                    if not rec:
-                        continue
-                    flat = _flatten(rec, lowest="genus", fallback_species=None)
-                    for name in unresolved:
-                        if fallback_genera.get(name) == genus:
-                            out[name] = {
-                                **flat,
-                                # Keep the species epithet visible even though
-                                # we couldn't confirm it via WoRMS — it lets a
-                                # consumer reconstruct the binomial from the
-                                # row, and matches the user-provided spelling.
-                                "species": _species_epithet(name),
-                            }
-
-        # Stage 3: family-only fallback.
-        unresolved = [n for n, v in out.items() if v is None]
-        unresolved_families = sorted({fallback_families[n] for n in unresolved if fallback_families.get(n)})
-        if unresolved_families:
-            print(f"  worms family fallback: {len(unresolved_families)} families")
-            for i in range(0, len(unresolved_families), WORMS_BATCH_SIZE):
-                batch = unresolved_families[i:i + WORMS_BATCH_SIZE]
-                res = worms_match_batch(client, batch)
-                time.sleep(0.5)
-                for fam, rec in res.items():
-                    if not rec:
-                        continue
-                    flat = _flatten(rec, lowest="family", fallback_species=None)
-                    for name in unresolved:
-                        if fallback_families.get(name) == fam:
-                            out[name] = {
-                                **flat,
-                                "genus": fallback_genera.get(name),
-                                "species": _species_epithet(name),
-                                "family": fam,
-                            }
-
-        # Stage 4: leave any survivors as manifest-only rows.
-        for name, v in out.items():
-            if v is None:
-                out[name] = {
-                    "kingdom": None, "phylum": None, "class": None, "order": None,
-                    "family": fallback_families.get(name),
-                    "genus": fallback_genera.get(name),
-                    "species": _species_epithet(name),
-                    "lowest": "unknown",
-                }
-
-    return out
 
 
 def _flatten(rec: dict, *, lowest: str, fallback_species: str | None) -> dict[str, Any]:
@@ -299,75 +214,169 @@ def _epithet_from_scientificname(sci: str | None, genus: str | None) -> str | No
     return None
 
 
-def main() -> None:
-    if not MANIFEST_PATH.exists():
-        sys.exit(f"missing manifest: {MANIFEST_PATH} — run build_species_manifest.py first")
-    records = json.loads(MANIFEST_PATH.read_text())
+MatchBatch = Callable[[list[str]], dict[str, dict | None]]
 
-    # Dedupe by binomial; remember the manifest's family + genus for fallbacks.
-    # Filter out volunteer "TBC" placeholders and other non-Latin entries —
-    # they pollute the CSV without contributing useful taxonomy.
-    seen: dict[str, dict[str, str | None]] = {}
-    skipped_placeholders = 0
-    for r in records:
+
+def clean_query_name(raw: str | None) -> str | None:
+    """The name to send to WoRMS: 'Genus epithet', or just 'Genus' when the
+    epithet is a placeholder ('sp.', '.', '-'), or None when the text is
+    not a Latin name at all ('TBC')."""
+    if not raw:
+        return None
+    parts = raw.replace("_", " ").split()
+    if not parts or not LATIN_GENUS_RE.match(parts[0]):
+        return None
+    if len(parts) >= 2 and LATIN_EPITHET_RE.match(parts[1]):
+        return f"{parts[0]} {parts[1]}"
+    return parts[0]
+
+
+def collect_raw_names(manifest_records: list[dict], class_names: list[str]) -> list[str]:
+    raws = set()
+    for r in manifest_records:
         b = r.get("binomial")
-        genus = r.get("genus")
-        species = r.get("species")
-        if not b or not genus:
-            skipped_placeholders += 1
+        if b and b.strip():
+            raws.add(" ".join(b.split()))
+    for c in class_names:
+        raws.add(" ".join(c.replace("_", " ").split()))
+    return sorted(raws)
+
+
+def _accepted_fields(rec: dict | None) -> dict:
+    if not rec:
+        return {"aphia_id": None, "accepted_name": None, "authority": None, "rank": None,
+                "match_type": None, "status": None}
+    return {
+        "aphia_id": rec.get("valid_AphiaID") or rec.get("AphiaID"),
+        "accepted_name": rec.get("valid_name") or rec.get("scientificname"),
+        "authority": rec.get("valid_authority") or rec.get("authority"),
+        "rank": rec.get("rank"),
+        "match_type": rec.get("match_type"),
+        "status": rec.get("status"),
+    }
+
+
+def _batched(match_batch: MatchBatch, names: list[str]) -> dict[str, dict | None]:
+    found: dict[str, dict | None] = {}
+    for i in range(0, len(names), WORMS_BATCH_SIZE):
+        found.update(match_batch(names[i:i + WORMS_BATCH_SIZE]))
+    return found
+
+
+def resolve_names(raw_names: list[str], match_batch: MatchBatch) -> dict[str, dict]:
+    """Resolve each raw name: first as written (cleaned), then, for a
+    binomial with no match, by its genus alone."""
+    queries = {raw: clean_query_name(raw) for raw in raw_names}
+    found = _batched(match_batch, sorted({q for q in queries.values() if q}))
+    genera = sorted({q.split()[0] for q in found if found[q] is None and " " in q})
+    by_genus = _batched(match_batch, genera) if genera else {}
+    out: dict[str, dict] = {}
+    for raw, query in queries.items():
+        rec, via = None, None
+        if query:
+            rec = found.get(query)
+            via = "name" if rec else None
+            if rec is None and " " in query:
+                rec = by_genus.get(query.split()[0])
+                via = "genus" if rec else None
+        out[raw] = {"raw_name": raw, "query": query, "via": via, "record": rec,
+                    **_accepted_fields(rec)}
+    return out
+
+
+def build_rows(resolved: dict[str, dict], manifest_records: list[dict]) -> list[dict]:
+    families = {" ".join(r["binomial"].split()): r.get("family")
+                for r in manifest_records if r.get("binomial")}
+    rows = []
+    for raw in sorted(resolved):
+        res = resolved[raw]
+        rec = res["record"]
+        if rec:
+            # Take the epithet from the accepted name, not the matched one: a
+            # misspelled name matches an unaccepted record carrying the typo.
+            accepted = {**rec, "scientificname": res["accepted_name"] or rec.get("scientificname")}
+            ranks = _carry_down(_flatten(
+                accepted, lowest="species" if res["via"] == "name" else "genus",
+                fallback_species=_species_epithet(raw)))
+        else:
+            query = res["query"] or ""
+            ranks = {"kingdom": None, "phylum": None, "class": None, "order": None,
+                     "family": families.get(raw), "genus": query.split()[0] if query else None,
+                     "species": _species_epithet(query) if query else None,
+                     "lowest": "unknown"}
+        row = {k: res.get(k) for k in ("raw_name", "aphia_id", "accepted_name", "authority",
+                                        "rank", "match_type", "status")}
+        row.update({k: ranks.get(k) for k in ("species", "genus", "family", "order", "class",
+                                              "phylum", "kingdom", "lowest")})
+        rows.append(row)
+    return rows
+
+
+def unresolved_lines(resolved: dict[str, dict]) -> list[str]:
+    """Tab-separated: raw name, what is wrong, WoRMS's accepted name if any."""
+    lines = []
+    for raw in sorted(resolved):
+        res = resolved[raw]
+        if res["record"] is None:
+            problem = "no match"
+        elif res["via"] == "genus" or (res["query"] and " " in res["query"]
+                                       and (res.get("rank") or "").lower() == "genus"):
+            problem = "genus only"
+        elif res.get("match_type") and res["match_type"] != "exact":
+            problem = f"fuzzy match ({res['match_type']})"
+        else:
             continue
-        if not LATIN_GENUS_RE.match(genus):
-            skipped_placeholders += 1
-            continue
-        if species is not None and not LATIN_EPITHET_RE.match(species):
-            # Genus is valid Latin but the epithet is "sp.", ".", "-", etc.
-            # We keep the row but blank the bad species so the binomial reads
-            # as just the genus and we'll fall back to genus-level lookup.
-            species = None
-            b = genus
-        seen.setdefault(b, {
-            "family": r.get("family") if r.get("family") and LATIN_GENUS_RE.match(r.get("family") or "") else None,
-            "genus": genus,
-        })
-    if skipped_placeholders:
-        print(f"  skipped {skipped_placeholders} placeholder / non-Latin record(s)")
+        lines.append(f"{raw}\t{problem}\t{res.get('accepted_name') or ''}")
+    return lines
 
-    unique_binomials = sorted(seen)
-    fallback_genera = {b: v["genus"] for b, v in seen.items() if v["genus"]}
-    fallback_families = {b: v["family"] for b, v in seen.items() if v["family"]}
 
-    print(f"resolving taxonomy for {len(unique_binomials)} unique binomials via WoRMS")
-    tax = fetch_taxonomy(unique_binomials, fallback_genera, fallback_families)
+def _live_match_batch() -> MatchBatch:
+    client = httpx.Client()
 
-    fieldnames = ["species", "genus", "family", "order", "class", "phylum", "kingdom", "lowest"]
-    with OUT_CSV.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
+    def match(names: list[str]) -> dict[str, dict | None]:
+        print(f"  worms: {len(names)} names")
+        result = worms_match_batch(client, names)
+        time.sleep(0.5)   # polite pause between batches
+        return result
+
+    return match
+
+
+def main(argv: list[str] | None = None, match_batch: MatchBatch | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
+    ap.add_argument("--classes", type=Path, default=DEFAULT_CLASSES)
+    ap.add_argument("--out", type=Path, default=OUT_CSV)
+    ap.add_argument("--unresolved", type=Path, default=OUT_UNRESOLVED)
+    args = ap.parse_args(argv)
+
+    if not args.manifest.exists():
+        print(f"missing manifest: {args.manifest} (run build_species_manifest.py first)",
+              file=sys.stderr)
+        return 1
+    records = json.loads(args.manifest.read_text())
+    classes = json.loads(args.classes.read_text()) if args.classes.exists() else []
+    if not classes:
+        print(f"note: no classifier classes read from {args.classes}", file=sys.stderr)
+
+    raw_names = collect_raw_names(records, classes)
+    print(f"resolving {len(raw_names)} distinct names via WoRMS")
+    resolved = resolve_names(raw_names, match_batch or _live_match_batch())
+
+    rows = build_rows(resolved, records)
+    with args.out.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDNAMES)
         w.writeheader()
-        # Sort by kingdom → phylum → class → order → family → genus → species
-        # so the CSV reads as a coherent tree when opened in Excel.
-        rows = sorted(
-            (_carry_down(r) for r in tax.values()),
-            key=lambda r: tuple((r.get(k) or "").lower() for k in fieldnames),
-        )
         for row in rows:
-            w.writerow({k: row.get(k) or "" for k in fieldnames})
-
-    # Coverage report
-    by_lowest: dict[str, int] = {}
-    missing_kingdom = 0
-    for v in tax.values():
-        by_lowest[v["lowest"]] = by_lowest.get(v["lowest"], 0) + 1
-        if not v.get("kingdom"):
-            missing_kingdom += 1
-
-    print()
-    print(f"wrote {OUT_CSV.relative_to(REPO_ROOT)} ({len(tax)} rows)")
-    print("resolution breakdown:")
-    for level in ("species", "genus", "family", "unknown"):
-        if by_lowest.get(level):
-            print(f"  {level}: {by_lowest[level]}")
-    print(f"missing kingdom-rank coverage: {missing_kingdom}")
+            w.writerow({k: ("" if row.get(k) is None else row[k]) for k in FIELDNAMES})
+    problems = unresolved_lines(resolved)
+    args.unresolved.write_text(
+        "# raw_name\tproblem\taccepted_name  (fix these names in the Species Log)\n"
+        + "".join(line + "\n" for line in problems))
+    print(f"wrote {args.out} ({len(rows)} rows); {len(problems)} names need attention "
+          f"(see {args.unresolved})")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

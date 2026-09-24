@@ -1,0 +1,20 @@
+# raw_name	problem	accepted_name  (fix these names in the Species Log)
+Alligatoridae mississippiensis	genus only	Alligatoridae
+Apylsia morio	fuzzy match (near_1)	Aplysia morio
+Branchiomma nigromaculata	fuzzy match (near_2)	Branchiomma nigromaculatum
+Caranx lugubrious	fuzzy match (near_2)	Caranx lugubris
+Charybdis hellerii	fuzzy match (exact_subgenus)	Charybdis (Charybdis) hellerii
+Cronious ruber	fuzzy match (near_1)	Cronius ruber
+Eucinostomus/Ulaema lefroyi	no match	
+EucinostomusUlaema lefroyi	no match	
+Holacanthus townsendi	genus only	Holacanthus
+Holothuria thomasi	fuzzy match (exact_subgenus)	Holothuria (Thymiosycia) thomasi
+Kyphosus sectatrixbigibbus	genus only	Kyphosus
+Labrisomus nuchipinnius	fuzzy match (phonetic)	Labrisomus nuchipinnis
+Mithrax cinctimanus	genus only	Mithrax
+Ocyropsis immaculata	genus only	Ocyropsis
+Pomatomus saltarix	fuzzy match (near_1)	Pomatomus saltatrix
+Stenopus hispiduss	fuzzy match (phonetic)	Stenopus hispidus
+TBC	no match	
+TBC -	no match	
+poss. Gobioclinus	no match	
