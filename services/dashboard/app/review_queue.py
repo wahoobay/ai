@@ -196,13 +196,17 @@ async def retire_item(conn, item_id: int, reason: str) -> None:
                 WHERE id = %s""", (reason, item_id))
 
 
-def _safe_frame_size(image_path: str) -> tuple[int, int]:
+def safe_frame_size(image_path: str) -> tuple[int, int]:
     """frame_size(), but any failure to read or decode the file -- missing,
     zero-byte, truncated or corrupt -- becomes FrameMissing here rather
     than an OSError/ValueError reaching a caller as a raw 500. PIL's
     UnidentifiedImageError is an OSError subclass, so catching OSError
     covers a zero-byte or non-image file along with a plain missing one;
-    ValueError covers a header PIL parses but cannot size sensibly."""
+    ValueError covers a header PIL parses but cannot size sensibly.
+
+    Public and reused (not copied) by review_frames.frame_record, so a
+    corrupt or zero-byte frame is treated the same way -- 404, never a
+    500 -- whichever route reads it first."""
     try:
         width, height = frame_size(image_path)
     except (OSError, ValueError) as e:
@@ -217,7 +221,7 @@ async def build_payload(conn, item: dict, *, catalogue, counts, target: int,
     ev = await event_with_frame(conn, item["event_id"])
     if ev is None or ev["saved_frame_id"] is None:
         raise FrameMissing("this box's frame was not saved")
-    width, height = _safe_frame_size(ev["image_path"])
+    width, height = safe_frame_size(ev["image_path"])
     others = await fetch_all(conn, """
         SELECT id AS event_id, bbox FROM detection_events
          WHERE source_name = %s AND ts = %s AND frame_id = %s AND id <> %s
@@ -281,6 +285,31 @@ def validate_bbox(bbox, width: int, height: int) -> list[int]:
     return [x1, y1, x2, y2]
 
 
+def validate_label(body, *, catalogue, name: str | None) -> dict:
+    """'Not sure' and named-individual (celebrity) checks, plus the
+    confidence they imply, shared by _validate and
+    review_frames._validate_added.
+
+    Both callers' own outcome branching decides `name` first -- _validate
+    from the model's guess for 'accept' or from body.label for 'species'
+    (each outcome resolving body.label against the catalogue itself, with
+    its own message, since 'accept' and 'species' fail that check
+    differently); review_frames._validate_added the same way for its own
+    'species' outcome. This is the tail every outcome runs afterwards,
+    unconditionally: 'not sure' only applies once a species was chosen,
+    and a named individual must be recorded for that species. VerdictIn
+    and AddedBoxIn both carry `not_sure`/`celebrity_id` under these exact
+    names. Messages and behaviour are unchanged from before this was
+    extracted."""
+    if body.not_sure and name is None:
+        raise Invalid("'not sure' only applies to a species")
+    celebrity_id = (body.celebrity_id or "").strip() or None
+    if celebrity_id and celebrity_id not in catalogue.celebrity_ids(name):
+        raise Invalid("that named individual is not recorded for this species")
+    return {"confidence": "uncertain" if body.not_sure else "certain",
+            "celebrity_id": celebrity_id}
+
+
 def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: int,
               height: int, adjudication: bool) -> dict:
     bbox = None
@@ -315,14 +344,10 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
                 raise Invalid("that species was not one of the hints")
     elif body.label or body.label_source:
         raise Invalid("no species goes with this answer")
-    if body.not_sure and name is None:
-        raise Invalid("'not sure' only applies to a species")
-    celebrity_id = (body.celebrity_id or "").strip() or None
-    if celebrity_id and celebrity_id not in catalogue.celebrity_ids(name):
-        raise Invalid("that named individual is not recorded for this species")
+    extra = validate_label(body, catalogue=catalogue, name=name)
     return {"name": name, "life_stage": life_stage, "label_source": label_source, "bbox": bbox,
-            "confidence": "uncertain" if body.not_sure else "certain",
-            "celebrity_id": celebrity_id, "notes": (body.notes or "").strip() or None}
+            "confidence": extra["confidence"], "celebrity_id": extra["celebrity_id"],
+            "notes": (body.notes or "").strip() or None}
 
 
 # Every stored column that records the volunteer's answer, the box
@@ -438,7 +463,7 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
             raise NotFound("no such detection")
         if ev["saved_frame_id"] is None:
             raise Invalid("this detection's frame was not saved")
-        width, height = _safe_frame_size(ev["image_path"])
+        width, height = safe_frame_size(ev["image_path"])
 
         item = None
         if body.review_item_id is not None and not adjudication:
@@ -492,7 +517,22 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
 
         blind = item is not None and item["pass"] == 2
         guess = (item or {}).get("predicted") or catalogue.accepted(ev["best_species_id"])
-        v = _validate(body, catalogue=catalogue, guess=guess, item=item, blind=blind,
+        hint_item = item
+        if item is None and not adjudication:
+            # Whole-frame verdicts carry no item id (spec: item id absent
+            # for whole-frame boxes), so a hint chip chosen there has no
+            # `item` to check against -- look up the event's own latest
+            # pass-1 item (any status) for its hints alone, without
+            # disturbing `item` itself, which the code below still uses
+            # to decide the review_items UPDATE and the stored
+            # review_item_id. A blind (pass-2) answer is unaffected:
+            # `blind` already forces label_source "hint" to be refused
+            # below regardless of any hint list.
+            hint_item = await fetch_one(conn, """
+                SELECT hints FROM review_items
+                 WHERE event_id = %s AND pass = 1
+                 ORDER BY added_at DESC, id DESC LIMIT 1""", (body.event_id,))
+        v = _validate(body, catalogue=catalogue, guess=guess, item=hint_item, blind=blind,
                       width=width, height=height, adjudication=adjudication)
 
         if item is None and not adjudication:

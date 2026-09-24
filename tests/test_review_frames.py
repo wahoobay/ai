@@ -5,6 +5,7 @@ import io
 import json
 import random
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from app.review_catalogue import CatalogueStore
@@ -17,10 +18,11 @@ from app.review_frames import (
     remove_box,
     update_box,
 )
-from app.review_queue import Conflict, Forbidden, Invalid, VerdictIn, submit_verdict
+from app.review_queue import Conflict, Forbidden, Invalid, VerdictIn, skip_item, submit_verdict
 from PIL import Image
 from review_fixtures import (
     CSRF,
+    T0,
     add_item,
     add_verdict,
     as_user,
@@ -70,6 +72,14 @@ async def test_each_box_shows_what_this_volunteer_may_see(rdb, tmp_path, cat):
     # the first reviewer does see their own answer
     theirs = await _state(rdb, f, as_user(other), cat)
     assert theirs["boxes"][1]["state"] == "answered"
+    # Important 1: admins get no exception -- they can be served a
+    # spot-check themselves, so the frame view must not let them read
+    # ahead of one they didn't give the first verdict on
+    boss = await make_user(rdb, "boss", role="admin")
+    admins = await _state(rdb, f, as_user(boss, role="admin"), cat)
+    assert admins["boxes"][1]["state"] == "answered_hidden"
+    assert admins["boxes"][1]["label"] is None
+    assert "Pomatomus saltatrix" not in json.dumps(admins["boxes"][1])
 
 
 async def test_opening_claims_the_frames_open_boxes(rdb, tmp_path, cat):
@@ -151,3 +161,168 @@ async def test_whole_frame_over_http(rdb, rclient, tmp_path):
     assert rclient.post(f"/api/review/frames/{sf}/complete", headers=CSRF).status_code == 200
     assert rclient.delete(f"/api/review/frames/{sf}/complete", headers=CSRF).status_code == 403
     assert rclient.get(f"/api/review/frames/{sf}").json()["complete"] is not None
+
+
+async def test_an_admin_sees_the_answer_once_the_spot_check_is_done(rdb, tmp_path, cat):
+    """Important 1, second half: the hiding only lasts while the
+    spot-check is open or claimed. Once it has an answer too, an admin
+    sees the box resolved like anyone else."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    other = await make_user(rdb, "other")
+    boss = await make_user(rdb, "boss", role="admin")
+    eid = f["event_ids"][0]
+    first = await add_verdict(rdb, eid, other, name="Seriola zonata")
+    item = await add_item(rdb, f, 0, pass_=2, exclude_user_id=other, first_correction_id=first)
+    hidden = await _state(rdb, f, as_user(boss, role="admin"), cat)
+    assert hidden["boxes"][0]["state"] == "answered_hidden"
+    await add_verdict(rdb, eid, boss, name="Seriola zonata", item_id=item)
+    async with rdb.connection() as conn:
+        await conn.execute("UPDATE review_items SET status = 'done' WHERE id = %s", (item,))
+    resolved = await _state(rdb, f, as_user(boss, role="admin"), cat)
+    assert resolved["boxes"][0]["state"] == "answered"
+    assert resolved["boxes"][0]["label"] == "Seriola zonata"
+
+
+async def test_open_and_get_treat_a_corrupt_or_zero_byte_frame_as_missing(rdb, rclient, tmp_path):
+    """Important 2: only FileNotFoundError was caught, so a zero-byte or
+    corrupt frame raised PIL.UnidentifiedImageError -- a raw 500 -- on
+    open and get, and frame_open's claim (made before frame_state ever
+    read the file) stayed in place regardless of the failure."""
+    await make_user(rdb, "rev")
+    login(rclient, "rev")
+    for i, content in enumerate((b"", b"this is not a jpeg")):
+        f = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(minutes=i), frame_id=900 + i,
+                             boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}])
+        item = await add_item(rdb, f, 0, predicted="Seriola zonata", route="Seriola zonata")
+        Path(f["image_path"]).write_bytes(content)
+        sf = f["saved_frame_id"]
+        assert rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF).status_code == 404
+        assert rclient.get(f"/api/review/frames/{sf}").status_code == 404
+        async with rdb.connection() as conn:
+            cur = await conn.execute("SELECT status FROM review_items WHERE id = %s", (item,))
+            status = (await cur.fetchone())[0]
+        assert status == "open"   # no claim left behind by the failed open
+
+
+async def test_added_zoom_treats_a_corrupt_or_zero_byte_frame_as_missing(rdb, rclient, tmp_path):
+    """Important 2, the drawn-box zoom: added_zoom must catch the same set
+    box_zoom already does, not just FileNotFoundError. The box is
+    inserted directly (not through POST .../boxes, which would itself
+    read the frame while it is still a valid image) because frame_size
+    is cached by path: a successful read before corruption would leave
+    the pre-corruption size cached and mask the bug this test is for."""
+    rev = await make_user(rdb, "rev")
+    login(rclient, "rev")
+    for i, content in enumerate((b"", b"this is not a jpeg")):
+        f = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(minutes=i), frame_id=910 + i,
+                             boxes=[])
+        Path(f["image_path"]).write_bytes(content)
+        async with rdb.connection() as conn:
+            cur = await conn.execute("""
+                INSERT INTO review_added_boxes (saved_frame_id, bbox, outcome, user_id)
+                     VALUES (%s, %s, 'unidentifiable', %s) RETURNING id""",
+                (f["saved_frame_id"], [20, 20, 120, 90], rev))
+            box_id = (await cur.fetchone())[0]
+        assert rclient.get(f"/api/review/added/{box_id}/zoom.jpg").status_code == 404
+
+
+async def test_open_frame_does_not_reclaim_a_box_the_volunteer_skipped(rdb, tmp_path, cat):
+    """Minor 1: open_frame ignored review_skips, so opening the frame
+    again re-claimed a box the volunteer had just skipped."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    me = await make_user(rdb, "me")
+    item = await add_item(rdb, f, 0, predicted="Seriola zonata", route="Seriola zonata",
+                          status="claimed", claimed_by=me,
+                          claimed_until=datetime.now(UTC) + timedelta(minutes=5))
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=me, item_id=item)
+        await open_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me, claim_s=600)
+        cur = await conn.execute("SELECT status, claimed_by FROM review_items WHERE id = %s",
+                                 (item,))
+        status, claimed_by = await cur.fetchone()
+    assert status == "open" and claimed_by is None
+
+
+async def test_open_frame_leaves_someone_elses_live_claim_locked(rdb, tmp_path, cat):
+    """The review's coverage gap: opening the frame must not touch a box
+    someone else is actively holding -- it stays theirs, shown locked."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    item = await add_item(rdb, f, 0, status="claimed", claimed_by=other,
+                          claimed_until=datetime.now(UTC) + timedelta(minutes=5))
+    async with rdb.connection() as conn:
+        await open_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me, claim_s=600)
+    state = await _state(rdb, f, as_user(me), cat)
+    assert state["boxes"][0]["state"] == "locked"
+    async with rdb.connection() as conn:
+        cur = await conn.execute("SELECT claimed_by FROM review_items WHERE id = %s", (item,))
+        claimed_by = (await cur.fetchone())[0]
+    assert claimed_by == other
+
+
+async def test_a_completion_racing_a_stale_read_still_gets_already_true(rdb, tmp_path, cat,
+                                                                         monkeypatch):
+    """Minor 4: the ON CONFLICT DO NOTHING result was never read, so a
+    completer whose pre-check read "not complete" got already: False even
+    when someone else's completion had, by the time of its own INSERT,
+    already won. Reproduced deterministically -- real concurrency over
+    two connections raced this same way but was timing-dependent, passing
+    or failing depending on how the two interleaved -- by letting user
+    "one" actually complete the frame first, then patching frame_state to
+    keep telling user "two" it is still incomplete, exactly as a stale
+    pre-check read before one's commit would. The fix must tell two's
+    INSERT apart from one's by its own RETURNING result, not by trusting
+    that stale read."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
+    await add_verdict(rdb, f["event_ids"][0], one, name="Seriola zonata")
+    sf = f["saved_frame_id"]
+    async with rdb.connection() as conn:
+        first = await complete_frame(conn, saved_frame_id=sf, user=as_user(one), catalogue=cat)
+    assert first == {"complete": True, "already": False}
+
+    async def _stale_incomplete(conn, *, saved_frame_id, user, catalogue):
+        return {"complete": None, "blocking": []}
+
+    monkeypatch.setattr("app.review_frames.frame_state", _stale_incomplete)
+    async with rdb.connection() as conn:
+        second = await complete_frame(conn, saved_frame_id=sf, user=as_user(two), catalogue=cat)
+    assert second == {"complete": True, "already": True}
+
+
+async def test_added_zoom_404s_for_a_removed_box(rdb, rclient, tmp_path):
+    """Minor 5: added_zoom's query lacked removed_at IS NULL, so a
+    removed box's zoom was still served."""
+    await make_user(rdb, "rev")
+    login(rclient, "rev")
+    f = await seed_frame(rdb, tmp_path, boxes=[])
+    sf = f["saved_frame_id"]
+    added = rclient.post(f"/api/review/frames/{sf}/boxes", headers=CSRF, json={
+        "bbox": [20, 20, 120, 90], "outcome": "unidentifiable"}).json()
+    assert rclient.get(f"/api/review/added/{added['id']}/zoom.jpg").status_code == 200
+    assert rclient.delete(f"/api/review/frames/{sf}/boxes/{added['id']}",
+                          headers=CSRF).status_code == 200
+    assert rclient.get(f"/api/review/added/{added['id']}/zoom.jpg").status_code == 404
+
+
+async def test_frame_mode_verdicts_accept_a_hint_despite_no_item_id(rdb, tmp_path, cat):
+    """The review's ⚠️: whole-frame verdicts carry no item id (spec), so
+    the no-item path must read the event's own pass-1 item for its hints
+    instead of always refusing label_source 'hint'. A species not among
+    those hints is still refused."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90]},
+                                               {"bbox": [200, 10, 300, 90]}])
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    hints = [{"name": "Pomatomus saltatrix", "p": 0.4}]
+    await add_item(rdb, f, 0, status="done", hints=hints)
+    await add_item(rdb, f, 1, status="done", hints=hints)
+    async with rdb.connection() as conn:
+        out = await submit_verdict(conn, user=as_user(me), body=VerdictIn(
+            event_id=f["event_ids"][0], outcome="species", label="Pomatomus saltatrix",
+            label_source="hint"), catalogue=cat, spot_rate=0.0, rng=random.Random(0))
+    assert out["label"] == "Pomatomus saltatrix"
+    async with rdb.connection() as conn:
+        with pytest.raises(Invalid, match="not one of the hints"):
+            await submit_verdict(conn, user=as_user(other), body=VerdictIn(
+                event_id=f["event_ids"][1], outcome="species", label="Seriola zonata",
+                label_source="hint"), catalogue=cat, spot_rate=0.0, rng=random.Random(0))

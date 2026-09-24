@@ -17,6 +17,7 @@ from .review_frames import (
     AddedBoxIn,
     add_box,
     complete_frame,
+    frame_record,
     frame_state,
     open_frame,
     remove_box,
@@ -201,6 +202,9 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def frame_open(saved_frame_id: int, user=Depends(reviewer)):
         async with _db().connection() as conn:
             try:
+                # Read (and validate) the frame before claiming anything,
+                # so a missing or unreadable frame leaves no claims behind.
+                await frame_record(conn, saved_frame_id)
                 await open_frame(conn, saved_frame_id=saved_frame_id, user_id=user.id,
                                  claim_s=cfg.review_claim_s)
                 return JSONResponse(await frame_state(conn, saved_frame_id=saved_frame_id,
@@ -255,12 +259,12 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             row = await fetch_one(conn, """
                 SELECT a.bbox, sf.image_path FROM review_added_boxes a
                   JOIN saved_frames sf ON sf.id = a.saved_frame_id
-                 WHERE a.id = %s""", (box_id,))
+                 WHERE a.id = %s AND a.removed_at IS NULL""", (box_id,))
         if row is None:
             return JSONResponse({"error": "no such drawn box"}, status_code=404)
         try:
             width, height = await asyncio.to_thread(frame_size, row["image_path"])
-        except FileNotFoundError:
+        except (OSError, ValueError):
             return JSONResponse({"error": "image file missing on disk"}, status_code=404)
         return await _jpeg(render_zoom, row["image_path"],
                            zoom_region(row["bbox"], width, height))

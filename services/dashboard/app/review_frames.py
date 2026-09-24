@@ -22,17 +22,18 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from .auth import effective_role
-from .review_images import frame_size, zoom_region
+from .review_images import zoom_region
 from .review_labels import resolve_all
 from .review_queue import (
     Conflict,
     Forbidden,
-    FrameMissing,
     Invalid,
     NotFound,
     fetch_all,
     fetch_one,
+    safe_frame_size,
     validate_bbox,
+    validate_label,
 )
 
 
@@ -54,10 +55,7 @@ async def frame_record(conn, saved_frame_id: int) -> dict:
                                      FROM saved_frames WHERE id = %s""", (saved_frame_id,))
     if row is None:
         raise NotFound("no such frame")
-    try:
-        row["width"], row["height"] = frame_size(row["image_path"])
-    except FileNotFoundError as e:
-        raise FrameMissing("this frame is missing on disk") from e
+    row["width"], row["height"] = safe_frame_size(row["image_path"])
     return row
 
 
@@ -65,11 +63,13 @@ async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int) -
     async with conn.transaction(), conn.cursor() as cur:
         await cur.execute("""
             UPDATE review_items
-               SET status = 'claimed', claimed_by = %s,
-                   claimed_until = now() + make_interval(secs => %s)
-             WHERE saved_frame_id = %s AND pass = 1
-               AND (status = 'open' OR (status = 'claimed' AND claimed_until < now()))""",
-                          (user_id, claim_s, saved_frame_id))
+               SET status = 'claimed', claimed_by = %(uid)s,
+                   claimed_until = now() + make_interval(secs => %(claim_s)s)
+             WHERE saved_frame_id = %(sf)s AND pass = 1
+               AND (status = 'open' OR (status = 'claimed' AND claimed_until < now()))
+               AND NOT EXISTS (SELECT 1 FROM review_skips s
+                                WHERE s.item_id = review_items.id AND s.user_id = %(uid)s)""",
+                          {"uid": user_id, "claim_s": claim_s, "sf": saved_frame_id})
 
 
 async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
@@ -99,7 +99,11 @@ async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
         r = resolved.get(e["id"])
         if r is None:
             state = "locked" if held_by_other else "needs_answer"
-        elif pending_check and e["id"] not in mine and not _is_admin(user):
+        elif pending_check and e["id"] not in mine:
+            # Spec Sec7 makes no admin exception: admins can be served a
+            # spot-check themselves, so the earlier answer stays hidden
+            # from everyone but whoever gave it, admins included, while
+            # the check is still open or claimed.
             state = "answered_hidden"
         else:
             state = "answered"
@@ -159,14 +163,9 @@ def _validate_added(body: AddedBoxIn, *, catalogue, width: int, height: int) -> 
         label, life_stage = body.label, body.life_stage
     elif body.label:
         raise Invalid("no species goes with this answer")
-    elif body.not_sure:
-        raise Invalid("'not sure' only applies to a species")
-    celebrity_id = (body.celebrity_id or "").strip() or None
-    if celebrity_id and celebrity_id not in catalogue.celebrity_ids(label):
-        raise Invalid("that named individual is not recorded for this species")
+    extra = validate_label(body, catalogue=catalogue, name=label)
     return {"bbox": bbox, "label": label, "life_stage": life_stage,
-            "confidence": "uncertain" if body.not_sure else "certain",
-            "celebrity_id": celebrity_id}
+            "confidence": extra["confidence"], "celebrity_id": extra["celebrity_id"]}
 
 
 async def _is_complete(conn, saved_frame_id: int) -> bool:
@@ -235,11 +234,16 @@ async def complete_frame(conn, *, saved_frame_id: int, user, catalogue) -> dict:
         return {"complete": True, "already": True}
     if state["blocking"]:
         raise Conflict("answer box " + ", ".join(str(n) for n in state["blocking"]) + " first")
-    async with conn.transaction(), conn.cursor() as cur:
-        await cur.execute("""INSERT INTO review_frames (saved_frame_id, completed_by, session_id)
-                             VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
-                          (saved_frame_id, user.id, user.session_id))
-    return {"complete": True, "already": False}
+    async with conn.transaction():
+        # Racing another completer whose own pre-check also read
+        # "not complete": read back whether THIS insert is the one that
+        # actually won, rather than trusting the pre-check above, which
+        # is stale the moment two completions overlap.
+        row = await fetch_one(conn, """
+            INSERT INTO review_frames (saved_frame_id, completed_by, session_id)
+                 VALUES (%s, %s, %s) ON CONFLICT DO NOTHING RETURNING saved_frame_id""",
+                              (saved_frame_id, user.id, user.session_id))
+    return {"complete": True, "already": row is None}
 
 
 async def uncomplete_frame(conn, *, saved_frame_id: int) -> None:
