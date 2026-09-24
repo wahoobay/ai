@@ -26,10 +26,12 @@ from .review_images import frame_size, zoom_region
 
 LANES = ("check", "identify")
 
-# A same-user resubmit that names the same outcome, label, life stage and
-# box as their own last verdict on this event, within this many seconds,
-# returns that existing verdict instead of inserting a duplicate row (a
-# double click or a retried request on the no-item path).
+# A same-user resubmit on the no-item path (a double click or a retried
+# request) within this many seconds returns their own last verdict on this
+# event instead of inserting a duplicate row -- but only when it matches
+# that verdict in every column of _VERDICT_IDENTITY_COLUMNS. A test checks
+# that tuple and _VERDICT_NON_IDENTITY_COLUMNS against the table's real
+# columns, so a new column cannot be left out of the comparison unnoticed.
 DUPLICATE_WINDOW_S = 10
 
 
@@ -323,14 +325,30 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
             "celebrity_id": celebrity_id, "notes": (body.notes or "").strip() or None}
 
 
-# Every stored field that identifies a verdict as "the same answer" for
-# dedup purposes, other than corrected_bbox (handled separately below --
-# it needs list-normalization, not a plain equality). A future column
-# that changes what a verdict means belongs in this one tuple: both the
-# SELECT and the comparison in _duplicate_verdict read it from here, so
-# adding a column to one and not the other cannot happen silently.
+# Every stored column that records the volunteer's answer, the box
+# included: a same-user resubmit within DUPLICATE_WINDOW_S is a duplicate
+# only when all of them match their last verdict on the event. Both the
+# SELECT and the comparison in _duplicate_verdict read this one tuple.
 _VERDICT_IDENTITY_COLUMNS = ("not_a_fish", "unidentifiable", "corrected_name", "life_stage",
-                             "label_source", "confidence", "celebrity_id", "notes")
+                             "label_source", "confidence", "celebrity_id", "notes",
+                             "corrected_bbox")
+
+# Every other detection_corrections column, and why a verdict that differs
+# only there is still the same answer. The two tuples must be disjoint and
+# together name every column of the table: a test reads the real columns
+# from information_schema, so a new column fails it until it is classified.
+_VERDICT_NON_IDENTITY_COLUMNS = (
+    "id",                    # the row's own key; every insert gets a new one
+    "created_at",            # when, not what: the window itself is measured on it
+    "event_id",              # lookup key: only rows on this same box are compared
+    "user_id",               # lookup key: only this user's own rows are compared
+    "is_adjudication",       # filter: adjudications are never compared or deduplicated
+    "review_item_id",        # which queue item served the box: a link (NULL on the dedup path)
+    "session_id",            # which login recorded it, not what was answered
+    "reviewer",              # who, not what: the user's display name (a legacy column)
+    "corrected_species_id",  # derived: submit_verdict stores corrected_name here too
+    "is_endorsement",        # derived: corrected_name == the model's guess for this box
+)
 
 
 def _verdict_identity(v: dict, outcome: str) -> dict:
@@ -340,7 +358,7 @@ def _verdict_identity(v: dict, outcome: str) -> dict:
     return {"not_a_fish": outcome == "no_animal", "unidentifiable": outcome == "unidentifiable",
             "corrected_name": v["name"], "life_stage": v["life_stage"],
             "label_source": v["label_source"], "confidence": v["confidence"],
-            "celebrity_id": v["celebrity_id"], "notes": v["notes"]}
+            "celebrity_id": v["celebrity_id"], "notes": v["notes"], "corrected_bbox": v["bbox"]}
 
 
 def _stored_outcome(row: dict) -> str:
@@ -362,7 +380,7 @@ def _stored_outcome(row: dict) -> str:
 async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outcome: str
                              ) -> dict | None:
     """A same-user resubmit within DUPLICATE_WINDOW_S whose stored columns
-    -- every one of _VERDICT_IDENTITY_COLUMNS, plus the box -- all match
+    -- every one of _VERDICT_IDENTITY_COLUMNS, the box included -- all match
     their own last verdict on this event: return that existing verdict's
     response, read from the stored row throughout, instead of inserting a
     second row. A double click or a retried request on the no-item path
@@ -373,16 +391,18 @@ async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outc
     normally, this is not a duplicate."""
     cols = ", ".join(_VERDICT_IDENTITY_COLUMNS)
     recent = await fetch_one(conn, f"""
-        SELECT id, created_at, corrected_bbox, {cols}
+        SELECT id, created_at, {cols}
           FROM detection_corrections
          WHERE event_id = %s AND user_id = %s AND NOT is_adjudication
          ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user_id))
     if recent is None or recent["created_at"] < datetime.now(UTC) - timedelta(
             seconds=DUPLICATE_WINDOW_S):
         return None
-    same_bbox = (list(recent["corrected_bbox"]) if recent["corrected_bbox"] else None) == v["bbox"]
+    # The stored box compares as a plain list, or None when there is none.
+    stored = {**recent, "corrected_bbox": (list(recent["corrected_bbox"])
+                                           if recent["corrected_bbox"] else None)}
     current = _verdict_identity(v, outcome)
-    if not same_bbox or any(recent[col] != current[col] for col in _VERDICT_IDENTITY_COLUMNS):
+    if any(stored[col] != current[col] for col in _VERDICT_IDENTITY_COLUMNS):
         return None
     spot = await fetch_one(conn, """SELECT id FROM review_items
                                      WHERE event_id = %s AND pass = 2

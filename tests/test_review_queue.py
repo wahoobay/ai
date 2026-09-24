@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from app.review_catalogue import CatalogueStore
 from app.review_queue import (
+    _VERDICT_IDENTITY_COLUMNS,
+    _VERDICT_NON_IDENTITY_COLUMNS,
     Conflict,
     Forbidden,
     FrameMissing,
@@ -710,6 +712,58 @@ async def test_a_double_submit_within_the_window_returns_the_existing_verdict(rd
     # a genuinely different answer from the same user is not deduplicated
     changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="no_animal")
     assert changed["duplicate"] is False and changed["id"] != first["id"]
+
+
+async def test_every_detection_corrections_column_is_either_compared_or_excluded(rdb):
+    """_duplicate_verdict compares exactly _VERDICT_IDENTITY_COLUMNS. A column
+    added to the table (and to submit_verdict's INSERT) but named in neither
+    tuple would go uncompared, so a resubmit that changed only that column
+    within the window would be dropped as a duplicate. The two tuples must
+    be disjoint and together name exactly the columns the table really has,
+    read from the test database's own schema."""
+    async with rdb.connection() as conn:
+        cur = await conn.execute("""
+            SELECT column_name FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name = 'detection_corrections'""")
+        columns = {name for (name,) in await cur.fetchall()}
+    compared, excluded = set(_VERDICT_IDENTITY_COLUMNS), set(_VERDICT_NON_IDENTITY_COLUMNS)
+    assert compared & excluded == set()
+    assert compared | excluded == columns
+
+
+async def test_a_changed_corrected_name_within_the_window_is_not_deduplicated(rdb, tmp_path,
+                                                                              cat):
+    """Species X, then species Y from the same search: only corrected_name
+    differs, so the second answer is a new verdict."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="species",
+                           label="Seriola zonata", label_source="search")
+    changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="species",
+                             label="Acanthurus coeruleus", label_source="search")
+    assert changed["duplicate"] is False and changed["id"] != first["id"]
+    row = await _row(rdb, "SELECT corrected_name FROM detection_corrections WHERE id = %s",
+                     changed["id"])
+    assert row == ("Acanthurus coeruleus",)
+
+
+async def test_a_changed_life_stage_within_the_window_is_not_deduplicated(rdb, tmp_path, cat):
+    """The model's guess accepted as a juvenile, then as an adult: only
+    life_stage differs, so the second answer is a new verdict."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Pomacanthus paru"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept",
+                           life_stage="juvenile")
+    changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept",
+                             life_stage="adult")
+    assert changed["duplicate"] is False and changed["id"] != first["id"]
+    row = await _row(rdb, "SELECT life_stage FROM detection_corrections WHERE id = %s",
+                     changed["id"])
+    assert row == ("adult",)
 
 
 async def test_a_changed_confidence_within_the_window_is_not_deduplicated(rdb, tmp_path, cat):
