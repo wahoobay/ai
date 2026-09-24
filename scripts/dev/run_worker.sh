@@ -3,7 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-if ! command -v python >/dev/null 2>&1; then
+# Activate the project env unless it already is. Testing only that *a*
+# python exists is not enough: a login shell with conda's base env on
+# PATH has one, without uvicorn or any other project dependency.
+if [[ "${CONDA_DEFAULT_ENV:-}" != wahoobay ]]; then
   CONDA_SH="${CONDA_SH:-/raid/scratch/dzimmerman2021/miniconda3/etc/profile.d/conda.sh}"
   if [[ -f "$CONDA_SH" ]]; then
     # shellcheck disable=SC1090
