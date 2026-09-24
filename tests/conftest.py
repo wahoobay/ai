@@ -7,7 +7,47 @@ autouse fixture — rather than something each test file has to remember
 to apply — is the fix."""
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# The test database DSN can be handed over in a file rather than the
+# environment, so it never appears on a command line or needs shell
+# expansion: TEST_DATABASE_URL_FILE=.superpowers/test_dsn pytest ...
+# Test modules read TEST_DATABASE_URL when they are imported, which is
+# after this conftest runs, so setting it here is early enough.
+_dsn_file = os.environ.get("TEST_DATABASE_URL_FILE")
+if _dsn_file and not os.environ.get("TEST_DATABASE_URL"):
+    os.environ["TEST_DATABASE_URL"] = Path(_dsn_file).read_text().strip()
+
+if os.environ.get("TEST_DATABASE_URL"):
+    from psycopg.conninfo import conninfo_to_dict
+
+    if conninfo_to_dict(os.environ["TEST_DATABASE_URL"]).get("dbname") == "wahoobay":
+        # These tests TRUNCATE tables. The production database is named
+        # 'wahoobay'. Refuse outright instead of trusting every caller.
+        raise pytest.UsageError(
+            "TEST_DATABASE_URL points at the production database 'wahoobay'")
+
+from review_fixtures import rclient, rdb, review_assets  # noqa: E402,F401
+
+MIGRATION = REPO_ROOT / "db" / "migrations" / "2026-09-24-review-tool.sql"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _review_schema():
+    """Bring the test database up to the review-tool schema once per run.
+    The migration is idempotent, so after the first run this is a no-op."""
+    dsn = os.environ.get("TEST_DATABASE_URL")
+    if not dsn:
+        return
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(MIGRATION.read_text())
 
 
 @pytest.fixture(autouse=True)
@@ -43,3 +83,7 @@ def _isolate_network(monkeypatch):
     monkeypatch.setenv("DASHBOARD_MAIL_BACKEND", "manual")
     monkeypatch.setenv("DASHBOARD_SMTP_HOST", "")
     monkeypatch.setenv("DASHBOARD_SMTP_PASSWORD", "")
+
+    # The review pool's background task would fill review_items behind a
+    # test's back. Tests that need a pool run call ReviewPool.run_once().
+    monkeypatch.setenv("REVIEW_POOL_ENABLED", "false")
