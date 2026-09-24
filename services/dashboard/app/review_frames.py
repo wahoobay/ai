@@ -55,7 +55,8 @@ async def frame_record(conn, saved_frame_id: int) -> dict:
                                      FROM saved_frames WHERE id = %s""", (saved_frame_id,))
     if row is None:
         raise NotFound("no such frame")
-    row["width"], row["height"] = safe_frame_size(row["image_path"])
+    row["width"], row["height"] = safe_frame_size(row["image_path"],
+                                                   message="this frame is missing on disk")
     return row
 
 

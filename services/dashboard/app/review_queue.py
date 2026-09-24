@@ -196,7 +196,8 @@ async def retire_item(conn, item_id: int, reason: str) -> None:
                 WHERE id = %s""", (reason, item_id))
 
 
-def safe_frame_size(image_path: str) -> tuple[int, int]:
+def safe_frame_size(image_path: str, message: str = "this box's frame is missing on disk"
+                    ) -> tuple[int, int]:
     """frame_size(), but any failure to read or decode the file -- missing,
     zero-byte, truncated or corrupt -- becomes FrameMissing here rather
     than an OSError/ValueError reaching a caller as a raw 500. PIL's
@@ -206,13 +207,16 @@ def safe_frame_size(image_path: str) -> tuple[int, int]:
 
     Public and reused (not copied) by review_frames.frame_record, so a
     corrupt or zero-byte frame is treated the same way -- 404, never a
-    500 -- whichever route reads it first."""
+    500 -- whichever route reads it first. `message` defaults to this
+    module's own wording (a box's frame); frame_record passes its own,
+    so whole-frame mode's 404s keep saying "this frame", not "this box's
+    frame"."""
     try:
         width, height = frame_size(image_path)
     except (OSError, ValueError) as e:
-        raise FrameMissing("this box's frame is missing on disk") from e
+        raise FrameMissing(message) from e
     if width <= 0 or height <= 0:
-        raise FrameMissing("this box's frame is missing on disk")
+        raise FrameMissing(message)
     return width, height
 
 

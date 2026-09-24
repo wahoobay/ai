@@ -165,17 +165,22 @@ async def test_whole_frame_over_http(rdb, rclient, tmp_path):
 
 async def test_an_admin_sees_the_answer_once_the_spot_check_is_done(rdb, tmp_path, cat):
     """Important 1, second half: the hiding only lasts while the
-    spot-check is open or claimed. Once it has an answer too, an admin
-    sees the box resolved like anyone else."""
+    spot-check is open or claimed. Once a THIRD user -- not the admin
+    watching, and not the first reviewer -- has answered it too, the
+    admin, who gave no verdict of their own on this box, sees it resolved
+    like anyone else. (Round 2: the admin must not be the one who
+    answers the spot-check, or `mine` shows the answer regardless of
+    hiding, making this test unable to fail.)"""
     f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
-    other = await make_user(rdb, "other")
+    other, checker = await make_user(rdb, "other"), await make_user(rdb, "checker")
     boss = await make_user(rdb, "boss", role="admin")
     eid = f["event_ids"][0]
     first = await add_verdict(rdb, eid, other, name="Seriola zonata")
     item = await add_item(rdb, f, 0, pass_=2, exclude_user_id=other, first_correction_id=first)
     hidden = await _state(rdb, f, as_user(boss, role="admin"), cat)
     assert hidden["boxes"][0]["state"] == "answered_hidden"
-    await add_verdict(rdb, eid, boss, name="Seriola zonata", item_id=item)
+    assert hidden["boxes"][0]["outcome"] is None and hidden["boxes"][0]["label"] is None
+    await add_verdict(rdb, eid, checker, name="Seriola zonata", item_id=item)
     async with rdb.connection() as conn:
         await conn.execute("UPDATE review_items SET status = 'done' WHERE id = %s", (item,))
     resolved = await _state(rdb, f, as_user(boss, role="admin"), cat)

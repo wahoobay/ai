@@ -20,7 +20,11 @@ ZOOM_MAX_EDGE = 960
 
 @lru_cache(maxsize=4096)
 def frame_size(path: str) -> tuple[int, int]:
-    """(width, height), read from the file header. Raises FileNotFoundError."""
+    """(width, height), read from the file header. Raises OSError for a
+    missing, zero-byte or corrupt file -- FileNotFoundError for a plain
+    missing one, PIL's UnidentifiedImageError (an OSError subclass) for a
+    zero-byte or corrupt one -- or ValueError for a header PIL parses but
+    cannot size sensibly."""
     with Image.open(path) as im:
         return im.size
 
