@@ -50,12 +50,25 @@ RV.views.single = (() => {
   }
 
   async function reopen(eventId) {
-    const r = await RV.get(`/api/review/boxes/${eventId}`);
-    if (!r.ok) { RV.toast(r.data.error || "Couldn't reopen that box."); return loadNext(); }
-    RV.releaseHeld();
-    reopened = true;
-    current = r.data;
-    render();
+    // Shares submit()/skip()'s busy guard (fix round 1): opening a recent
+    // box while another mutation is in flight would otherwise let that
+    // action's trailing loadNext() clobber the view this just opened.
+    if (busy) return;
+    busy = true;
+    try {
+      const r = await RV.get(`/api/review/boxes/${eventId}`);
+      if (!r.ok) {
+        RV.toast(r.data.error || "Couldn't reopen that box.");
+        await loadNext();
+        return;
+      }
+      RV.releaseHeld();
+      reopened = true;
+      current = r.data;
+      render();
+    } finally {
+      busy = false;
+    }
   }
 
   function renderEmpty(pool) {
@@ -157,25 +170,40 @@ RV.views.single = (() => {
       }, `${h.common || h.name} ${RV.pct(h.p)} `, kbd(String(i + 1))))));
   }
 
+  // Shared by render() and renderLocked() (fix round 1: was duplicated
+  // near-verbatim between the two): mounts a fresh BoxEditor over the
+  // zoomed box and returns its container, ready to drop into the layout.
+  function buildEditor(c, editable) {
+    const work = RV.el("div", { class: "rv-work" });
+    editor = new RV.BoxEditor(work, {
+      imageUrl: c.zoom.url, region: c.zoom.region, box: c.box.bbox,
+      frameW: c.frame.width, frameH: c.frame.height, others: c.other_boxes.map((o) => o.bbox),
+      editable,
+    });
+    return work;
+  }
+
+  // Shared by render() and renderLocked(): the two-column layout (the
+  // work area with its caption, plus the side panel) that replaces
+  // #rv-single's contents.
+  function wrapLayout(work, captionText, side) {
+    root().replaceChildren(RV.el("div", { class: "rv-layout" },
+      RV.el("div", {}, work, RV.el("p", { class: "rv-cap", text: captionText })),
+      side));
+  }
+
   // Reopened, but the server says it's no longer editable (Task 9): some
   // other volunteer answered or is answering it since. Show the box and
   // the reason, with no species picker, hints or answer buttons -- the
   // server would refuse a submit here anyway, and offering one just to
   // reject it wastes the volunteer's time.
   function renderLocked(c) {
-    const work = RV.el("div", { class: "rv-work" });
-    editor = new RV.BoxEditor(work, {
-      imageUrl: c.zoom.url, region: c.zoom.region, box: c.box.bbox,
-      frameW: c.frame.width, frameH: c.frame.height, others: c.other_boxes.map((o) => o.bbox),
-      editable: false,
-    });
+    const work = buildEditor(c, false);
     const side = RV.el("aside", { class: "rv-side" },
       RV.el("p", { class: "rv-note", text: c.reason || "This box can no longer be changed." }),
       frameThumb(c),
       RV.el("button", { type: "button", onclick: () => loadNext() }, "Load the next box"));
-    root().replaceChildren(RV.el("div", { class: "rv-layout" },
-      RV.el("div", {}, work, RV.el("p", { class: "rv-cap", text: "This box can't be changed any more." })),
-      side));
+    wrapLayout(work, "This box can't be changed any more.", side);
   }
 
   function render() {
@@ -184,12 +212,7 @@ RV.views.single = (() => {
     notes = "";
     hintName = null;
     if (c.editable === false) { renderLocked(c); return; }
-    const work = RV.el("div", { class: "rv-work" });
-    editor = new RV.BoxEditor(work, {
-      imageUrl: c.zoom.url, region: c.zoom.region, box: c.box.bbox,
-      frameW: c.frame.width, frameH: c.frame.height, others: c.other_boxes.map((o) => o.bbox),
-      editable: c.editable,
-    });
+    const work = buildEditor(c, c.editable);
     const side = RV.el("aside", { class: "rv-side" });
     if (reopened) {
       side.append(RV.el("p", { class: "rv-note", text: "Changing your answer: pick again and it replaces your last one." }));
@@ -226,10 +249,7 @@ RV.views.single = (() => {
         ? RV.el("button", { type: "button", class: "rv-link", onclick: () => openFrame() }, "Whole frame ", kbd("F"))
         : null),
     noteBox, RV.el("div", { class: "rv-celeb", id: "rv-celeb" }));
-    root().replaceChildren(RV.el("div", { class: "rv-layout" },
-      RV.el("div", {}, work, RV.el("p", { class: "rv-cap",
-        text: "Zoomed with room around the box. Drag an edge or corner to fix it; Esc puts it back." })),
-      side));
+    wrapLayout(work, "Zoomed with room around the box. Drag an edge or corner to fix it; Esc puts it back.", side);
   }
 
   function pickSpecies(entry, source) {
@@ -283,12 +303,22 @@ RV.views.single = (() => {
   }
 
   async function skip() {
-    if (!current) return;
-    if (!reopened && current.item.id) {
-      await RV.post(`/api/review/items/${current.item.id}/skip`);
-      RV.heldItemId = null;
+    // Shares submit()'s busy guard (fix round 1): without it, a held-down
+    // S key (the shared dispatcher now ignores auto-repeat, but a fast
+    // double-tap or a double click on the "Skip" link still reaches here
+    // twice) fires two overlapping POSTs, orphans the held item, and can
+    // race a concurrent submit() on the same box.
+    if (!current || busy) return;
+    busy = true;
+    try {
+      if (!reopened && current.item.id) {
+        await RV.post(`/api/review/items/${current.item.id}/skip`);
+        RV.heldItemId = null;
+      }
+      await loadNext();
+    } finally {
+      busy = false;
     }
-    await loadNext();
   }
 
   function openFrame() {

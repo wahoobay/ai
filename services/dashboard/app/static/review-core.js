@@ -309,7 +309,11 @@ document.addEventListener("keydown", (ev) => {
   const t = ev.target;
   const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
     || t.tagName === "SELECT" || t.isContentEditable);
-  if (typing || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  // ev.repeat: OS key-repeat on a held-down key must not re-fire an action
+  // every few milliseconds (fix round 1). Every view's handler goes
+  // through this one dispatcher, so the guard belongs here once rather
+  // than in each view's own handler.
+  if (typing || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const handler = RV.keyHandlers[RV.view];
   if (handler && handler(ev.key, ev) === true) ev.preventDefault();
 });
