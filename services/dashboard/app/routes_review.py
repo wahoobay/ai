@@ -13,6 +13,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .auth import effective_role, make_require_role, require_csrf
+from .review_frames import (
+    AddedBoxIn,
+    add_box,
+    complete_frame,
+    frame_state,
+    open_frame,
+    remove_box,
+    uncomplete_frame,
+    update_box,
+)
 from .review_images import frame_size, render_frame, render_zoom, zoom_region
 from .review_queue import (
     FrameMissing,
@@ -177,6 +187,83 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             return JSONResponse({"error": "image file missing on disk"}, status_code=404)
         return await _jpeg(render_zoom, ev["image_path"],
                            zoom_region(ev["bbox"], width, height))
+
+    # ---- whole-frame mode (Task 8) ----
+
+    async def _frame_call(fn, **kw):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(await fn(conn, **kw))
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post("/api/review/frames/{saved_frame_id}/open", dependencies=[Depends(require_csrf)])
+    async def frame_open(saved_frame_id: int, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            try:
+                await open_frame(conn, saved_frame_id=saved_frame_id, user_id=user.id,
+                                 claim_s=cfg.review_claim_s)
+                return JSONResponse(await frame_state(conn, saved_frame_id=saved_frame_id,
+                                                      user=user, catalogue=_catalogue()))
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.get("/api/review/frames/{saved_frame_id}")
+    async def frame_get(saved_frame_id: int, user=Depends(reviewer)):
+        return await _frame_call(frame_state, saved_frame_id=saved_frame_id, user=user,
+                                 catalogue=_catalogue())
+
+    @router.post("/api/review/frames/{saved_frame_id}/boxes",
+                 dependencies=[Depends(require_csrf)])
+    async def frame_add_box(saved_frame_id: int, body: AddedBoxIn, user=Depends(reviewer)):
+        return await _frame_call(add_box, saved_frame_id=saved_frame_id, user=user, body=body,
+                                 catalogue=_catalogue())
+
+    @router.patch("/api/review/frames/{saved_frame_id}/boxes/{box_id}",
+                  dependencies=[Depends(require_csrf)])
+    async def frame_update_box(saved_frame_id: int, box_id: int, body: AddedBoxIn,
+                               user=Depends(reviewer)):
+        return await _frame_call(update_box, saved_frame_id=saved_frame_id, box_id=box_id,
+                                 user=user, body=body, catalogue=_catalogue())
+
+    @router.delete("/api/review/frames/{saved_frame_id}/boxes/{box_id}",
+                   dependencies=[Depends(require_csrf)])
+    async def frame_remove_box(saved_frame_id: int, box_id: int, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            try:
+                await remove_box(conn, saved_frame_id=saved_frame_id, box_id=box_id, user=user)
+            except ReviewError as e:
+                return _fail(e)
+        return JSONResponse({"ok": True})
+
+    @router.post("/api/review/frames/{saved_frame_id}/complete",
+                 dependencies=[Depends(require_csrf)])
+    async def frame_complete(saved_frame_id: int, user=Depends(reviewer)):
+        return await _frame_call(complete_frame, saved_frame_id=saved_frame_id, user=user,
+                                 catalogue=_catalogue())
+
+    @router.delete("/api/review/frames/{saved_frame_id}/complete",
+                   dependencies=[Depends(require_csrf)])
+    async def frame_uncomplete(saved_frame_id: int, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            await uncomplete_frame(conn, saved_frame_id=saved_frame_id)
+        return JSONResponse({"ok": True})
+
+    @router.get("/api/review/added/{box_id}/zoom.jpg")
+    async def added_zoom(box_id: int, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            row = await fetch_one(conn, """
+                SELECT a.bbox, sf.image_path FROM review_added_boxes a
+                  JOIN saved_frames sf ON sf.id = a.saved_frame_id
+                 WHERE a.id = %s""", (box_id,))
+        if row is None:
+            return JSONResponse({"error": "no such drawn box"}, status_code=404)
+        try:
+            width, height = await asyncio.to_thread(frame_size, row["image_path"])
+        except FileNotFoundError:
+            return JSONResponse({"error": "image file missing on disk"}, status_code=404)
+        return await _jpeg(render_zoom, row["image_path"],
+                           zoom_region(row["bbox"], width, height))
 
     _ = admin_only    # used by the admin routes added in Task 9
 
