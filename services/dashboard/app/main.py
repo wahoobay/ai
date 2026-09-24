@@ -466,6 +466,12 @@ def build_app() -> FastAPI:
     from .auth import make_require_role, require_csrf
     require_role = make_require_role(cfg, state)
 
+    from .auth import effective_role, make_optional_user
+    optional_user = make_optional_user(state)
+
+    def _is_admin(user) -> bool:
+        return user is not None and effective_role(user.status, user.role) == "admin"
+
     from fastapi.responses import RedirectResponse
 
     @app.exception_handler(401)
@@ -709,7 +715,10 @@ def build_app() -> FastAPI:
         # (frame_id, source_name) makes each one O(log N), and we avoid the
         # duplicate-event-row problem when saved_frames has multiple rows for
         # the same key (which happens — same frame can be saved under several
-        # reasons). Newest matching saved_frame wins.
+        # reasons). The timestamp is part of the match: frame_id restarts at 1
+        # with every worker restart, so frame_id + camera alone can name a
+        # different frame. When one frame was saved under several reasons,
+        # the lowest id wins.
         where_q = " AND ".join(where)
         sql = f"""
             SELECT de.id, de.ts, de.frame_id, de.source_name, de.det_conf,
@@ -720,7 +729,8 @@ def build_app() -> FastAPI:
                      (SELECT image_path FROM saved_frames sf
                        WHERE sf.frame_id = de.frame_id
                          AND sf.source_name = de.source_name
-                       ORDER BY sf.ts DESC LIMIT 1)
+                         AND sf.ts = de.ts
+                       ORDER BY sf.id LIMIT 1)
                    ) AS image_path
               FROM detection_events de
              WHERE {where_q}
@@ -770,7 +780,8 @@ def build_app() -> FastAPI:
                              (SELECT image_path FROM saved_frames sf
                                WHERE sf.frame_id = de.frame_id
                                  AND sf.source_name = de.source_name
-                               ORDER BY sf.ts DESC LIMIT 1)
+                                 AND sf.ts = de.ts
+                               ORDER BY sf.id LIMIT 1)
                            ) AS image_path
                       FROM detection_events de
                      WHERE de.id = %s
@@ -837,7 +848,8 @@ def build_app() -> FastAPI:
                              (SELECT image_path FROM saved_frames sf
                                WHERE sf.frame_id = de.frame_id
                                  AND sf.source_name = de.source_name
-                               ORDER BY sf.ts DESC LIMIT 1)
+                                 AND sf.ts = de.ts
+                               ORDER BY sf.id LIMIT 1)
                            ) AS image_path
                       FROM detection_events de
                      WHERE de.id = %s
@@ -1316,7 +1328,12 @@ def build_app() -> FastAPI:
     async def list_corrections(
         limit: int = Query(50, ge=1, le=500),
         reviewer: str | None = None,
+        user=Depends(optional_user),
     ) -> Response:
+        admin = _is_admin(user)
+        if reviewer and not admin:
+            return JSONResponse(
+                {"error": "filtering by reviewer requires the admin role"}, status_code=403)
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1344,6 +1361,11 @@ def build_app() -> FastAPI:
         for r in rows:
             r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
             r["event_ts"]   = r["event_ts"].isoformat()   if r.get("event_ts")   else None
+        if not admin:
+            # Spec §12.1: reviewer is an account's display name now.
+            for r in rows:
+                r.pop("reviewer", None)
+                r.pop("notes", None)
         return JSONResponse(rows)
 
     # ------------------------------------------------------------------
@@ -2214,11 +2236,16 @@ def build_app() -> FastAPI:
     async def export_corrections_csv(
         hours: int | None = Query(None, ge=1, le=24 * 365),
         reviewer: str | None = None,
+        user=Depends(optional_user),
     ) -> Response:
+        admin = _is_admin(user)
+        if reviewer and not admin:
+            return JSONResponse(
+                {"error": "filtering by reviewer requires the admin role"}, status_code=403)
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        gen = export_corrections(pool, hours, reviewer)
+        gen = export_corrections(pool, hours, reviewer, include_identity=admin)
         return _csv_response(gen, _csv_filename("corrections", hours=hours, reviewer=reviewer))
 
     @app.get("/api/export/alerts.csv")
@@ -2278,11 +2305,11 @@ def build_app() -> FastAPI:
         return _csv_response(gen, _csv_filename("topk_long", hours=hours))
 
     @app.get("/api/export/labeled_corrections.csv")
-    async def export_labeled_corrections_csv() -> Response:
+    async def export_labeled_corrections_csv(user=Depends(optional_user)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        gen = export_labeled_corrections(pool)
+        gen = export_labeled_corrections(pool, include_identity=_is_admin(user))
         return _csv_response(gen, _csv_filename("labeled_corrections"))
 
     # ----- Parquet variants for the heaviest endpoints -----------------------

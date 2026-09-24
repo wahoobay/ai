@@ -73,6 +73,18 @@ async def _fetch_all(pool: AsyncConnectionPool, sql: str, params: tuple,
     return rows
 
 
+# Columns that say who labelled a box and what they wrote. Spec §12.1:
+# since spec 1, `reviewer` is an account's display name, so these are
+# returned to administrators only.
+IDENTITY_COLUMNS = ("reviewer", "notes", "user_id", "session_id")
+
+
+def _without_identity(columns: list[str], include_identity: bool) -> list[str]:
+    if include_identity:
+        return columns
+    return [c for c in columns if c not in IDENTITY_COLUMNS]
+
+
 # ---------------------------------------------------------------------------
 # Per-resource generators
 # ---------------------------------------------------------------------------
@@ -221,7 +233,7 @@ def export_saved_frames(pool: AsyncConnectionPool, hours: int):
 
 
 def export_corrections(pool: AsyncConnectionPool, hours: int | None,
-                       reviewer: str | None):
+                       reviewer: str | None, include_identity: bool = False):
     where = []
     params: list = []
     if hours is not None:
@@ -234,7 +246,7 @@ def export_corrections(pool: AsyncConnectionPool, hours: int | None,
     sql = f"""
         SELECT c.id, c.created_at, c.event_id,
                c.corrected_name, c.corrected_species_id, c.not_a_fish,
-               c.confidence, c.reviewer, c.notes,
+               c.confidence, c.reviewer, c.notes, c.user_id, c.session_id,
                e.ts AS event_ts, e.source_name, e.frame_id,
                e.best_name AS original_name, e.best_species_id AS original_species_id,
                e.best_accuracy AS original_accuracy, e.bbox, e.image_path
@@ -245,11 +257,11 @@ def export_corrections(pool: AsyncConnectionPool, hours: int | None,
     """
     cols = ["id", "created_at", "event_id",
             "corrected_name", "corrected_species_id", "not_a_fish",
-            "confidence", "reviewer", "notes",
+            "confidence", "reviewer", "notes", "user_id", "session_id",
             "event_ts", "source_name", "frame_id",
             "original_name", "original_species_id",
             "original_accuracy", "bbox", "image_path"]
-    return _stream(pool, sql, tuple(params), cols)
+    return _stream(pool, sql, tuple(params), _without_identity(cols, include_identity))
 
 
 def export_alerts(pool: AsyncConnectionPool, include_resolved: bool):
@@ -447,13 +459,19 @@ def export_topk_long(pool: AsyncConnectionPool, hours: int, min_accuracy: float)
 # ---------------------------------------------------------------------------
 
 
-def export_labeled_corrections(pool: AsyncConnectionPool):
+def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool = False):
+    # The frame is matched on camera + frame_id + ts. frame_id restarts at 1
+    # with every worker restart, so frame_id + camera alone can name a
+    # different frame. When one frame was saved under several reasons, the
+    # lowest id wins.
     sql = """
         SELECT c.id AS correction_id,
                c.created_at,
                c.event_id,
-               c.corrected_name, c.corrected_species_id,
-               c.not_a_fish, c.confidence, c.reviewer, c.notes,
+               c.corrected_name, c.corrected_species_id, c.not_a_fish, c.unidentifiable,
+               c.is_endorsement, c.corrected_bbox, c.life_stage, c.label_source,
+               c.review_item_id, c.is_adjudication,
+               c.confidence, c.reviewer, c.notes, c.user_id, c.session_id,
                e.ts AS event_ts,
                e.source_name, e.frame_id, e.track_id,
                e.bbox, e.det_conf,
@@ -469,14 +487,17 @@ def export_labeled_corrections(pool: AsyncConnectionPool):
           JOIN detection_events e ON e.id = c.event_id
           LEFT JOIN LATERAL (
               SELECT image_path, coco_path FROM saved_frames
-               WHERE source_name = e.source_name AND frame_id = e.frame_id
+               WHERE source_name = e.source_name AND frame_id = e.frame_id AND ts = e.ts
+               ORDER BY id
                LIMIT 1
           ) sf ON true
          ORDER BY c.created_at DESC
     """
     cols = ["correction_id", "created_at", "event_id",
-            "corrected_name", "corrected_species_id",
-            "not_a_fish", "confidence", "reviewer", "notes",
+            "corrected_name", "corrected_species_id", "not_a_fish", "unidentifiable",
+            "is_endorsement", "corrected_bbox", "life_stage", "label_source",
+            "review_item_id", "is_adjudication",
+            "confidence", "reviewer", "notes", "user_id", "session_id",
             "event_ts", "source_name", "frame_id", "track_id",
             "bbox", "det_conf",
             "original_name", "original_species_id", "original_accuracy",
@@ -484,7 +505,7 @@ def export_labeled_corrections(pool: AsyncConnectionPool):
             "frame_image_path", "frame_coco_path",
             "model_version", "detector_sha256", "classifier_sha256",
             "config_hash", "pipeline_git_sha"]
-    return _stream(pool, sql, tuple(), cols)
+    return _stream(pool, sql, tuple(), _without_identity(cols, include_identity))
 
 
 # ---------------------------------------------------------------------------
