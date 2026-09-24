@@ -560,6 +560,12 @@ def build_app() -> FastAPI:
             BASE_DIR / "static" / "auth.js",
             BASE_DIR / "static" / "style.css",
             BASE_DIR / "templates" / "index.html",
+            BASE_DIR / "static" / "review.css",
+            BASE_DIR / "static" / "review-core.js",
+            BASE_DIR / "static" / "review-single.js",
+            BASE_DIR / "static" / "review-frame.js",
+            BASE_DIR / "static" / "review-browse.js",
+            BASE_DIR / "templates" / "review.html",
         ):
             try:
                 h.update(str(p.stat().st_mtime_ns).encode())

@@ -2,12 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Reviewer tools — Wahoo Bay</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review — Wahoo Bay</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/review.css?v={{ asset_version }}">
 </head>
-<body>
-  <h1>Reviewer tools — coming soon</h1>
-  <p>Signed in as {{ display_name }}.</p>
+<body class="rv-page" data-role="{{ role }}" data-display-name="{{ display_name }}">
+  <header class="rv-top">
+    <span class="rv-brand">Wahoo Bay · Review</span>
+    <nav id="rv-nav" class="rv-tabs" aria-label="Review views">
+      <button type="button" data-lane="check">Check the model's guesses</button>
+      <button type="button" data-lane="identify">Identify new fish</button>
+      <button type="button" data-view="browse">Browse</button>
+    </nav>
+    <span class="rv-spacer"></span>
+    <span class="rv-meta">This session: <b id="rv-session-count">0</b> answered</span>
+    <span id="identity-chip" class="rv-meta"></span>
+  </header>
+  <div id="rv-banner" class="rv-banner" role="alert" hidden></div>
+  <div id="rv-toast" class="rv-toast" role="status" aria-live="polite" hidden></div>
+  <main class="rv-main">
+    <section id="rv-single" aria-label="Review one box" hidden></section>
+    <section id="rv-frame" aria-label="Whole frame" hidden></section>
+    <section id="rv-browse" aria-label="Browse" hidden></section>
+  </main>
+  <footer id="rv-recent" class="rv-recent" aria-label="Your recent boxes"></footer>
+  <script src="/static/auth.js?v={{ asset_version }}"></script>
+  <script src="/static/review-core.js?v={{ asset_version }}"></script>
+  <script src="/static/review-single.js?v={{ asset_version }}"></script>
 </body>
 </html>

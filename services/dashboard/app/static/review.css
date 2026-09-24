@@ -1,0 +1,82 @@
+/* services/dashboard/app/static/review.css
+   The review page (spec 2026-09-24 §9, layout B). Colours come from the
+   dashboard's variables in style.css. */
+.rv-page { min-height: 100vh; }
+.rv-top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel);
+  border-bottom: 1px solid #1f3b4f; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+.rv-brand { font-weight: 600; }
+.rv-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.rv-tabs button { padding: 5px 10px; border-radius: 6px; border: 1px solid #1f3b4f; background: var(--bg);
+  color: var(--muted); cursor: pointer; }
+.rv-tabs button.on { background: var(--accent); border-color: var(--accent); color: #062033; font-weight: 600; }
+.rv-spacer { flex: 1; }
+.rv-meta { color: var(--muted); font-size: 13px; }
+.rv-main { padding: 12px 14px 96px; }
+.rv-banner { background: #5a2a14; color: #ffe2cf; padding: 8px 14px; }
+.rv-toast { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: var(--panel);
+  border: 1px solid var(--accent); padding: 8px 14px; border-radius: 8px; z-index: 10; }
+.rv-empty { padding: 40px 0; text-align: center; }
+.rv-muted { color: var(--muted); }
+.rv-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.rv-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, 1fr); gap: 16px;
+  align-items: start; }
+@media (max-width: 900px) { .rv-layout { grid-template-columns: 1fr; } }
+.rv-editor { position: relative; line-height: 0; background: #000; border-radius: 6px; overflow: hidden;
+  touch-action: none; }
+.rv-editor img { width: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+.rv-editor-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rv-box { fill: rgba(255, 196, 0, 0.06); stroke: #ffc400; stroke-width: 2px;
+  vector-effect: non-scaling-stroke; cursor: move; }
+.rv-other { fill: none; stroke: rgba(220, 220, 220, 0.7); stroke-width: 1px;
+  vector-effect: non-scaling-stroke; pointer-events: none; }
+.rv-handle { fill: #ffc400; stroke: #000; stroke-width: 1px; vector-effect: non-scaling-stroke;
+  cursor: grab; }
+.rv-cap { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.rv-side { display: flex; flex-direction: column; gap: 10px; }
+.rv-thumb { position: relative; line-height: 0; border-radius: 6px; overflow: hidden; }
+.rv-thumb img { width: 100%; display: block; }
+.rv-thumb-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rv-progress { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.rv-bar { flex: 1; height: 7px; background: #1f3b4f; border-radius: 4px; overflow: hidden; display: flex; }
+.rv-bar i { display: block; height: 100%; background: var(--warn); }
+.rv-guess { display: flex; gap: 10px; align-items: center; padding: 8px; border: 1px solid #1f3b4f;
+  border-radius: 8px; flex-wrap: wrap; }
+.rv-guess img { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; }
+.rv-guess-text { flex: 1; min-width: 140px; }
+.rv-common { font-weight: 600; }
+.rv-latin { font-style: italic; color: var(--muted); font-size: 12px; }
+.rv-credit { font-size: 10px; color: var(--muted); }
+.rv-side button, .rv-empty button, .rv-frame-top button { padding: 7px 10px; border-radius: 7px;
+  border: 1px solid #1f3b4f; background: var(--bg); color: var(--ink); cursor: pointer; }
+.rv-side button:hover { border-color: var(--accent); }
+.rv-side button.rv-primary { background: var(--good); color: #062a14; border: none; font-weight: 700; }
+.rv-side button:disabled { opacity: .5; cursor: default; }
+.rv-search { width: 100%; padding: 8px 10px; border-radius: 7px; border: 1px solid #1f3b4f;
+  background: var(--bg); color: var(--ink); }
+.rv-results { list-style: none; margin: 4px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.rv-result { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.rv-result.active, .rv-result:hover { background: #1f3b4f; }
+.rv-result img, .rv-nophoto { width: 40px; height: 30px; object-fit: cover; border-radius: 3px;
+  background: #1f3b4f; flex: none; }
+.rv-result-text { display: flex; flex-direction: column; }
+.rv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.rv-side button.rv-chip { border-radius: 999px; border-style: dashed; font-size: 12px; }
+.rv-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rv-row > button { flex: 1; }
+.rv-small { font-size: 12px; }
+.rv-small > button { flex: 0 0 auto; }
+.rv-side button.rv-link, .rv-frame-top button.rv-link { background: none; border: none; color: var(--accent);
+  padding: 2px 4px; }
+.rv-check { display: inline-flex; gap: 4px; align-items: center; }
+.rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid #1f3b4f; border-radius: 6px; }
+.rv-note { background: #173049; border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
+  margin: 0; font-size: 13px; }
+.rv-celeb { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rv-page kbd { font-family: ui-monospace, monospace; font-size: 10px; padding: 0 4px;
+  border: 1px solid currentColor; border-radius: 3px; opacity: .75; }
+.rv-recent { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 8px; align-items: center;
+  padding: 8px 14px; background: var(--panel); border-top: 1px solid #1f3b4f; overflow-x: auto; }
+.rv-recent-item { display: flex; flex-direction: column; align-items: center; gap: 2px; background: none;
+  border: 1px solid #1f3b4f; border-radius: 6px; padding: 3px; color: var(--ink); font-size: 10px;
+  cursor: pointer; flex: none; }
+.rv-recent-item img { width: 64px; height: 40px; object-fit: cover; border-radius: 3px; }
