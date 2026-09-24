@@ -48,6 +48,13 @@ from typing import Any
 LATIN_GENUS_RE = re.compile(r"^[A-Z][a-z]{2,}$")
 LATIN_EPITHET_RE = re.compile(r"^[a-z][a-z\-]{1,}$")
 
+# Second-token spellings that mean "we only know the genus" on purpose —
+# distinct from a second token that was *meant* to be a species epithet but
+# doesn't parse as Latin (wrong case, a slash, stray punctuation). The
+# former is expected and not worth flagging; the latter goes to
+# taxonomy_unresolved.txt via unresolved_lines()'s epithet-dropped check.
+PLACEHOLDER_EPITHETS = frozenset({"", "sp", "spp", "-"})
+
 try:
     import httpx
 except ImportError as e:
@@ -217,18 +224,50 @@ def _epithet_from_scientificname(sci: str | None, genus: str | None) -> str | No
 MatchBatch = Callable[[list[str]], dict[str, dict | None]]
 
 
+def _normalize_epithet(token: str) -> str:
+    """Lower-case a second name-token and drop a trailing '.', ',' or ';'
+    before it's tested as a placeholder or as Latin — shared by
+    clean_query_name and _epithet_dropped so a capitalised or
+    punctuation-trailed but otherwise real epithet ('Hystrix',
+    'cyanomos.') is recognised the same way in both places."""
+    return token.lower().rstrip(".,;")
+
+
 def clean_query_name(raw: str | None) -> str | None:
     """The name to send to WoRMS: 'Genus epithet', or just 'Genus' when the
-    epithet is a placeholder ('sp.', '.', '-'), or None when the text is
-    not a Latin name at all ('TBC')."""
+    epithet is a placeholder ('sp.', '.', '-'), absent, or not parseable
+    as Latin even after normalising (a slash-separated pair, stray
+    characters) — or None when the text is not a Latin name at all
+    ('TBC'). The epithet is normalised (lower-cased, trailing '.', ',',
+    ';' stripped) before either test, so 'Diodon Hystrix' still queries
+    as 'Diodon hystrix' and 'Neopomacentrus cyanomos.' as 'Neopomacentrus
+    cyanomos' rather than being silently cut to the genus."""
     if not raw:
         return None
     parts = raw.replace("_", " ").split()
     if not parts or not LATIN_GENUS_RE.match(parts[0]):
         return None
-    if len(parts) >= 2 and LATIN_EPITHET_RE.match(parts[1]):
-        return f"{parts[0]} {parts[1]}"
-    return parts[0]
+    genus = parts[0]
+    if len(parts) < 2:
+        return genus
+    epithet = _normalize_epithet(parts[1])
+    if epithet in PLACEHOLDER_EPITHETS or not LATIN_EPITHET_RE.match(epithet):
+        return genus
+    return f"{genus} {epithet}"
+
+
+def _epithet_dropped(raw: str) -> bool:
+    """True when ``raw`` has a second token that was meant to be a species
+    epithet — not a recognised placeholder — but clean_query_name
+    couldn't parse it as Latin, so WoRMS only ever saw the genus even
+    though the raw name wasn't just a genus. Used by unresolved_lines to
+    flag names like 'Kyphosus sectatrix/bigibbus' that a placeholder
+    check alone (e.g. 'Kyphosus sp.') would wrongly catch too."""
+    parts = raw.replace("_", " ").split()
+    if len(parts) < 2:
+        return False
+    epithet = _normalize_epithet(parts[1])
+    return epithet not in PLACEHOLDER_EPITHETS and not LATIN_EPITHET_RE.match(epithet)
 
 
 def collect_raw_names(manifest_records: list[dict], class_names: list[str]) -> list[str]:
@@ -313,15 +352,28 @@ def build_rows(resolved: dict[str, dict], manifest_records: list[dict]) -> list[
 
 
 def unresolved_lines(resolved: dict[str, dict]) -> list[str]:
-    """Tab-separated: raw name, what is wrong, WoRMS's accepted name if any."""
+    """Tab-separated: raw name, what is wrong, WoRMS's accepted name if any.
+
+    The "rank only" flag covers three ways a row can fall short of
+    species level: the genus-fallback path (``via == "genus"``), a
+    two-word query that matched directly but only at a higher rank (e.g.
+    a family name used as a genus), and a second token that looked like
+    it was meant to be a species epithet but couldn't be parsed as Latin
+    (``_epithet_dropped`` — a slash-separated pair, stray characters).
+    The flag text names the rank WoRMS actually resolved (``"family
+    only"`` for a family-rank record), not just "genus only" regardless
+    of what really came back.
+    """
     lines = []
     for raw in sorted(resolved):
         res = resolved[raw]
+        rank = (res.get("rank") or "").lower()
         if res["record"] is None:
             problem = "no match"
-        elif res["via"] == "genus" or (res["query"] and " " in res["query"]
-                                       and (res.get("rank") or "").lower() == "genus"):
-            problem = "genus only"
+        elif (res["via"] == "genus"
+              or (res["query"] and " " in res["query"] and rank == "genus")
+              or _epithet_dropped(raw)):
+            problem = f"{rank} only" if rank else "genus only"
         elif res.get("match_type") and res["match_type"] != "exact":
             problem = f"fuzzy match ({res['match_type']})"
         else:

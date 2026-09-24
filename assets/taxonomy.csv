@@ -70,7 +70,7 @@ Dasyatis americana,1042856,Hypanus americanus,"(Hildebrand & Schroeder, 1928)",S
 Dasyatis centroura,1017389,Bathytoshia centroura,"(Mitchill, 1815)",Species,exact,unaccepted,centroura,Dasyatis,Dasyatidae,Myliobatiformes,Elasmobranchii,Chordata,Animalia,species
 Decapterus macarellus,126807,Decapterus macarellus,"(Cuvier, 1833)",Species,exact,accepted,macarellus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
 Decapterus punctatus,126808,Decapterus punctatus,"(Cuvier, 1829)",Species,exact,accepted,punctatus,Decapterus,Carangidae,Carangiformes,Teleostei,Chordata,Animalia,species
-Diodon Hystrix,126231,Diodon,"Linnaeus, 1758",Genus,exact,accepted,Diodon,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,genus
+Diodon Hystrix,127403,Diodon hystrix,"Linnaeus, 1758",Species,exact,accepted,hystrix,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
 Diodon holocanthus,127402,Diodon holocanthus,"Linnaeus, 1758",Species,exact,accepted,holocanthus,Diodon,Diodontidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
 Diplectrum formosum,159350,Diplectrum formosum,"(Linnaeus, 1766)",Species,exact,accepted,formosum,Diplectrum,Serranidae,Perciformes,Teleostei,Chordata,Animalia,species
 Diplodus argenteus,293578,Diplodus argenteus,"(Valenciennes, 1830)",Species,exact,accepted,argenteus,Diplodus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
@@ -114,7 +114,7 @@ Holacanthus ciliaris,276012,Holacanthus ciliaris,"(Linnaeus, 1758)",Species,exac
 Holacanthus townsendi,159282,Holacanthus,"Lacepède, 1802",Genus,exact,accepted,Holacanthus,Holacanthus,Pomacanthidae,Acanthuriformes,Teleostei,Chordata,Animalia,genus
 Holothuria mexicana,125180,Holothuria (Halodeima) mexicana,"Ludwig, 1875",Species,exact,alternative representation,mexicana,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
 Holothuria thomasi,241876,Holothuria (Thymiosycia) thomasi,"Pawson & Caycedo, 1980",Species,exact_subgenus,accepted,thomasi,Holothuria,Holothuriidae,Holothuriida,Holothuroidea,Echinodermata,Animalia,species
-Homo Sapiens,1455976,Homo,"Linnaeus, 1758",Genus,exact,accepted,Homo,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,genus
+Homo Sapiens,1455977,Homo sapiens,"Linnaeus, 1758",Species,exact,accepted,sapiens,Homo,Hominidae,Primates,Mammalia,Chordata,Animalia,species
 Hypleurochilus bermudensis,276312,Hypleurochilus bermudensis,"Beebe & Tee-Van, 1933",Species,exact,accepted,bermudensis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 Hypleurochilus pseudoaequipinnis,276317,Hypleurochilus pseudoaequipinnis,"Bath, 1994",Species,exact,accepted,pseudoaequipinnis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 Iridopagurus reticulatus,366484,Iridopagurus reticulatus,"García-Gómez, 1983",Species,exact,accepted,reticulatus,Iridopagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
@@ -160,9 +160,9 @@ Mycteroperca microlepis,273880,Mycteroperca microlepis,"(Goode & Bean, 1879)",Sp
 Mycteroperca venenosa,273885,Mycteroperca venenosa,"(Linnaeus, 1758)",Species,exact,accepted,venenosa,Mycteroperca,Epinephelidae,Perciformes,Teleostei,Chordata,Animalia,species
 Myrichthys breviceps,158637,Myrichthys breviceps,"(Richardson, 1848)",Species,exact,accepted,breviceps,Myrichthys,Ophichthidae,Anguilliformes,Teleostei,Chordata,Animalia,species
 Negaprion brevirostris,105800,Negaprion brevirostris,"(Poey, 1868)",Species,exact,accepted,brevirostris,Negaprion,Carcharhinidae,Carcharhiniformes,Elasmobranchii,Chordata,Animalia,species
-Neogonodactylus Wennerae,408934,Neogonodactylus,"Manning, 1995",Genus,exact,accepted,Neogonodactylus,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,genus
+Neogonodactylus Wennerae,408955,Neogonodactylus wennerae,"Manning & Heard, 1997",Species,exact,accepted,wennerae,Neogonodactylus,Gonodactylidae,Stomatopoda,Malacostraca,Arthropoda,Animalia,species
 Neopomacentrus cyanomos,218839,Neopomacentrus cyanomos,"(Bleeker, 1856)",Species,exact,accepted,cyanomos,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
-Neopomacentrus cyanomos.,206462,Neopomacentrus,"Allen, 1975",Genus,exact,accepted,Neopomacentrus,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,genus
+Neopomacentrus cyanomos.,218839,Neopomacentrus cyanomos,"(Bleeker, 1856)",Species,exact,accepted,cyanomos,Neopomacentrus,Pomacentridae,Ovalentaria incertae sedis,Teleostei,Chordata,Animalia,species
 Octopus americanus,749548,Octopus americanus,"Froriep, 1806",Species,exact,accepted,americanus,Octopus,Octopodidae,Octopoda,Cephalopoda,Mollusca,Animalia,species
 Ocyropsis immaculata,106356,Ocyropsis,"Mayer, 1912",Genus,exact,accepted,Ocyropsis,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,genus
 Ocyropsis maculata,106402,Ocyropsis maculata,"(Rang, 1827)",Species,exact,accepted,maculata,Ocyropsis,Ocyropsidae,Lobata,Tentaculata,Ctenophora,Animalia,species

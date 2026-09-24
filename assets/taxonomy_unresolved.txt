@@ -1,5 +1,6 @@
 # raw_name	problem	accepted_name  (fix these names in the Species Log)
-Alligatoridae mississippiensis	genus only	Alligatoridae
+Alligatoridae mississippiensis	family only	Alligatoridae
+Anilocra ./Renocila	genus only	Anilocra
 Apylsia morio	fuzzy match (near_1)	Aplysia morio
 Branchiomma nigromaculata	fuzzy match (near_2)	Branchiomma nigromaculatum
 Caranx lugubrious	fuzzy match (near_2)	Caranx lugubris
@@ -9,6 +10,7 @@ Eucinostomus/Ulaema lefroyi	no match
 EucinostomusUlaema lefroyi	no match	
 Holacanthus townsendi	genus only	Holacanthus
 Holothuria thomasi	fuzzy match (exact_subgenus)	Holothuria (Thymiosycia) thomasi
+Kyphosus sectatrix/bigibbus	genus only	Kyphosus
 Kyphosus sectatrixbigibbus	genus only	Kyphosus
 Labrisomus nuchipinnius	fuzzy match (phonetic)	Labrisomus nuchipinnis
 Mithrax cinctimanus	genus only	Mithrax
