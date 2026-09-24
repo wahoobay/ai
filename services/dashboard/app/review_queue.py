@@ -15,7 +15,7 @@ into status codes. Invariants:
 from __future__ import annotations
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from psycopg.rows import dict_row
@@ -25,6 +25,12 @@ from .auth import effective_role
 from .review_images import frame_size, zoom_region
 
 LANES = ("check", "identify")
+
+# A same-user resubmit that names the same outcome, label, life stage and
+# box as their own last verdict on this event, within this many seconds,
+# returns that existing verdict instead of inserting a duplicate row (a
+# double click or a retried request on the no-item path).
+DUPLICATE_WINDOW_S = 10
 
 
 class ReviewError(Exception):
@@ -150,7 +156,9 @@ async def next_item(conn, *, user_id: int, lane: str, species_order: list[str],
             await cur.execute(
                 """UPDATE review_items SET status = 'open', claimed_by = NULL,
                           claimed_until = NULL
-                    WHERE status = 'claimed' AND claimed_until < now()""")
+                    WHERE id IN (SELECT id FROM review_items
+                                  WHERE status = 'claimed' AND claimed_until < now()
+                                  FOR UPDATE SKIP LOCKED)""")
         held = await fetch_one(conn, """
             SELECT * FROM review_items
              WHERE status = 'claimed' AND claimed_by = %(uid)s
@@ -179,22 +187,36 @@ async def retire_item(conn, item_id: int, reason: str) -> None:
                 WHERE id = %s""", (reason, item_id))
 
 
+def _safe_frame_size(image_path: str) -> tuple[int, int]:
+    """frame_size(), but any failure to read or decode the file -- missing,
+    zero-byte, truncated or corrupt -- becomes FrameMissing here rather
+    than an OSError/ValueError reaching a caller as a raw 500. PIL's
+    UnidentifiedImageError is an OSError subclass, so catching OSError
+    covers a zero-byte or non-image file along with a plain missing one;
+    ValueError covers a header PIL parses but cannot size sensibly."""
+    try:
+        width, height = frame_size(image_path)
+    except (OSError, ValueError) as e:
+        raise FrameMissing("this box's frame is missing on disk") from e
+    if width <= 0 or height <= 0:
+        raise FrameMissing("this box's frame is missing on disk")
+    return width, height
+
+
 async def build_payload(conn, item: dict, *, catalogue, counts, target: int,
                         starting_bbox=None) -> dict:
     ev = await event_with_frame(conn, item["event_id"])
     if ev is None or ev["saved_frame_id"] is None:
         raise FrameMissing("this box's frame was not saved")
-    try:
-        width, height = frame_size(ev["image_path"])
-    except FileNotFoundError as e:
-        raise FrameMissing("this box's frame is missing on disk") from e
+    width, height = _safe_frame_size(ev["image_path"])
     others = await fetch_all(conn, """
         SELECT id AS event_id, bbox FROM detection_events
          WHERE source_name = %s AND ts = %s AND frame_id = %s AND id <> %s
          ORDER BY id""", (ev["source_name"], ev["ts"], ev["frame_id"], ev["event_id"]))
+    is_blind = item.get("pass") == 2
     payload = {
-        "item": {"id": item.get("id"), "pass": item.get("pass", 1), "lane": item["lane"],
-                 "event_id": ev["event_id"]},
+        "item": {"id": item.get("id"), "pass": item.get("pass", 1),
+                 "lane": None if is_blind else item["lane"], "event_id": ev["event_id"]},
         "box": {"bbox": list(starting_bbox or ev["bbox"]), "model_bbox": list(ev["bbox"]),
                 "source_name": ev["source_name"], "ts": ev["ts"].isoformat(),
                 "saved_frame_id": ev["saved_frame_id"]},
@@ -205,7 +227,7 @@ async def build_payload(conn, item: dict, *, catalogue, counts, target: int,
         "other_boxes": [{"event_id": o["event_id"], "bbox": list(o["bbox"])} for o in others],
         "model": None, "hints": None, "counts_toward": None,
     }
-    if item.get("pass") == 2:
+    if is_blind:
         return payload        # a second opinion comes from the picture alone
     guess = item.get("predicted")
     if guess:
@@ -227,10 +249,23 @@ async def build_payload(conn, item: dict, *, catalogue, counts, target: int,
 def validate_bbox(bbox, width: int, height: int) -> list[int]:
     """The bounds check for a reviewer-drawn box, shared with Task 8's
     added-box validation (`review_frames._validate_added`): a box is
-    four integers, inside the frame, and at least 4px on a side."""
-    if len(bbox) != 4:
+    four integers, inside the frame, and at least 4px on a side.
+
+    Type-robust: Task 8 feeds this raw client JSON. None, a non-sequence,
+    a bare string (whose characters would otherwise iterate as if it were
+    a list of four), the wrong length, or a non-numeric member all raise
+    the same Invalid rather than a TypeError or ValueError reaching the
+    caller as a 500."""
+    try:
+        wrong_length = isinstance(bbox, str | bytes) or len(bbox) != 4
+    except TypeError:
+        wrong_length = True
+    if wrong_length:
         raise Invalid("a box is [x1, y1, x2, y2]")
-    x1, y1, x2, y2 = (int(v) for v in bbox)
+    try:
+        x1, y1, x2, y2 = (int(v) for v in bbox)
+    except (TypeError, ValueError):
+        raise Invalid("a box is [x1, y1, x2, y2]") from None
     if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
         raise Invalid("the box must lie inside the frame")
     if x2 - x1 < 4 or y2 - y1 < 4:
@@ -251,9 +286,10 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
             raise Invalid("a second opinion has no model guess to accept")
         if not guess:
             raise Invalid("this box has no model guess to accept")
-        name, label_source = guess, "model_guess"
-        if body.life_stage and catalogue.entry(guess, body.life_stage):
-            life_stage = body.life_stage
+        if not catalogue.entry(guess, body.life_stage):
+            raise Invalid("the model's guess is not in the species list; "
+                          "pick the species instead")
+        name, life_stage, label_source = guess, body.life_stage, "model_guess"
     elif body.outcome == "species":
         if not body.label or not catalogue.entry(body.label, body.life_stage):
             raise Invalid("pick a species from the list")
@@ -277,19 +313,61 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
             "celebrity_id": celebrity_id, "notes": (body.notes or "").strip() or None}
 
 
+async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outcome: str
+                             ) -> dict | None:
+    """A same-user resubmit within DUPLICATE_WINDOW_S naming the same
+    outcome, label, life stage and box as their own last verdict on this
+    event: return that existing verdict's response instead of inserting a
+    second row. A double click or a retried request on the no-item path
+    must not insert twice or double-count progress. None means: insert
+    normally, this is not a duplicate."""
+    recent = await fetch_one(conn, """
+        SELECT id, created_at, corrected_name, not_a_fish, unidentifiable, life_stage,
+               corrected_bbox
+          FROM detection_corrections
+         WHERE event_id = %s AND user_id = %s AND NOT is_adjudication
+         ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user_id))
+    if recent is None or recent["created_at"] < datetime.now(UTC) - timedelta(
+            seconds=DUPLICATE_WINDOW_S):
+        return None
+    same_bbox = (list(recent["corrected_bbox"]) if recent["corrected_bbox"] else None) == v["bbox"]
+    if not (recent["not_a_fish"] == (outcome == "no_animal")
+            and recent["unidentifiable"] == (outcome == "unidentifiable")
+            and recent["corrected_name"] == v["name"]
+            and recent["life_stage"] == v["life_stage"]
+            and same_bbox):
+        return None
+    spot = await fetch_one(conn, """SELECT id FROM review_items
+                                     WHERE event_id = %s AND pass = 2
+                                        AND first_correction_id = %s""",
+                           (event_id, recent["id"]))
+    return {"id": recent["id"], "created_at": recent["created_at"].isoformat(),
+            "outcome": outcome, "label": v["name"], "first_pass": True,
+            "counts": v["name"] is not None and v["confidence"] != "uncertain",
+            "spot_check_scheduled": spot is not None, "duplicate": True}
+
+
 async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: float,
                          rng: random.Random, adjudication: bool = False) -> dict:
     role = effective_role(user.status, user.role)
     async with conn.transaction():
+        # Namespaced, transaction-scoped: serialises every verdict on this
+        # event -- in particular the no-item path below, whose guards are
+        # plain SELECTs that would otherwise race between two volunteers,
+        # or between a double-submitted request and itself. Released
+        # automatically at commit or rollback. hashtextextended, not the
+        # two-int4 form, because event ids will pass 2^31 within a year.
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended('review-event:' || %s::text, 0))",
+                (body.event_id,))
+
         ev = await event_with_frame(conn, body.event_id)
         if ev is None:
             raise NotFound("no such detection")
         if ev["saved_frame_id"] is None:
             raise Invalid("this detection's frame was not saved")
-        try:
-            width, height = frame_size(ev["image_path"])
-        except FileNotFoundError as e:
-            raise FrameMissing("this box's frame is missing on disk") from e
+        width, height = _safe_frame_size(ev["image_path"])
 
         item = None
         if body.review_item_id is not None and not adjudication:
@@ -299,11 +377,26 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
                 raise NotFound("no such review item")
             if item["status"] in ("done", "retired"):
                 raise Conflict("this box was already answered")
-            if (item["status"] == "claimed" and item["claimed_by"] != user.id
-                    and item["claimed_until"] > datetime.now(UTC)):
+            live_claim = (item["status"] == "claimed"
+                         and item["claimed_until"] > datetime.now(UTC))
+            if live_claim and item["claimed_by"] != user.id:
                 raise Conflict("another volunteer is answering this box")
+            if not (live_claim and item["claimed_by"] == user.id):
+                # No live claim of this user's own to trust -- never
+                # claimed, or the claim lapsed: re-check eligibility
+                # atomically before accepting, rather than trusting that
+                # serving enforced it. Pass 1 has no extra eligibility rule
+                # beyond "nobody else holds it", already checked above.
+                if item["pass"] == 2:
+                    if item["exclude_user_id"] == user.id:
+                        raise Forbidden("you gave the first verdict on this box")
+                    if await fetch_one(conn, """SELECT 1 FROM detection_corrections
+                                                 WHERE event_id = %s AND user_id = %s
+                                                 LIMIT 1""", (body.event_id, user.id)):
+                        raise Forbidden("you already answered this box")
         elif not adjudication:
             # No queue item: whole-frame mode, or changing your own answer.
+            # The advisory lock above makes this check-then-insert atomic.
             if role != "admin" and await fetch_one(conn, """
                     SELECT 1 FROM detection_corrections
                      WHERE event_id = %s AND user_id IS NOT NULL AND user_id <> %s
@@ -320,6 +413,13 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
         guess = (item or {}).get("predicted") or catalogue.accepted(ev["best_species_id"])
         v = _validate(body, catalogue=catalogue, guess=guess, item=item, blind=blind,
                       width=width, height=height, adjudication=adjudication)
+
+        if item is None and not adjudication:
+            dup = await _duplicate_verdict(conn, event_id=body.event_id, user_id=user.id, v=v,
+                                           outcome=body.outcome)
+            if dup is not None:
+                return dup
+
         row = await fetch_one(conn, """
             INSERT INTO detection_corrections
                 (event_id, corrected_name, corrected_species_id, not_a_fish, unidentifiable,
@@ -360,7 +460,7 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
     return {"id": row["id"], "created_at": row["created_at"].isoformat(),
             "outcome": body.outcome, "label": v["name"], "first_pass": first_pass,
             "counts": v["name"] is not None and v["confidence"] != "uncertain",
-            "spot_check_scheduled": spot is not None}
+            "spot_check_scheduled": spot is not None, "duplicate": False}
 
 
 async def skip_item(conn, *, user_id: int, item_id: int) -> None:
@@ -411,13 +511,14 @@ async def recent_verdicts(conn, *, user_id: int, session_id: int | None, catalog
 
 
 async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target: int) -> dict:
+    role = effective_role(user.status, user.role)
     mine = await fetch_one(conn, """
         SELECT corrected_name, not_a_fish, unidentifiable, life_stage, corrected_bbox,
                confidence, celebrity_id
           FROM detection_corrections
          WHERE event_id = %s AND user_id = %s
          ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user.id))
-    if mine is None and effective_role(user.status, user.role) != "admin":
+    if mine is None and role != "admin":
         raise Forbidden("you can only reopen boxes you answered")
     ev = await event_with_frame(conn, event_id)
     if ev is None:
@@ -436,4 +537,20 @@ async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target
                            "life_stage": mine["life_stage"],
                            "not_sure": mine["confidence"] == "uncertain",
                            "celebrity_id": mine["celebrity_id"]}
+    # A resubmit from here goes through submit_verdict's no-item path, whose
+    # guards this mirrors, so the page learns up front whether the box is
+    # still editable instead of only finding out from a 403/409 on submit.
+    editable, reason = True, None
+    if role != "admin" and await fetch_one(conn, """
+            SELECT 1 FROM detection_corrections
+             WHERE event_id = %s AND user_id IS NOT NULL AND user_id <> %s
+             LIMIT 1""", (event_id, user.id)):
+        editable, reason = False, "another volunteer already answered this box"
+    elif await fetch_one(conn, """
+            SELECT 1 FROM review_items
+             WHERE event_id = %s AND status = 'claimed' AND claimed_by <> %s
+               AND claimed_until > now()
+             LIMIT 1""", (event_id, user.id)):
+        editable, reason = False, "another volunteer is answering this box"
+    payload["editable"], payload["reason"] = editable, reason
     return payload

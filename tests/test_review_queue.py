@@ -5,13 +5,16 @@ import asyncio
 import json
 import random
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from app.review_catalogue import CatalogueStore
 from app.review_queue import (
     Conflict,
     Forbidden,
+    FrameMissing,
     Invalid,
+    ReviewError,
     VerdictIn,
     build_payload,
     fetch_one,
@@ -98,6 +101,17 @@ def test_validate_bbox_pins_the_three_messages():
     assert too_small.value.message == "the box is too small"
 
     assert validate_bbox([0, 0, 1280, 720], 1280, 720) == [0, 0, 1280, 720]
+
+
+def test_validate_bbox_is_type_robust():
+    """Task 8 feeds this raw client JSON: None, a bare scalar, a string,
+    the wrong length, and a non-numeric member must all raise the same
+    Invalid rather than a TypeError or ValueError."""
+    for bad in (None, 5, 3.5, "1234", [1, 2, 3], [1, 2, 3, 4, 5], [1, 2, 3, "x"],
+                [1, 2, 3, None], [1, 2, 3, [4]], {"a": 1, "b": 2, "c": 3, "d": 4}):
+        with pytest.raises(Invalid) as exc:
+            validate_bbox(bad, 1280, 720)
+        assert exc.value.message == "a box is [x1, y1, x2, y2]"
 
 
 # ---- serving --------------------------------------------------------------
@@ -192,6 +206,7 @@ async def test_a_spot_check_payload_says_nothing_about_the_model(rdb, tmp_path, 
         payload = await build_payload(conn, item, catalogue=cat, counts=lambda n: 3, target=200)
     assert payload["model"] is None and payload["hints"] is None
     assert payload["counts_toward"] is None
+    assert payload["item"]["lane"] is None    # the pass-1 lane is not blind information
     text = json.dumps(payload)
     for word in ("Seriola", "Pomatomus", "Pomacanthus", "Rudderfish"):
         assert word not in text
@@ -211,6 +226,30 @@ async def test_a_first_pass_payload_shows_the_guess_the_other_hints_and_progress
                                         "count": 3, "target": 200}
     assert payload["zoom"]["region"] == [0, 25, 400, 325]
     assert payload["frame"]["width"] == 1280 and payload["frame"]["height"] == 720
+
+
+async def test_build_payload_treats_a_zero_byte_or_corrupt_frame_as_missing(rdb, tmp_path, cat):
+    """Not only FileNotFoundError: a zero-byte or corrupt file must not
+    leave the claim committed while every later `next` 500s until it
+    lapses."""
+    for i, content in enumerate((b"", b"this is not a jpeg")):
+        f = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(minutes=i), frame_id=30 + i,
+                             boxes=[{"bbox": [10, 10, 90, 90]}])
+        Path(f["image_path"]).write_bytes(content)
+        item_id = await add_item(rdb, f)
+        async with rdb.connection() as conn:
+            item = await fetch_one(conn, "SELECT * FROM review_items WHERE id = %s", (item_id,))
+            with pytest.raises(FrameMissing):
+                await build_payload(conn, item, catalogue=cat, counts=lambda n: 0, target=200)
+
+
+async def test_submit_verdict_treats_an_unreadable_frame_as_missing_not_a_500(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    Path(f["image_path"]).write_bytes(b"")
+    user = as_user(await make_user(rdb, "one"))
+    with pytest.raises(FrameMissing):
+        await _verdict(rdb, cat, user, event_id=f["event_ids"][0], outcome="accept")
 
 
 # ---- verdicts -----------------------------------------------------------------
@@ -240,6 +279,41 @@ async def test_a_species_from_the_search_with_its_life_stage(rdb, tmp_path, cat)
                                FROM detection_corrections WHERE id = %s""", out["id"])
     assert row == ("Pomacanthus paru", "juvenile", False, "uncertain")
     assert out["counts"] is False            # 'not sure' labels do not count toward progress
+
+
+async def test_accept_is_validated_exactly_like_a_chosen_species(rdb, tmp_path, cat):
+    """'Pomacanthus paru' has only juvenile/adult catalogue entries. Accepting
+    a guess of it must be refused just like the species path already refuses
+    it (Review Focus 5), not silently stored with no life stage."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                "species": "Pomacanthus paru"}])
+    item = await add_item(rdb, f, predicted="Pomacanthus paru", predicted_p=0.7,
+                          route="Pomacanthus paru")
+    user = as_user(await make_user(rdb, "one"))
+    eid = f["event_ids"][0]
+    with pytest.raises(Invalid):
+        await _verdict(rdb, cat, user, event_id=eid, review_item_id=item, outcome="accept")
+    with pytest.raises(Invalid):
+        await _verdict(rdb, cat, user, event_id=eid, review_item_id=item, outcome="accept",
+                       life_stage="adlut")
+    out = await _verdict(rdb, cat, user, event_id=eid, review_item_id=item, outcome="accept",
+                         life_stage="juvenile")
+    assert out["label"] == "Pomacanthus paru"
+    row = await _row(rdb, "SELECT life_stage FROM detection_corrections WHERE id = %s", out["id"])
+    assert row == ("juvenile",)
+
+
+async def test_accepting_an_unresolvable_guess_is_refused(rdb, tmp_path, cat):
+    """Pre-cutover Fishial events keep a UUID-shaped species id as
+    best_species_id; without an item, accept must not store it verbatim."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90]}])
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE detection_events SET best_species_id = %s WHERE id = %s",
+            ("3f9a6a0e-not-a-real-species", f["event_ids"][0]))
+    user = as_user(await make_user(rdb, "one"))
+    with pytest.raises(Invalid):
+        await _verdict(rdb, cat, user, event_id=f["event_ids"][0], outcome="accept")
 
 
 async def test_answer_validation(rdb, tmp_path, cat):
@@ -286,6 +360,35 @@ async def test_a_second_opinion_cannot_use_the_guess_or_the_hints(rdb, tmp_path,
     assert await _status(rdb, spot) == "done"
 
 
+async def test_pass_2_eligibility_is_enforced_at_submit_not_only_at_serve(rdb, tmp_path, cat):
+    """The first reviewer's own response says spot_check_scheduled: true, so
+    the pass-2 item's id is guessable (BIGSERIAL). Posting straight to it
+    must be refused even though it was never served to them -- serving's
+    _SPOT_ELIGIBLE check is not enough on its own (Important 1)."""
+    [(f, _i)] = await _boxes(rdb, tmp_path, n=1, status="done")
+    one = await make_user(rdb, "one")
+    two = await make_user(rdb, "two")
+    three = await make_user(rdb, "three")
+    first = await add_verdict(rdb, f["event_ids"][0], one, name="Seriola zonata")
+    spot = await add_item(rdb, f, pass_=2, exclude_user_id=one, first_correction_id=first)
+    # the first reviewer, by id, without ever holding a claim on it
+    with pytest.raises(Forbidden):
+        await _verdict(rdb, cat, as_user(one), event_id=f["event_ids"][0], review_item_id=spot,
+                       outcome="species", label="Seriola zonata", label_source="search")
+    # anyone else who already answered the box, not just the excluded user
+    await add_verdict(rdb, f["event_ids"][0], two, name="Seriola zonata")
+    with pytest.raises(Forbidden):
+        await _verdict(rdb, cat, as_user(two), event_id=f["event_ids"][0], review_item_id=spot,
+                       outcome="species", label="Seriola zonata", label_source="search")
+    # a genuinely eligible reviewer can still answer it directly by id, with
+    # no live claim -- the recheck itself grants eligibility, not just serving
+    out = await _verdict(rdb, cat, as_user(three), event_id=f["event_ids"][0],
+                         review_item_id=spot, outcome="species", label="Seriola zonata",
+                         label_source="search")
+    assert out["first_pass"] is False
+    assert await _status(rdb, spot) == "done"
+
+
 async def test_a_finished_or_held_box_is_a_conflict(rdb, tmp_path, cat):
     [(f, item)] = await _boxes(rdb, tmp_path, n=1)
     one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
@@ -313,6 +416,51 @@ async def test_without_an_item_you_can_only_answer_boxes_nobody_else_has(rdb, tm
     await _verdict(rdb, cat, as_user(boss, role="admin"), event_id=eid, outcome="accept")
 
 
+async def test_two_concurrent_no_item_submits_record_exactly_one_verdict(rdb, tmp_path, cat):
+    """The no-item path's guards are plain SELECTs; without a per-event
+    advisory lock serialising them against the insert, two volunteers
+    racing on one box could both record a first-pass verdict (Important 2).
+    Real concurrency over two separate connections, not just two coroutines
+    sharing one."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
+    eid = f["event_ids"][0]
+
+    async def _try(uid):
+        async with rdb.connection() as conn:
+            try:
+                return await submit_verdict(
+                    conn, user=as_user(uid), body=VerdictIn(event_id=eid, outcome="accept"),
+                    catalogue=cat, spot_rate=0.0, rng=random.Random(0))
+            except ReviewError as e:
+                return e
+
+    a, b = await asyncio.gather(_try(one), _try(two))
+    oks = [r for r in (a, b) if isinstance(r, dict)]
+    errs = [r for r in (a, b) if isinstance(r, ReviewError)]
+    assert len(oks) == 1 and len(errs) == 1
+    assert isinstance(errs[0], Forbidden | Conflict)
+    row = await _row(rdb, "SELECT count(*) FROM detection_corrections WHERE event_id = %s", eid)
+    assert row == (1,)
+
+
+async def test_a_double_submit_within_the_window_returns_the_existing_verdict(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    first = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept")
+    assert first["duplicate"] is False
+    again = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="accept")
+    assert again["id"] == first["id"] and again["duplicate"] is True
+    row = await _row(rdb, "SELECT count(*) FROM detection_corrections WHERE event_id = %s", eid)
+    assert row == (1,)
+    # a genuinely different answer from the same user is not deduplicated
+    changed = await _verdict(rdb, cat, as_user(one), event_id=eid, outcome="no_animal")
+    assert changed["duplicate"] is False and changed["id"] != first["id"]
+
+
 async def test_a_first_pass_verdict_can_schedule_a_spot_check(rdb, tmp_path, cat):
     [(f, item)] = await _boxes(rdb, tmp_path, n=1)
     one = await make_user(rdb, "one")
@@ -336,6 +484,27 @@ async def test_reopening_shows_your_last_answer_and_box(rdb, tmp_path, cat):
                                  counts=lambda n: 0, target=200)
         assert p["item"]["id"] is None and p["box"]["bbox"] == [90, 90, 310, 260]
         assert p["mine"]["outcome"] == "species" and p["mine"]["label"] == "Seriola zonata"
+        assert p["editable"] is True and p["reason"] is None
         with pytest.raises(Forbidden):
             await reopen_payload(conn, user=as_user(two), event_id=eid, catalogue=cat,
                                  counts=lambda n: 0, target=200)
+
+
+async def test_reopen_marks_the_box_read_only_once_a_resubmit_would_be_refused(rdb, tmp_path,
+                                                                                cat):
+    [(f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one = await make_user(rdb, "one")
+    eid = f["event_ids"][0]
+    out = await _verdict(rdb, cat, as_user(one), spot=1.0, event_id=eid, review_item_id=item,
+                         outcome="accept")
+    two = await make_user(rdb, "two")
+    spot_id = (await _row(rdb, "SELECT id FROM review_items WHERE event_id = %s AND pass = 2",
+                          eid))[0]
+    await _verdict(rdb, cat, as_user(two), event_id=eid, review_item_id=spot_id,
+                   outcome="species", label="Seriola zonata", label_source="search")
+    assert out["id"]    # sanity: the first verdict really was recorded
+    async with rdb.connection() as conn:
+        p = await reopen_payload(conn, user=as_user(one), event_id=eid, catalogue=cat,
+                                 counts=lambda n: 0, target=200)
+    assert p["editable"] is False
+    assert p["reason"] == "another volunteer already answered this box"

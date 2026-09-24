@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import io
 import os
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
-from review_fixtures import CSRF, T0, add_item, login, make_user, seed_frame
+from review_fixtures import CSRF, T0, add_item, add_verdict, login, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
 
@@ -20,14 +20,22 @@ async def _status(rdb, item_id):
 
 
 async def test_the_review_api_needs_a_reviewer(rdb, rclient):
-    assert rclient.get("/api/review/next").status_code == 401
+    assert rclient.get("/api/review/next", headers=CSRF).status_code == 401
     await make_user(rdb, "watcher", role="viewer")
     login(rclient, "watcher")
-    assert rclient.get("/api/review/next").status_code == 403
+    assert rclient.get("/api/review/next", headers=CSRF).status_code == 403
     await make_user(rdb, "rev")
     login(rclient, "rev")
-    r = rclient.get("/api/review/next")
+    r = rclient.get("/api/review/next", headers=CSRF)
     assert r.status_code == 200 and r.json()["item"] is None
+
+
+async def test_next_also_needs_the_csrf_header_because_it_writes(rdb, rclient):
+    """GET /next sweeps lapsed claims, claims a box and retires unreadable
+    ones -- every mutation carries require_csrf, and this GET is one."""
+    await make_user(rdb, "rev")
+    login(rclient, "rev")
+    assert rclient.get("/api/review/next").status_code == 403
 
 
 async def test_the_page_is_for_reviewers_and_redirects_everyone_else(rdb, rclient):
@@ -44,7 +52,7 @@ async def test_a_verdict_needs_the_csrf_header_and_counts_in_the_session(rdb, rc
     f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
                                                 "species": "Seriola zonata"}])
     await add_item(rdb, f, predicted="Seriola zonata", predicted_p=0.56, route="Seriola zonata")
-    nxt = rclient.get("/api/review/next?lane=check").json()
+    nxt = rclient.get("/api/review/next?lane=check", headers=CSRF).json()
     body = {"event_id": nxt["item"]["event_id"], "review_item_id": nxt["item"]["id"],
             "outcome": "accept"}
     assert rclient.post("/api/review/verdicts", json=body).status_code == 403
@@ -77,7 +85,7 @@ async def test_a_box_whose_frame_file_is_gone_is_retired_and_the_next_served(rdb
     gone_item = await add_item(rdb, gone, predicted="Seriola zonata", route="Seriola zonata")
     await add_item(rdb, ok, route=None)
     os.remove(gone["image_path"])
-    r = rclient.get("/api/review/next?lane=check")
+    r = rclient.get("/api/review/next?lane=check", headers=CSRF)
     assert r.status_code == 200 and r.json()["item"]["event_id"] == ok["event_ids"][0]
     assert await _status(rdb, gone_item) == "retired"
 
@@ -95,3 +103,66 @@ async def test_species_list_photos_and_images(rdb, rclient, tmp_path):
     assert Image.open(io.BytesIO(frame.content)).size == (640, 360)
     zoom = rclient.get(f"/api/review/boxes/{f['event_ids'][0]}/zoom.jpg")
     assert Image.open(io.BytesIO(zoom.content)).size == (600, 300)
+
+
+async def test_skip_release_and_reopen_over_http(rdb, rclient, tmp_path):
+    """Minor (carried): skip, release and reopen had no HTTP-level coverage
+    of their CSRF and role wiring."""
+    await make_user(rdb, "one")
+    await make_user(rdb, "two")
+    f1 = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                 "species": "Seriola zonata"}])
+    f2 = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(minutes=5), frame_id=2,
+                          boxes=[{"bbox": [100, 100, 300, 250], "species": "Seriola zonata"}])
+    await add_item(rdb, f1, predicted="Seriola zonata", route="Seriola zonata")
+    await add_item(rdb, f2, predicted="Seriola zonata", route="Seriola zonata")
+
+    login(rclient, "one")
+    nxt1 = rclient.get("/api/review/next?lane=check", headers=CSRF).json()
+    claimed1 = nxt1["item"]["id"]
+    assert rclient.post(f"/api/review/items/{claimed1}/skip").status_code == 403
+    r = rclient.post(f"/api/review/items/{claimed1}/skip", headers=CSRF)
+    assert r.status_code == 200
+    assert await _status(rdb, claimed1) == "open"
+
+    nxt2 = rclient.get("/api/review/next?lane=check", headers=CSRF).json()
+    claimed2 = nxt2["item"]["id"]
+    assert claimed2 != claimed1          # the skipped box is not offered again
+    assert rclient.post(f"/api/review/items/{claimed2}/release").status_code == 403
+    r = rclient.post(f"/api/review/items/{claimed2}/release", headers=CSRF)
+    assert r.status_code == 200
+    assert await _status(rdb, claimed2) == "open"
+
+    login(rclient, "two")
+    nxt = rclient.get("/api/review/next?lane=check", headers=CSRF).json()
+    body = {"event_id": nxt["item"]["event_id"], "review_item_id": nxt["item"]["id"],
+            "outcome": "accept"}
+    v = rclient.post("/api/review/verdicts", json=body, headers=CSRF)
+    assert v.status_code == 200
+
+    r = rclient.get(f"/api/review/boxes/{nxt['item']['event_id']}")
+    assert r.status_code == 200
+    reopened = r.json()
+    assert reopened["mine"]["label"] == "Seriola zonata"
+    assert reopened["editable"] is True and reopened["reason"] is None
+
+
+async def test_a_pass_2_payload_through_next_carries_no_model_information(rdb, rclient, tmp_path):
+    """Review Focus 2, over HTTP: a blind item served through the real
+    endpoint carries no guess, no hints, no species it counts toward, and a
+    null lane (Important 6)."""
+    one = await make_user(rdb, "one")
+    await make_user(rdb, "two")
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                "species": "Seriola zonata"}])
+    first = await add_verdict(rdb, f["event_ids"][0], one, name="Seriola zonata")
+    await add_item(rdb, f, pass_=2, exclude_user_id=one, first_correction_id=first,
+                   predicted="Seriola zonata", route="Seriola zonata",
+                   hints=[{"name": "Seriola zonata", "p": 0.9}],
+                   added_at=datetime.now(UTC) - timedelta(hours=49))
+    login(rclient, "two")
+    r = rclient.get("/api/review/next?lane=check", headers=CSRF)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["item"]["pass"] == 2 and body["item"]["lane"] is None
+    assert body["model"] is None and body["hints"] is None and body["counts_toward"] is None

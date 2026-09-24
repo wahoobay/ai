@@ -62,7 +62,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def _jpeg(fn, *args) -> Response:
         try:
             data = await asyncio.to_thread(fn, *args)
-        except FileNotFoundError:
+        except (OSError, ValueError):
             return JSONResponse({"error": "image file missing on disk"}, status_code=404)
         return Response(content=data, media_type="image/jpeg", headers=IMAGE_HEADERS)
 
@@ -75,7 +75,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             "asset_version": version() if version else "",
         })
 
-    @router.get("/api/review/next")
+    @router.get("/api/review/next", dependencies=[Depends(require_csrf)])
     async def next_box(lane: str = Query("check"), user=Depends(reviewer)):
         pool_obj = _pool()
         order = pool_obj.species_order() if pool_obj else []
@@ -109,7 +109,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             except ReviewError as e:
                 return _fail(e)
         pool_obj = _pool()
-        if pool_obj and out["first_pass"] and out["counts"]:
+        if pool_obj and out["first_pass"] and out["counts"] and not out["duplicate"]:
             pool_obj.note_verified(out["label"])
         return JSONResponse(out)
 
@@ -173,7 +173,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             return JSONResponse({"error": "no frame for this box"}, status_code=404)
         try:
             width, height = await asyncio.to_thread(frame_size, ev["image_path"])
-        except FileNotFoundError:
+        except (OSError, ValueError):
             return JSONResponse({"error": "image file missing on disk"}, status_code=404)
         return await _jpeg(render_zoom, ev["image_path"],
                            zoom_region(ev["bbox"], width, height))
