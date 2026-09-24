@@ -40,7 +40,9 @@ from .review_frames import (
     update_box,
 )
 from .review_images import frame_size, render_frame, render_zoom, zoom_region
+from .review_labels import resolve_all
 from .review_queue import (
+    Conflict,
     FrameMissing,
     ReviewError,
     VerdictIn,
@@ -301,10 +303,20 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                 # are still worth serving, flagged stale, rather than a 500.
                 stale = True
                 log.warning("review progress: refresh_progress timed out; serving stale counts")
-        async with _db().connection() as conn:
-            summary = await progress_summary(
-                conn, pool_obj=pool_obj, catalogue=_catalogue(), session_id=user.session_id,
-                target=cfg.review_target)
+        try:
+            async with _db().connection() as conn:
+                summary = await progress_summary(
+                    conn, pool_obj=pool_obj, catalogue=_catalogue(), session_id=user.session_id,
+                    target=cfg.review_target)
+        except psycopg.errors.QueryCanceled:
+            # Unlike the refresh above, this is progress_summary's own
+            # query timing out: there is no cached summary to fall back
+            # to, so this is a clear 503, never a hang and never a 500
+            # (fix round 1, finding 6).
+            log.warning("review progress: progress_summary timed out")
+            return JSONResponse(
+                {"error": "progress is taking too long to compute; try again shortly"},
+                status_code=503)
         summary["stale"] = stale
         return JSONResponse(summary)
 
@@ -321,6 +333,11 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                                                  filters=filters, page=page))
             except ReviewError as e:
                 return _fail(e)
+            except psycopg.errors.QueryCanceled:
+                log.warning("review browse: query timed out")
+                return JSONResponse(
+                    {"error": "browse is taking too long to compute; try again shortly"},
+                    status_code=503)
 
     @router.get("/api/review/disputes")
     async def disputes(user=Depends(admin_only)):
@@ -334,6 +351,14 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                             life_stage=body.life_stage, bbox=body.bbox)
         async with _db().connection() as conn:
             try:
+                # Adjudication is for disputes (spec Sec8): the adjudication
+                # path in submit_verdict skips every claim/item guard, so
+                # without this check a POST here could close a queued box's
+                # open or claimed pass-1 item out from under a volunteer
+                # who is mid-answer, or short-circuit a pending spot-check.
+                current = (await resolve_all(conn, [event_id])).get(event_id)
+                if current is None or current.status != "disputed":
+                    raise Conflict("this box is not disputed")
                 return JSONResponse(await submit_verdict(
                     conn, user=user, body=verdict, catalogue=_catalogue(), spot_rate=0.0,
                     rng=rng, adjudication=True))
