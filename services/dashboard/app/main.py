@@ -529,6 +529,9 @@ def build_app() -> FastAPI:
     from .routes_admin_users import build_admin_users_router
     app.include_router(build_admin_users_router(cfg, state, TEMPLATES))
 
+    from .routes_review import build_review_router
+    app.include_router(build_review_router(cfg, state, TEMPLATES))
+
     from .auth import make_require_role, require_csrf
     require_role = make_require_role(cfg, state)
 
@@ -545,14 +548,6 @@ def build_app() -> FastAPI:
         if "text/html" in request.headers.get("accept", ""):
             return RedirectResponse(f"/login?next={request.url.path}", status_code=302)
         return JSONResponse({"error": "authentication required"}, status_code=401)
-
-    @app.get("/review", response_class=HTMLResponse)
-    async def review_page(request: Request,
-                          user=Depends(require_role("reviewer", "admin"))):
-        # Placeholder until spec 2 lands the annotation UI. Deliberately
-        # not linked from index.html.
-        return TEMPLATES.TemplateResponse(request, "review.html",
-                                          {"display_name": user.display_name})
 
     # Cache-bust static assets so a new dashboard build doesn't get hidden
     # behind a stale browser cache. We hash the JS+CSS+template mtimes at
