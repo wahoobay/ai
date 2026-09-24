@@ -3,6 +3,7 @@ missing-frame fallback."""
 from __future__ import annotations
 
 import io
+import json
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -149,8 +150,8 @@ async def test_skip_release_and_reopen_over_http(rdb, rclient, tmp_path):
 
 async def test_a_pass_2_payload_through_next_carries_no_model_information(rdb, rclient, tmp_path):
     """Review Focus 2, over HTTP: a blind item served through the real
-    endpoint carries no guess, no hints, no species it counts toward, and a
-    null lane (Important 6)."""
+    endpoint carries no guess, no hints, no species it counts toward, no
+    earlier verdict, and a null lane (Important 6)."""
     one = await make_user(rdb, "one")
     await make_user(rdb, "two")
     f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
@@ -166,3 +167,26 @@ async def test_a_pass_2_payload_through_next_carries_no_model_information(rdb, r
     body = r.json()
     assert body["item"]["pass"] == 2 and body["item"]["lane"] is None
     assert body["model"] is None and body["hints"] is None and body["counts_toward"] is None
+    assert "mine" not in body    # no sign of the earlier verdict either
+    text = json.dumps(body)
+    for word in ("Seriola", "zonata", "Rudderfish"):
+        assert word not in text
+
+
+async def test_a_duplicate_verdict_does_not_double_count_progress(rdb, rclient, tmp_path,
+                                                                    monkeypatch):
+    """Finding 2's side effect (round 2, item 5a): a dedup hit must not
+    call note_verified a second time."""
+    calls = []
+    monkeypatch.setattr("app.review_pool.ReviewPool.note_verified",
+                        lambda self, name: calls.append(name))
+    await make_user(rdb, "rev")
+    login(rclient, "rev")
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                "species": "Seriola zonata"}])
+    body = {"event_id": f["event_ids"][0], "outcome": "accept"}
+    r1 = rclient.post("/api/review/verdicts", json=body, headers=CSRF)
+    assert r1.status_code == 200 and r1.json()["duplicate"] is False
+    r2 = rclient.post("/api/review/verdicts", json=body, headers=CSRF)
+    assert r2.status_code == 200 and r2.json()["duplicate"] is True
+    assert calls == ["Seriola zonata"]

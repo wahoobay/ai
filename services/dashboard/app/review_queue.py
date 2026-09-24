@@ -153,9 +153,16 @@ async def next_item(conn, *, user_id: int, lane: str, species_order: list[str],
     params = {"uid": user_id, "lane": lane, "order": list(species_order), "claim_s": claim_s}
     async with conn.transaction():
         async with conn.cursor() as cur:
+            # claimed_by is deliberately kept, not nulled: a volunteer may
+            # only answer a box that was served to them (spec Sec 7/15/16),
+            # and this is what lets submit_verdict tell "my own claim
+            # lapsed" apart from "nobody ever served me this box" once the
+            # status here has already moved on to 'open'. A fresh claim
+            # overwrites it regardless; release_item and skip_item still
+            # clear it explicitly, because giving a box up really does mean
+            # nobody served it to you any more.
             await cur.execute(
-                """UPDATE review_items SET status = 'open', claimed_by = NULL,
-                          claimed_until = NULL
+                """UPDATE review_items SET status = 'open', claimed_until = NULL
                     WHERE id IN (SELECT id FROM review_items
                                   WHERE status = 'claimed' AND claimed_until < now()
                                   FOR UPDATE SKIP LOCKED)""")
@@ -251,20 +258,19 @@ def validate_bbox(bbox, width: int, height: int) -> list[int]:
     added-box validation (`review_frames._validate_added`): a box is
     four integers, inside the frame, and at least 4px on a side.
 
-    Type-robust: Task 8 feeds this raw client JSON. None, a non-sequence,
-    a bare string (whose characters would otherwise iterate as if it were
-    a list of four), the wrong length, or a non-numeric member all raise
-    the same Invalid rather than a TypeError or ValueError reaching the
-    caller as a 500."""
-    try:
-        wrong_length = isinstance(bbox, str | bytes) or len(bbox) != 4
-    except TypeError:
-        wrong_length = True
-    if wrong_length:
+    Type-robust: Task 8 feeds this raw client JSON. Only a list or tuple
+    of exactly four is accepted -- not None, a bare scalar, a string (whose
+    characters would otherwise iterate as if it were a list of four), or a
+    dict (whose keys can look numeric enough for int() to accept them,
+    e.g. {"10": 1, "20": 1, "300": 1, "400": 1}, silently taking the keys
+    as coordinates). A non-numeric or non-finite member (1e400, Infinity,
+    NaN) raises the same Invalid rather than a TypeError, ValueError or
+    OverflowError reaching the caller as a 500."""
+    if not isinstance(bbox, list | tuple) or len(bbox) != 4:
         raise Invalid("a box is [x1, y1, x2, y2]")
     try:
         x1, y1, x2, y2 = (int(v) for v in bbox)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise Invalid("a box is [x1, y1, x2, y2]") from None
     if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
         raise Invalid("the box must lie inside the frame")
@@ -287,6 +293,8 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
         if not guess:
             raise Invalid("this box has no model guess to accept")
         if not catalogue.entry(guess, body.life_stage):
+            if not body.life_stage and catalogue.has_name(guess):
+                raise Invalid(f"choose a life stage for {guess}")
             raise Invalid("the model's guess is not in the species list; "
                           "pick the species instead")
         name, life_stage, label_source = guess, body.life_stage, "model_guess"
@@ -316,14 +324,15 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
 async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outcome: str
                              ) -> dict | None:
     """A same-user resubmit within DUPLICATE_WINDOW_S naming the same
-    outcome, label, life stage and box as their own last verdict on this
-    event: return that existing verdict's response instead of inserting a
-    second row. A double click or a retried request on the no-item path
-    must not insert twice or double-count progress. None means: insert
-    normally, this is not a duplicate."""
+    outcome, label, life stage, box, confidence, celebrity and notes as
+    their own last verdict on this event: return that existing verdict's
+    response instead of inserting a second row. A double click or a
+    retried request on the no-item path must not insert twice, double-
+    count progress, or silently drop a change to any stored field. None
+    means: insert normally, this is not a duplicate."""
     recent = await fetch_one(conn, """
         SELECT id, created_at, corrected_name, not_a_fish, unidentifiable, life_stage,
-               corrected_bbox
+               corrected_bbox, confidence, celebrity_id, notes
           FROM detection_corrections
          WHERE event_id = %s AND user_id = %s AND NOT is_adjudication
          ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user_id))
@@ -335,15 +344,20 @@ async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outc
             and recent["unidentifiable"] == (outcome == "unidentifiable")
             and recent["corrected_name"] == v["name"]
             and recent["life_stage"] == v["life_stage"]
+            and recent["confidence"] == v["confidence"]
+            and recent["celebrity_id"] == v["celebrity_id"]
+            and recent["notes"] == v["notes"]
             and same_bbox):
         return None
     spot = await fetch_one(conn, """SELECT id FROM review_items
                                      WHERE event_id = %s AND pass = 2
                                         AND first_correction_id = %s""",
                            (event_id, recent["id"]))
+    # Describes the stored row, not the incoming (now known-identical) one.
     return {"id": recent["id"], "created_at": recent["created_at"].isoformat(),
-            "outcome": outcome, "label": v["name"], "first_pass": True,
-            "counts": v["name"] is not None and v["confidence"] != "uncertain",
+            "outcome": outcome, "label": recent["corrected_name"], "first_pass": True,
+            "counts": recent["corrected_name"] is not None
+            and recent["confidence"] != "uncertain",
             "spot_check_scheduled": spot is not None, "duplicate": True}
 
 
@@ -377,23 +391,33 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
                 raise NotFound("no such review item")
             if item["status"] in ("done", "retired"):
                 raise Conflict("this box was already answered")
-            live_claim = (item["status"] == "claimed"
-                         and item["claimed_until"] > datetime.now(UTC))
-            if live_claim and item["claimed_by"] != user.id:
+            # A volunteer may only answer a box that was served to them
+            # (spec Sec 7/15/16): claimed_by = them, and status is either
+            # 'claimed' (their claim, live or lapsed but not yet swept) or
+            # 'open' (their claim lapsed and the sweep already ran, but the
+            # sweep keeps claimed_by, and nobody has re-claimed it since).
+            # Someone ELSE's live claim is a 409; every other case -- never
+            # claimed, released, skipped, or someone else's lapsed claim --
+            # is a 403, not a 409, because there is no volunteer actively
+            # answering it right now to be "in conflict" with.
+            live_claim_by_other = (item["status"] == "claimed"
+                                   and item["claimed_by"] != user.id
+                                   and item["claimed_until"] > datetime.now(UTC))
+            if live_claim_by_other:
                 raise Conflict("another volunteer is answering this box")
-            if not (live_claim and item["claimed_by"] == user.id):
-                # No live claim of this user's own to trust -- never
-                # claimed, or the claim lapsed: re-check eligibility
-                # atomically before accepting, rather than trusting that
-                # serving enforced it. Pass 1 has no extra eligibility rule
-                # beyond "nobody else holds it", already checked above.
-                if item["pass"] == 2:
-                    if item["exclude_user_id"] == user.id:
-                        raise Forbidden("you gave the first verdict on this box")
-                    if await fetch_one(conn, """SELECT 1 FROM detection_corrections
-                                                 WHERE event_id = %s AND user_id = %s
-                                                 LIMIT 1""", (body.event_id, user.id)):
-                        raise Forbidden("you already answered this box")
+            served_to_me = item["claimed_by"] == user.id and item["status"] in ("claimed", "open")
+            if not served_to_me:
+                raise Forbidden("this box was not served to you")
+            # Pass-2 eligibility, defence in depth: even a genuinely held
+            # claim does not excuse the excluded first reviewer or anyone
+            # who has already answered the box some other way.
+            if item["pass"] == 2:
+                if item["exclude_user_id"] == user.id:
+                    raise Forbidden("you gave the first verdict on this box")
+                if await fetch_one(conn, """SELECT 1 FROM detection_corrections
+                                             WHERE event_id = %s AND user_id = %s
+                                             LIMIT 1""", (body.event_id, user.id)):
+                    raise Forbidden("you already answered this box")
         elif not adjudication:
             # No queue item: whole-frame mode, or changing your own answer.
             # The advisory lock above makes this check-then-insert atomic.
