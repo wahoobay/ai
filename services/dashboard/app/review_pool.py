@@ -368,7 +368,11 @@ class ReviewPool:
                 await conn.execute("SELECT set_config('statement_timeout', %s, true)",
                                    (str(self.s.statement_timeout_ms),))
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute(sql, params)
+                    # Never server-side prepared: after prepare_threshold
+                    # runs on a pooled connection PostgreSQL could switch
+                    # to a generic plan, which explain_review_probes.py
+                    # never shows (final review Minor 8).
+                    await cur.execute(sql, params, prepare=False)
                     return await cur.fetchall()
         except psycopg.errors.QueryCanceled:
             stats["timeouts"] += 1

@@ -288,7 +288,10 @@ class DashboardCfg:
 
         # --- review tool (docs/superpowers/specs/2026-09-24-...) ---
         repo_root = Path(__file__).resolve().parents[3]
-        self.review_pool_enabled = _env("REVIEW_POOL_ENABLED", "true").lower() != "false"
+        # The rollback switch: the usual spellings of "off" all work;
+        # anything else, or unset, leaves the pool on.
+        self.review_pool_enabled = (_env("REVIEW_POOL_ENABLED", "true").strip().lower()
+                                    not in {"0", "false", "no", "off"})
         self.review_pool_interval_s = float(_env("REVIEW_POOL_TOPUP_INTERVAL_S", "300"))
         self.review_pool_max_probes = int(_env("REVIEW_POOL_MAX_PROBES", "200"))
         self.review_pool_max_run_s = float(_env("REVIEW_POOL_MAX_RUN_S", "30"))

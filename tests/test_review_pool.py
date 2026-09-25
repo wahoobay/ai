@@ -44,6 +44,25 @@ def test_render_zoom_and_frame_size(tmp_path):
     assert im.size == (600, 300)
 
 
+@pytest.mark.parametrize("value, enabled", [
+    (None, True), ("true", True), ("1", True), ("yes", True), ("on", True), ("", True),
+    ("banana", True),
+    ("false", False), ("0", False), ("no", False), ("off", False), ("FALSE", False),
+    (" Off ", False), ("No\n", False),
+])
+def test_review_pool_enabled_is_off_for_the_usual_spellings_only(monkeypatch, value, enabled):
+    """Final review Minor 11: the Task 14 rollback switch. 0, false, no and
+    off switch the pool off, in any case and with surrounding whitespace;
+    anything else, or unset, leaves it on (the default)."""
+    from app.main import DashboardCfg
+
+    if value is None:
+        monkeypatch.delenv("REVIEW_POOL_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("REVIEW_POOL_ENABLED", value)
+    assert DashboardCfg().review_pool_enabled is enabled
+
+
 pytestmark_db = pytest.mark.anyio
 
 
@@ -209,6 +228,24 @@ async def test_the_statement_timeout_never_outlives_a_probe(rdb, review_assets, 
     stats = await _pool(rdb, review_assets, identify_open=5).run_once()
     assert stats["errors"] == 0 and stats["probes"] > 0
     assert await timeouts() == before
+
+
+@pytestmark_db
+async def test_probes_are_never_prepared_on_the_server(rdb, review_assets):
+    """Final review Minor 8 / ledger 119: psycopg prepares a statement
+    server-side once a pooled connection has run it prepare_threshold (5)
+    times, and PostgreSQL may then pick a generic plan for the probe that
+    scripts/dev/explain_review_probes.py never shows. A probe runs
+    unprepared however often its connection has run it."""
+    pool = _pool(rdb, review_assets)
+    probe_sql = "SELECT %s::int AS n  -- review pool probe"
+    stats = {"probes": 0, "timeouts": 0}
+    async with rdb.connection() as conn:
+        for n in range(8):
+            assert await pool._probe(conn, probe_sql, (n,), stats) == [{"n": n}]
+        cur = await conn.execute("SELECT statement FROM pg_prepared_statements")
+        prepared = [r[0] for r in await cur.fetchall()]
+    assert not [s for s in prepared if "review pool probe" in s]
 
 
 @pytestmark_db

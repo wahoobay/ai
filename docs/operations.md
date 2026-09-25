@@ -574,7 +574,9 @@ added, how many probes it used, and any timeouts or errors.
   `GET /api/review/browse` query times out, the endpoint returns 503
   instead of hanging or 500ing; retry shortly.
 - **Turn it off:** set `REVIEW_POOL_ENABLED=false` in `.env` and restart
-  the dashboard. Queued boxes keep being served; nothing new is added.
+  the dashboard (`0`, `no` and `off` work too, in any case; any other
+  value leaves it on). Queued boxes keep being served; nothing new is
+  added.
 - **Date window:** admins can limit the queue to a range of days on the
   Browse tab (for example 2026-05-17 to 2026-06-25, the period with live
   sonde readings) via `PUT /api/review/settings/window`. Open pass-1
