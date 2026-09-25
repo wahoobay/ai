@@ -13,7 +13,7 @@ from review_fixtures import login, make_user
 
 STATIC = Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "static"
 NODE = shutil.which("node") or "/raid/scratch/dzimmerman2021/miniconda3/envs/node/bin/node"
-SCRIPTS = ["review-core.js", "review-single.js"]        # Tasks 11 and 12 add theirs
+SCRIPTS = ["review-core.js", "review-single.js", "review-frame.js"]        # Task 12 adds its own
 
 
 @pytest.mark.skipif(not Path(NODE).exists(), reason="node is not available")
@@ -72,6 +72,22 @@ MUTATING_HANDLERS = ("submit", "skip", "reopen")
 @pytest.mark.parametrize("name", MUTATING_HANDLERS)
 def test_mutating_handlers_share_the_busy_guard(name):
     body = _function_body((STATIC / "review-single.js").read_text(), name)
+    assert re.search(r"\bbusy\b\s*\)\s*return", body), (
+        f"{name}() must return early when busy is already true")
+    assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
+    assert "finally" in body and re.search(r"busy\s*=\s*false", body), (
+        f"{name}() must reset busy in a finally block")
+
+
+# review-frame.js's own actions that send a request (Task 11): entering the
+# view claims the frame's boxes, and each answer/draw/complete action
+# mutates state, so the same re-entrancy guard applies to all of them.
+FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedBox", "complete")
+
+
+@pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
+def test_frame_mutating_handlers_share_the_busy_guard(name):
+    body = _function_body((STATIC / "review-frame.js").read_text(), name)
     assert re.search(r"\bbusy\b\s*\)\s*return", body), (
         f"{name}() must return early when busy is already true")
     assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"

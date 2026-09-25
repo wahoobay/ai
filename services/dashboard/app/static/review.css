@@ -80,3 +80,23 @@
   border: 1px solid #1f3b4f; border-radius: 6px; padding: 3px; color: var(--ink); font-size: 10px;
   cursor: pointer; flex: none; }
 .rv-recent-item img { width: 64px; height: 40px; object-fit: cover; border-radius: 3px; }
+
+/* ---- whole-frame mode (Task 11) ---- */
+.rv-frame-top { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.rv-frame-top button.on { background: #3ad1ff; color: #062033; }
+.rv-layout-frame { grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr); }
+.rv-frame-canvas .rv-editor-svg.drawing { cursor: crosshair; }
+.rv-fb { fill: rgba(0, 0, 0, 0.001); stroke-width: 2px; vector-effect: non-scaling-stroke; cursor: pointer; }
+.rv-fb-pending { stroke: #ffc400; stroke-dasharray: 6 4; }
+.rv-fb-done { stroke: #34c759; }
+.rv-fb-locked { stroke: #8aa3b5; stroke-dasharray: 2 4; }
+.rv-fb-added { stroke: #3ad1ff; stroke-dasharray: 6 4; }
+.rv-fb.rv-fb-selected { stroke: #ffc400; stroke-width: 3px; stroke-dasharray: none; }
+.rv-fb-label { fill: #fff; paint-order: stroke; stroke: #000; stroke-width: 3px; font-weight: 700;
+  pointer-events: none; }
+.rv-checklist { list-style: none; margin: 4px 0 0; padding: 0; font-size: 13px; }
+.rv-cl { padding: 4px 6px; border-left: 3px solid transparent; cursor: pointer; }
+.rv-cl.rv-fb-pending { border-left-color: #ffc400; }
+.rv-cl.rv-fb-done { border-left-color: #34c759; }
+.rv-cl.rv-fb-locked { border-left-color: #8aa3b5; }
+.rv-cl.rv-fb-added { border-left-color: #3ad1ff; }
