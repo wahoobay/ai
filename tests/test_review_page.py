@@ -95,6 +95,23 @@ def test_frame_mutating_handlers_share_the_busy_guard(name):
         f"{name}() must reset busy in a finally block")
 
 
+# Fix round 1, Important finding: review-single.js's and review-frame.js's
+# acceptGuess() were a near-verbatim duplication of the same life-stage
+# check (stage-less entry -> auto-accept; one remaining stage -> auto-accept
+# with it; two or more -> a chip picker). Both must now delegate to one
+# shared RV.acceptGuessFlow() in review-core.js instead of reimplementing
+# the stage enumeration inline, so the rule can't drift between the views.
+def test_accept_guess_uses_the_shared_helper():
+    assert "RV.acceptGuessFlow" in (STATIC / "review-core.js").read_text(), (
+        "the shared life-stage-picking helper must live in review-core.js"
+    )
+    for name in ("review-single.js", "review-frame.js"):
+        body = _function_body((STATIC / name).read_text(), "acceptGuess")
+        assert "RV.acceptGuessFlow(" in body, f"{name}'s acceptGuess() must call the shared helper"
+        assert "RV.catalogue.filter" not in body, (
+            f"{name}'s acceptGuess() must not reimplement the life-stage check inline")
+
+
 def test_key_dispatcher_ignores_held_down_keys():
     src = (STATIC / "review-core.js").read_text()
     marker = 'document.addEventListener("keydown"'

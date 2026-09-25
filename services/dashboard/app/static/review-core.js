@@ -181,6 +181,43 @@ RV.SpeciesPicker = class SpeciesPicker {
   pick(entry) { this.clear(); this.input.blur(); this.onPick(entry); }
 };
 
+// ---- accepting a model's guess -----------------------------------------------
+
+// "Looks right" sends no life_stage. If the catalogue lists `model`'s guess
+// only under specific life stages (no plain, stage-less entry), the server
+// rejects a bare accept with "choose a life stage for <species>"; ask first
+// instead of round-tripping that 400. RV.entry(name, null) alone can't tell
+// "no ambiguity" from "ambiguous, but here's *an* entry anyway" -- it
+// deliberately falls back to any entry with that name (used elsewhere just
+// to show a representative photo) -- so confirm the entry it returns really
+// has no life_stage, and otherwise fall back to enumerating the catalogue's
+// stages for this name.
+//
+// Shared by review-single.js and review-frame.js (fix round 1, Important
+// finding: their acceptGuess() functions were a near-verbatim duplication
+// of this exact check, risking the life-stage rule drifting between the
+// two views). `onAnswer(extra)` is called with `{}` for an unambiguous
+// accept, or `{life_stage}` once one is chosen (from a single remaining
+// stage, or picked from the chips rendered into `stageContainerId`); each
+// view passes its own submit function -- already wrapped in that view's own
+// busy guard -- as `onAnswer`.
+RV.acceptGuessFlow = function acceptGuessFlow(model, stageContainerId, onAnswer) {
+  const name = model.name;
+  const plain = RV.entry(name, null);
+  if (plain && !plain.life_stage) { onAnswer({}); return; }
+  const stages = RV.catalogue.filter((e) => e.name === name);
+  if (stages.length < 2) {
+    onAnswer({ life_stage: stages.length ? stages[0].life_stage : null });
+    return;
+  }
+  const who = model.common || name;
+  document.getElementById(stageContainerId).replaceChildren(
+    RV.el("span", { class: "rv-label", text: `Which life stage of ${who}?` }),
+    RV.el("div", { class: "rv-chips" }, stages.map((s) => RV.el("button", {
+      type: "button", class: "rv-chip", onclick: () => onAnswer({ life_stage: s.life_stage }),
+    }, s.life_stage || who))));
+};
+
 // ---- the box editor ---------------------------------------------------------
 
 RV.clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);

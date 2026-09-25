@@ -261,26 +261,13 @@ RV.views.frame = (() => {
     return out;
   }
 
-  // "Looks right" sends no life_stage. If the catalogue lists the box's
-  // guess only under specific life stages (no plain, stage-less entry),
-  // the server rejects that with "choose a life stage for <species>";
-  // ask first instead of round-tripping the 400 (same rule review-single
-  // .js's acceptGuess() applies to the single-box view).
+  // The life-stage check (ask first, rather than round-trip the server's
+  // "choose a life stage for <species>" 400) is shared with
+  // review-single.js via RV.acceptGuessFlow (review-core.js) -- fix round
+  // 1, Important finding: this used to reimplement it inline, identically
+  // to review-single.js's own copy.
   function acceptGuess(b) {
-    const name = b.model.name;
-    const plain = RV.entry(name, null);
-    if (plain && !plain.life_stage) { answerModel("accept", {}); return; }
-    const stages = RV.catalogue.filter((e) => e.name === name);
-    if (stages.length < 2) {
-      answerModel("accept", { life_stage: stages.length ? stages[0].life_stage : null });
-      return;
-    }
-    const who = b.model.common || name;
-    document.getElementById("rv-frame-stage").replaceChildren(
-      RV.el("span", { class: "rv-label", text: `Which life stage of ${who}?` }),
-      RV.el("div", { class: "rv-chips" }, stages.map((s) => RV.el("button", {
-        type: "button", class: "rv-chip", onclick: () => answerModel("accept", { life_stage: s.life_stage }),
-      }, s.life_stage || who))));
+    RV.acceptGuessFlow(b.model, "rv-frame-stage", (extra) => answerModel("accept", extra));
   }
 
   function modelPanel(b) {
@@ -367,7 +354,7 @@ RV.views.frame = (() => {
     out.push(RV.el("button", { type: "button", class: "rv-primary", disabled: Boolean(state.complete) || blocked,
       onclick: complete },
     state.complete ? "Frame complete"
-      : blocked ? `Mark frame complete (answer ${state.blocking.join(", ")} first)` : "Mark frame complete"));
+      : blocked ? `Mark frame complete (answer box ${state.blocking.join(", ")} first)` : "Mark frame complete"));
     return out;
   }
 
