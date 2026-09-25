@@ -2,12 +2,13 @@
 box's frame is the one captured at the box's own timestamp (spec §12.3)."""
 from __future__ import annotations
 
+import inspect
 import io
 from datetime import timedelta
 
 import pytest
 from PIL import Image
-from review_fixtures import T0, add_verdict, login, make_user, seed_frame
+from review_fixtures import CELEBRITIES, CSRF, T0, add_verdict, login, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
 
@@ -63,6 +64,51 @@ async def test_filtering_by_reviewer_is_admin_only(rdb, rclient, tmp_path):
     login(rclient, "boss")
     rows = rclient.get("/api/corrections?reviewer=Alice%20Example").json()
     assert [r["reviewer"] for r in rows] == ["Alice Example"]
+
+
+def _app_state(client) -> dict:
+    """build_app keeps its state in a closure. The celebrity routes read
+    state["celebrities_by_id"], which startup loads from the repo's own
+    assets/celebrities.json rather than REVIEW_ASSETS_DIR, so a test that
+    tags the fixture's named individual has to register it there too."""
+    route = next(r for r in client.app.routes
+                 if getattr(r, "path", None) == "/api/celebrities/{celebrity_id}")
+    return inspect.getclosurevars(route.endpoint).nonlocals["state"]
+
+
+async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(rdb, rclient, tmp_path,
+                                                                         monkeypatch):
+    """Final review C1: GET /api/celebrities/{id} is public, and the review
+    page tags named individuals with reviewer = the volunteer's display
+    name. Nobody has opted in to public credit (spec §1), so the gallery
+    drops the key for everyone but admins (spec §12.1: removed, not
+    blanked)."""
+    bobby = CELEBRITIES["celebrities"][0]
+    monkeypatch.setitem(_app_state(rclient), "celebrities_by_id", {bobby["id"]: bobby})
+    frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                    "species": "Acanthurus coeruleus"}])
+    await make_user(rdb, "alice")
+    login(rclient, "alice")
+    r = rclient.post("/api/review/verdicts", headers=CSRF, json={
+        "event_id": frame["event_ids"][0], "outcome": "species",
+        "label": "Acanthurus coeruleus", "label_source": "search", "celebrity_id": bobby["id"]})
+    assert r.status_code == 200, r.text
+
+    url = f"/api/celebrities/{bobby['id']}"
+    # a signed-in volunteer is not an admin either
+    mine = rclient.get(url).json()["gallery"]
+    assert mine and all("reviewer" not in g for g in mine)
+    rclient.cookies.clear()
+    r = rclient.get(url)
+    assert r.status_code == 200
+    gallery = r.json()["gallery"]
+    assert [g["event_id"] for g in gallery] == frame["event_ids"]
+    assert all("reviewer" not in g for g in gallery)
+    assert "Alice" not in r.text
+
+    await make_user(rdb, "boss", role="admin")
+    login(rclient, "boss")
+    assert [g["reviewer"] for g in rclient.get(url).json()["gallery"]] == ["Alice"]
 
 
 async def test_roi_uses_the_frame_saved_at_the_detections_own_timestamp(rdb, rclient, tmp_path):

@@ -2798,7 +2798,7 @@ async function openCelebrityModal(celebId) {
   const lastSeen  = d.last_seen  || (d.last_tagged_at  ? new Date(d.last_tagged_at).toLocaleDateString()  : null);
   const galleryHtml = (d.gallery || []).length
     ? `<div class="celeb-gallery">${d.gallery.map(g => `
-        <a class="celeb-thumb" href="javascript:openRoiModal(${g.event_id})" title="${escAttr(g.tagged_at || '')} · ${escAttr(g.reviewer || 'unknown reviewer')}">
+        <a class="celeb-thumb" href="javascript:openRoiModal(${g.event_id})" title="${escAttr([g.tagged_at, g.reviewer].filter(Boolean).join(' · '))}">
           <img src="${g.roi_url}" alt="event ${g.event_id}" loading="lazy" onerror="this.style.display='none'">
         </a>`).join("")}</div>`
     : `<div class="celeb-empty">no reviewer-tagged sightings yet.</div>`;

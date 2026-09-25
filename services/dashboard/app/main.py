@@ -1516,11 +1516,12 @@ def build_app() -> FastAPI:
     async def get_celebrity(
         celebrity_id: str,
         gallery_limit: int = Query(24, ge=1, le=200),
+        user=Depends(optional_user),
     ) -> Response:
         """One celebrity: catalogue entry + sightings count + recent
-        tagged-detection gallery (event_id + ts + reviewer + bbox so
-        the client can render thumbnails via the existing roi.jpg
-        endpoint)."""
+        tagged-detection gallery (event_id + ts + bbox so the client can
+        render thumbnails via the existing roi.jpg endpoint; plus the
+        tagging reviewer, for admins only)."""
         celebs = state.get("celebrities_by_id") or {}
         c = celebs.get(celebrity_id)
         if c is None:
@@ -1569,6 +1570,11 @@ def build_app() -> FastAPI:
                             "bbox": list(r["bbox"]) if r["bbox"] else None,
                             "roi_url": f"/api/detections/{r['event_id']}/roi.jpg?size=240",
                         })
+        if not _is_admin(user):
+            # Spec §1/§12.1: reviewer is an account's display name now, and
+            # this endpoint is public. Removed, not blanked.
+            for g in gallery:
+                g.pop("reviewer", None)
         photo_event = gallery[0]["event_id"] if gallery else None
         return JSONResponse({
             **c,
