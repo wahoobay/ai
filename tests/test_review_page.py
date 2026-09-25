@@ -13,7 +13,7 @@ from review_fixtures import login, make_user
 
 STATIC = Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "static"
 NODE = shutil.which("node") or "/raid/scratch/dzimmerman2021/miniconda3/envs/node/bin/node"
-SCRIPTS = ["review-core.js", "review-single.js", "review-frame.js"]        # Task 12 adds its own
+SCRIPTS = ["review-core.js", "review-single.js", "review-frame.js", "review-browse.js"]
 
 
 @pytest.mark.skipif(not Path(NODE).exists(), reason="node is not available")
@@ -88,6 +88,24 @@ FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedB
 @pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
 def test_frame_mutating_handlers_share_the_busy_guard(name):
     body = _function_body((STATIC / "review-frame.js").read_text(), name)
+    assert re.search(r"\bbusy\b\s*\)\s*return", body), (
+        f"{name}() must return early when busy is already true")
+    assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
+    assert "finally" in body and re.search(r"busy\s*=\s*false", body), (
+        f"{name}() must reset busy in a finally block")
+
+
+# review-browse.js's own mutating admin actions (Task 12): settling a
+# dispute and saving or clearing the date window. Loading the grid, the
+# progress KPIs and the admin panels are plain re-reads (same class as
+# review-single.js's loadNext() and review-frame.js's reload(), neither of
+# which is in the lists above), so only these two get the guard.
+BROWSE_MUTATING_HANDLERS = ("adjudicate", "save")
+
+
+@pytest.mark.parametrize("name", BROWSE_MUTATING_HANDLERS)
+def test_browse_mutating_handlers_share_the_busy_guard(name):
+    body = _function_body((STATIC / "review-browse.js").read_text(), name)
     assert re.search(r"\bbusy\b\s*\)\s*return", body), (
         f"{name}() must return early when busy is already true")
     assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
