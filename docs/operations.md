@@ -606,6 +606,26 @@ It is idempotent. It changes `detection_corrections.event_id` to
 `ON DELETE RESTRICT`: deleting a detection that has a human verdict now
 fails instead of silently deleting the verdict.
 
+**Never delete `review_items` rows**, not even to tidy up. Whether a
+verdict is a spot-check (pass 2) is recorded only through its
+`review_item_id` → `review_items.pass`, and that foreign key is
+`ON DELETE SET NULL`. Deleting a pass-2 item turns its verdict into a
+pass-1 verdict, which silently rewrites how the box resolves: an agreed
+or disputed box becomes a single answer, possibly with a different
+label. To stop an item being served, retire it instead
+(`status = 'retired'`, with a `retired_reason`).
+
+### Adjudication is final
+
+An adjudication cannot be changed from the page or the API. The
+adjudicate route (`POST /api/review/disputes/{event_id}/adjudicate`)
+refuses any box that is not currently disputed, and nothing outranks an
+adjudication when a box is resolved, so once a box is adjudicated it is
+never disputed again. A wrong adjudication can only be corrected in SQL:
+delete that box's `detection_corrections` row with
+`is_adjudication = true`, and the box is disputed again, ready to
+adjudicate from the Browse tab.
+
 ### Trying changes before deploying
 
 `scripts/dev/seed_review_demo.py` copies an evenly spread sample of real
