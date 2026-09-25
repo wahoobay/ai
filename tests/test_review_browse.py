@@ -367,7 +367,8 @@ async def test_set_window_refuses_a_future_start_or_a_backwards_range(rdb):
     boss = await make_user(rdb, "boss", role="admin")
     async with rdb.connection() as conn:
         with pytest.raises(Invalid):
-            await set_window(conn, admin_id=boss, start=date(2026, 12, 25), end=None)
+            await set_window(conn, admin_id=boss, start=date.today() + timedelta(days=30),
+                             end=None)
         with pytest.raises(Invalid):
             await set_window(conn, admin_id=boss, start=date(2026, 6, 25), end=date(2026, 5, 17))
 
