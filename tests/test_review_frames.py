@@ -163,6 +163,88 @@ async def test_whole_frame_over_http(rdb, rclient, tmp_path):
     assert rclient.get(f"/api/review/frames/{sf}").json()["complete"] is not None
 
 
+SECOND_OPINION_FIRST = "finish the second opinion first"
+
+
+async def _held_spot_check(rdb, tmp_path, holder: int) -> dict:
+    """A two-box frame: box 1 answered by 'other' and now a spot-check
+    live-claimed by `holder`; box 2 a queued, unclaimed pass-1 item."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:2])
+    other = await make_user(rdb, "other")
+    first = await add_verdict(rdb, f["event_ids"][0], other, name="Seriola zonata")
+    spot = await add_item(rdb, f, 0, pass_=2, exclude_user_id=other, first_correction_id=first,
+                          status="claimed", claimed_by=holder,
+                          claimed_until=datetime.now(UTC) + timedelta(minutes=5))
+    queued = await add_item(rdb, f, 1, predicted="Pomatomus saltarix",
+                            route="Pomatomus saltatrix")
+    return {**f, "spot": spot, "queued": queued}
+
+
+async def _status(rdb, item_id):
+    async with rdb.connection() as conn:
+        cur = await conn.execute("SELECT status, claimed_by FROM review_items WHERE id = %s",
+                                 (item_id,))
+        return await cur.fetchone()
+
+
+@pytest.mark.parametrize("role", ["reviewer", "admin"])
+async def test_a_held_second_opinion_closes_its_frame_to_whoever_holds_it(rdb, rclient, tmp_path,
+                                                                          role):
+    """Final review I1: the frame view shows every other box's resolved
+    label or model guess, so opening it mid-spot-check would contaminate
+    the second opinion (spec §8). Admins get no exception. The frame's
+    image carries no labels and the single view already shows it, so it
+    stays open. A refused open claims nothing."""
+    holder = await make_user(rdb, "checker", role=role)
+    f = await _held_spot_check(rdb, tmp_path, holder)
+    sf = f["saved_frame_id"]
+    login(rclient, "checker")
+    for r in (rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF),
+              rclient.get(f"/api/review/frames/{sf}")):
+        assert r.status_code == 409 and r.json() == {"error": SECOND_OPINION_FIRST}
+    assert rclient.get(f"/api/review/frames/{sf}/image.jpg").status_code == 200
+    assert await _status(rdb, f["queued"]) == ("open", None)
+    assert await _status(rdb, f["spot"]) == ("claimed", holder)
+
+
+async def test_someone_not_holding_the_second_opinion_can_open_its_frame(rdb, rclient, tmp_path):
+    holder = await make_user(rdb, "checker")
+    f = await _held_spot_check(rdb, tmp_path, holder)
+    sf = f["saved_frame_id"]
+    await make_user(rdb, "bystander")
+    login(rclient, "bystander")
+    opened = rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF)
+    assert opened.status_code == 200
+    assert opened.json()["boxes"][0]["state"] == "answered_hidden"
+    assert rclient.get(f"/api/review/frames/{sf}").status_code == 200
+
+
+async def test_the_frame_opens_again_once_the_second_opinion_lapses_or_is_answered(
+        rdb, rclient, tmp_path):
+    holder = await make_user(rdb, "checker")
+    f = await _held_spot_check(rdb, tmp_path, holder)
+    sf = f["saved_frame_id"]
+    login(rclient, "checker")
+
+    async def set_claim(delta):
+        async with rdb.connection() as conn:
+            await conn.execute("UPDATE review_items SET claimed_until = %s WHERE id = %s",
+                               (datetime.now(UTC) + delta, f["spot"]))
+
+    await set_claim(timedelta(minutes=-1))          # lapsed, not yet swept
+    assert rclient.get(f"/api/review/frames/{sf}").status_code == 200
+    assert rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF).status_code == 200
+
+    await set_claim(timedelta(minutes=5))           # live again
+    assert rclient.get(f"/api/review/frames/{sf}").status_code == 409
+    r = rclient.post("/api/review/verdicts", headers=CSRF, json={
+        "event_id": f["event_ids"][0], "review_item_id": f["spot"], "outcome": "species",
+        "label": "Seriola zonata", "label_source": "search"})
+    assert r.status_code == 200, r.text
+    assert rclient.get(f"/api/review/frames/{sf}").status_code == 200
+    assert rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF).status_code == 200
+
+
 async def test_an_admin_sees_the_answer_once_the_spot_check_is_done(rdb, tmp_path, cat):
     """Important 1, second half: the hiding only lasts while the
     spot-check is open or claimed. Once a THIRD user -- not the admin

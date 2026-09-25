@@ -228,7 +228,7 @@ RV.views.single = (() => {
         if (!noteBox.hidden) noteBox.focus();
       } }, "+ note"),
       RV.el("button", { type: "button", class: "rv-link", onclick: () => skip() }, "Skip ", kbd("S")),
-      RV.views.frame
+      frameAllowed(c)
         ? RV.el("button", { type: "button", class: "rv-link", onclick: () => openFrame() }, "Whole frame ", kbd("F"))
         : null),
     noteBox, RV.el("div", { class: "rv-celeb", id: "rv-celeb" }));
@@ -304,8 +304,16 @@ RV.views.single = (() => {
     }
   }
 
+  // Whole-frame mode shows the other boxes' labels and model guesses, so a
+  // spot-check (item.pass 2; its item.lane is null) never offers it: that
+  // would contaminate the second opinion (final review I1). The server
+  // refuses as well, with a 409, while the spot-check is held.
+  function frameAllowed(c) {
+    return Boolean(RV.views.frame && c && c.item.pass !== 2);
+  }
+
   function openFrame() {
-    if (current && RV.views.frame) RV.show("frame", { savedFrameId: current.box.saved_frame_id });
+    if (frameAllowed(current)) RV.show("frame", { savedFrameId: current.box.saved_frame_id });
   }
 
   function renderRecent() {
@@ -335,7 +343,7 @@ RV.views.single = (() => {
     if (k === "c") { submit("unidentifiable", {}); return true; }
     if (k === "n") { submit("no_animal", {}); return true; }
     if (k === "s") { skip(); return true; }
-    if (k === "f" && RV.views.frame) { openFrame(); return true; }
+    if (k === "f" && frameAllowed(current)) { openFrame(); return true; }
     if (k === "Escape" && editor) { editor.reset(); return true; }
     return false;
   });

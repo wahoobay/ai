@@ -8,7 +8,8 @@ usable as detector training data.
   volunteer; boxes someone else holds are shown locked.
 * A box with a pending spot-check shows as answered with the answer
   hidden (unless you gave it), so viewing the frame cannot contaminate
-  the second opinion.
+  the second opinion. For the same reason, whoever holds a live claim on
+  a spot-check in the frame cannot open or read it until they answer.
 * Complete means every model box has a first-pass verdict from anyone.
   A drawn box always has an answer, because it cannot be saved without.
 * Drawn boxes can be changed or removed by whoever drew them until the
@@ -60,8 +61,28 @@ async def frame_record(conn, saved_frame_id: int) -> dict:
     return row
 
 
+async def refuse_during_second_opinion(conn, *, saved_frame_id: int, user_id: int) -> None:
+    """The frame view shows every other box's resolved label or model
+    guess, so a volunteer holding a live spot-check (pass-2) claim on any
+    box in this frame may not open it until that second opinion is given
+    (or the claim lapses): viewing the frame cannot contaminate it (spec
+    §8). Admins get no exception, as elsewhere for spot-checks. The frame
+    is matched on exact camera + frame_id + ts."""
+    if await fetch_one(conn, """
+            SELECT 1 FROM review_items ri
+              JOIN detection_events de ON de.id = ri.event_id
+              JOIN saved_frames sf ON sf.id = %s
+             WHERE ri.pass = 2 AND ri.status = 'claimed' AND ri.claimed_by = %s
+               AND ri.claimed_until > now()
+               AND de.source_name = sf.source_name AND de.ts = sf.ts
+               AND de.frame_id = sf.frame_id
+             LIMIT 1""", (saved_frame_id, user_id)):
+        raise Conflict("finish the second opinion first")
+
+
 async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int) -> None:
     async with conn.transaction(), conn.cursor() as cur:
+        await refuse_during_second_opinion(conn, saved_frame_id=saved_frame_id, user_id=user_id)
         await cur.execute("""
             UPDATE review_items
                SET status = 'claimed', claimed_by = %(uid)s,
@@ -75,6 +96,7 @@ async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int) -
 
 async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
     fr = await frame_record(conn, saved_frame_id)
+    await refuse_during_second_opinion(conn, saved_frame_id=saved_frame_id, user_id=user.id)
     events = await fetch_all(conn, """
         SELECT id, bbox, best_species_id, best_accuracy FROM detection_events
          WHERE source_name = %s AND ts = %s AND frame_id = %s ORDER BY id""",

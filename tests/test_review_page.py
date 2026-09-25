@@ -130,6 +130,27 @@ def test_accept_guess_uses_the_shared_helper():
             f"{name}'s acceptGuess() must not reimplement the life-stage check inline")
 
 
+# Final review I1: whole-frame mode shows the other boxes' labels and model
+# guesses, so a spot-check (pass 2) must not offer it. The server refuses
+# too (409 "finish the second opinion first"); the page just shouldn't lead
+# there. item.pass is what tells a spot-check apart: item.lane is null for
+# pass 2, so it cannot be used.
+def test_whole_frame_is_not_offered_on_a_spot_check():
+    src = (STATIC / "review-single.js").read_text()
+    gate = _function_body(src, "frameAllowed")
+    assert re.search(r"\.item\.pass\s*!==\s*2", gate), "frameAllowed() must refuse pass 2"
+    assert "lane" not in gate, "frameAllowed() must not rely on item.lane"
+    # every way into the frame view from the single view goes through it:
+    # the button, the F key, and openFrame() itself
+    assert re.search(r"frameAllowed\(c\)\s*\?\s*RV\.el\(\"button\"[^\n]*Whole frame", src), (
+        "the Whole-frame button must only be built when frameAllowed(c)")
+    assert re.search(r'k === "f" && frameAllowed\(current\)', src), (
+        "the F key must be ignored unless frameAllowed(current)")
+    assert re.search(r"if \(frameAllowed\(current\)\)",
+                     _function_body(src, "openFrame")), "openFrame() must check frameAllowed"
+    assert src.count('RV.show("frame"') == 1, "the frame view is only entered via openFrame()"
+
+
 def test_key_dispatcher_ignores_held_down_keys():
     src = (STATIC / "review-core.js").read_text()
     marker = 'document.addEventListener("keydown"'
