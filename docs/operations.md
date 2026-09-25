@@ -147,10 +147,10 @@ pkill -f 'cloudflared tunnel'
 Graceful shutdown gives each subprocess up to ~5 s *per background
 task* to drain in-flight work (save queue, frame-stats flush, pg
 connection close) before that task is abandoned — not a flat ~5 s for
-the whole process. The dashboard alone cancels four background tasks
-(SLO checker, matview refresher, sheet poller, session pruner) in
-sequence on shutdown, then closes its DB pool (its own 5 s default
-timeout), so its worst case is ~20-25 s, not "a few seconds" — this
+the whole process. The dashboard alone cancels five background tasks
+(SLO checker, matview refresher, sheet poller, session pruner, review
+pool) in sequence on shutdown, then closes its DB pool (its own 5 s
+default timeout), so its worst case is ~25-30 s, not "a few seconds" — this
 matters because a cancelled task's in-flight Postgres statement can be
 slow to unwind (the matview refresher's REFRESH has been observed
 taking 47 s, 75 s, and 144 s) and psycopg has to let that drain before
@@ -535,6 +535,85 @@ fix needs to be in place).
 `/register` and `POST /api/auth/register` (403) without a code change
 or restart-time flag — just flip the env var and restart the
 dashboard process. Existing accounts are unaffected either way.
+
+---
+
+## Review tool (/review)
+
+Volunteers with the reviewer or admin role label boxes at `/review`. The
+design is `docs/superpowers/specs/2026-09-24-reviewer-annotation-dataset-design.md`.
+
+### The pool task
+
+A background task in the dashboard keeps `review_items` topped up, every
+`REVIEW_POOL_TOPUP_INTERVAL_S` (300 s). Each run is capped at
+`REVIEW_POOL_MAX_PROBES` index lookups and `REVIEW_POOL_MAX_RUN_S`
+seconds, and every statement it issues — the big-table probes, the
+window read, the retire update, the small per-box lookups, and the
+progress refresh — runs under its own 5 s statement timeout scoped to
+its own transaction (never a session-level `SET`, which would linger on
+the pooled connection and could kill the matview refresher's 47-144 s
+`REFRESH`). A run never overlaps the previous one. A probe that times
+out backs that species off for an hour rather than the day-long skip a
+genuinely empty probe earns — a timeout means "we don't know," not
+"nothing there"; the identify lane has no per-species key to back off
+by, so a timed-out identify probe is simply retried, still bounded by
+the run's own probe/time budget. Its log lines start with
+`review pool:` in `logs/app/dashboard.log`; each run logs what it
+added, how many probes it used, and any timeouts or errors.
+
+- **Status:** `GET /api/review/status` (admin) shows the last run, item
+  counts broken down by lane/pass/status, how many open items still
+  lack model hints, and the date window. The Browse tab shows the same
+  to admins.
+- **Progress and browse under load:** `GET /api/review/progress`
+  answers with `"stale": true` when the pool's own progress refresh
+  (training-set baseline + verified-box counts) hits its statement
+  timeout — the counts served are the last good ones rather than a 500.
+  If computing the progress summary itself times out, or a
+  `GET /api/review/browse` query times out, the endpoint returns 503
+  instead of hanging or 500ing; retry shortly.
+- **Turn it off:** set `REVIEW_POOL_ENABLED=false` in `.env` and restart
+  the dashboard. Queued boxes keep being served; nothing new is added.
+- **Date window:** admins can limit the queue to a range of days on the
+  Browse tab (for example 2026-05-17 to 2026-06-25, the period with live
+  sonde readings) via `PUT /api/review/settings/window`. Open pass-1
+  boxes outside the window are retired at once (pass-2 spot-checks are
+  unaffected). **Narrowing the window retires boxes permanently:** the
+  pool never re-adds an event that already has a `review_items` row,
+  retired or not, so widening the window back out later does not bring
+  those boxes back — only newly-probed events fill the queue back in.
+- **Before enabling on production:** run
+  `scripts/dev/explain_review_probes.py --env <path to .env>` against
+  the live database first. It `EXPLAIN`s (never executes) the pool's
+  probe queries; every plan must use an index scan on
+  `detection_events` / `saved_frames`, not a sequential scan over
+  hundreds of millions of rows.
+- **Settings:** see the `REVIEW_*` block in `.env.example`.
+
+### Schema
+
+The review tool's tables and columns are in
+`db/migrations/2026-09-24-review-tool.sql` (mirrored in `db/init.sql`).
+Apply it to the live database with the procedure in "Applying a schema
+change to the live database" above:
+
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f db/migrations/2026-09-24-review-tool.sql
+
+It is idempotent. It changes `detection_corrections.event_id` to
+`ON DELETE RESTRICT`: deleting a detection that has a human verdict now
+fails instead of silently deleting the verdict.
+
+### Trying changes before deploying
+
+`scripts/dev/seed_review_demo.py` copies an evenly spread sample of real
+frames and detections into the test database (reading production in a
+read-only session) and creates two demo accounts, whose passwords go to
+`.superpowers/demo_credentials`. `--serve` then runs a throwaway
+dashboard on `127.0.0.1:18090` against that database, with the sheet
+poller, workers and mail off. Forward the port in VS Code to use it. The
+test suite truncates the same database, so stop the demo before running
+tests.
 
 ---
 

@@ -18,8 +18,11 @@ surfaces:
   * **Admin**: `/admin/regions.html` (polygon drawing UI),
     `POST /api/admin/refresh_sheets`, `POST /api/admin/negative_regions`.
     Both require an authenticated admin session.
-  * **Background tasks**: SLO checker, matview refresher, Google
-    Sheet poller, session/token pruner. Spawned in the lifespan
+  * **Review tool** (`routes_review.py`): `/review` and `/api/review/*`,
+    for volunteers with the reviewer or admin role. Rules live in the
+    `review_*` modules.
+  * **Background tasks**: SLO checker, matview refresher, Google Sheet
+    poller, session/token pruner, review pool. Spawned in the lifespan
     asynccontextmanager, cancelled cleanly on shutdown.
 
 Mutation endpoints are gated by session-based role checks (see

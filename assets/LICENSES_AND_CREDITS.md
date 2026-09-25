@@ -149,10 +149,12 @@ the trained model only as learned parameters.
 
 ## 3. WoRMS taxonomy
 
-**What it is.** Taxonomic ranks (genus / family / order / class / phylum
-/ kingdom) for each of the 223 species, used to build a tree-distance
-matrix for the planned taxonomy-aware loss and for the dashboard's
-Fish Explorer roll-ups. Sourced from the
+**What it is.** The WoRMS AphiaID, accepted name and taxonomic ranks
+(genus / family / order / class / phylum / kingdom) for every distinct
+name in the Species Log and the classifier's class list — misspellings
+and placeholders included, keyed by the name as typed (`raw_name`) —
+used to build a tree-distance matrix for the planned taxonomy-aware
+loss and for the dashboard's Fish Explorer roll-ups. Sourced from the
 [World Register of Marine Species](https://www.marinespecies.org/)
 via the `/AphiaRecordsByMatchNames` REST endpoint
 ([`scripts/enrich_taxonomy_from_worms.py`](../scripts/enrich_taxonomy_from_worms.py)),

@@ -203,12 +203,18 @@ python scripts/enrich_taxonomy_from_worms.py
 # → assets/taxonomy.csv
 ```
 
-Batches binomials through the World Register of Marine Species
-`/AphiaRecordsByMatchNames` endpoint (50 per batch, `marine_only=false`).
-Emits one row per species with columns
-`species, genus, family, order, class, phylum, kingdom, lowest`. When
-WoRMS only resolves to family (or lower confidence), the lowest known
-rank is repeated down to the species column so every row is complete.
+Batches every distinct name from the Species Log and the classifier's
+class list — misspellings and placeholders included — through the World
+Register of Marine Species `/AphiaRecordsByMatchNames` endpoint (50 per
+batch, `marine_only=false`). Emits one row per raw name, keyed by
+`raw_name`, with columns
+`raw_name, aphia_id, accepted_name, authority, rank, match_type, status,
+species, genus, family, order, class, phylum, kingdom, lowest`. When
+WoRMS only resolves to a coarser rank (genus, family, or order), the
+lowest known rank is repeated down through the species column so every
+row is complete; names WoRMS could not resolve, matched only fuzzily,
+or matched only to a genus also land in
+`assets/taxonomy_unresolved.txt` for a human to fix.
 
 This is the source of truth for any future **taxonomy-aware loss**
 (penalize confusions across distant ranks more than nearby ones — not

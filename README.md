@@ -164,7 +164,7 @@ their own table and are the seed corpus for the next training run.
 │   ├── build_finetune_dataset_from_clips.py  Drive clips + iNat photos → cropped training set
 │   ├── download_species_clips.py        Drive bulk download w/ virus-scan handling
 │   ├── download_inat_photos.py          iNaturalist API harvest (licence-filtered)
-│   ├── enrich_taxonomy_from_worms.py    WoRMS API → taxonomy.csv (genus..kingdom per species)
+│   ├── enrich_taxonomy_from_worms.py    WoRMS API → taxonomy.csv (AphiaID, accepted name, ranks; keyed by raw_name)
 │   ├── train_baseline.py                DINOv2 ViT-S/14 from-scratch trainer (3 split modes)
 │   ├── gen_synthetic_sensor_data.py     Diurnal-pattern synthetic sonde for offline demos
 │   └── dev/                             start_postgres.sh, run_worker.sh, run_worker_pier.sh,
@@ -341,6 +341,9 @@ Terms that appear all over the codebase + docs:
   flow. Events show up in the dashboard's Recent Events list and the
   ROI modal; reviewers endorse / correct / mark "not a fish" / redraw
   bbox / tag a celebrity. Corrections land in `detection_corrections`.
+- **Review tool** — `/review` — the reviewer annotation tool (reviewer
+  or admin role): a queue of boxes to verify, whole-frame mode, and
+  browse. See docs/operations.md, "Review tool".
 - **Celebrity** — a named recurring animal from the "Fish named by
   Chatters" sheet (Bobby, Marty, Stumpy, …). Optional `celebrity_id`
   field on each correction.
