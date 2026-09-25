@@ -24,17 +24,24 @@ also accepts terrestrial / freshwater species. We pass
 spotting list), terrestrial crustaceans, etc. resolve correctly.
 
 Run idempotently — re-running with the same inputs reproduces the same
-CSV. WoRMS responses are cached per-batch (in-memory only) within a
-run so a partial failure on one batch doesn't retry every name.
+CSV. Any failed WoRMS call (a transport error, an unexpected status or
+an unreadable answer) aborts the run with a nonzero exit and writes
+nothing, so an outage is never recorded as "no match". A missing
+``classes.json`` is an error too. Both outputs are replaced atomically:
+the dashboard hot-reloads ``taxonomy.csv`` on its mtime.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
+import io
 import json
 import os
 import re
+import stat
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -97,10 +104,19 @@ def pick_best_match(matches: list[dict]) -> dict | None:
     return None
 
 
+class WormsError(RuntimeError):
+    """WoRMS could not be asked, or did not answer with a match list. Never
+    read as "no match": that would rewrite taxonomy.csv, which gates every
+    label the review tool accepts, with real names marked unresolved."""
+
+
 def worms_match_batch(
     client: httpx.Client, names: list[str], marine_only: bool = False,
 ) -> dict[str, dict | None]:
-    """Batch /AphiaRecordsByMatchNames call. Returns {input_name: record-or-None}."""
+    """Batch /AphiaRecordsByMatchNames call. Returns {input_name: record-or-None}.
+    Raises WormsError on a transport error, a status other than 200 or 204
+    (204 means nothing matched), or an answer that is not one match list
+    per name."""
     if not names:
         return {}
     # Build the param list directly so httpx repeats the key correctly.
@@ -109,19 +125,23 @@ def worms_match_batch(
     try:
         r = client.get(f"{WORMS_BASE}/AphiaRecordsByMatchNames",
                        params=params, timeout=WORMS_TIMEOUT)
-    except Exception as e:
-        print(f"  WoRMS batch failed: {e}", file=sys.stderr)
-        return {n: None for n in names}
+    except httpx.HTTPError as e:
+        raise WormsError(f"WoRMS request failed: {e}") from e
     if r.status_code == 204:    # no matches at all
         return {n: None for n in names}
     if r.status_code != 200:
-        print(f"  WoRMS HTTP {r.status_code}: {r.text[:160]}", file=sys.stderr)
-        return {n: None for n in names}
+        raise WormsError(f"WoRMS answered HTTP {r.status_code}: {r.text[:160]}")
 
     # Response is a list parallel to `names`: each element is a list of matches.
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise WormsError(f"WoRMS answered with something other than JSON: {e}") from e
+    if not isinstance(data, list) or len(data) != len(names):
+        got = len(data) if isinstance(data, list) else type(data).__name__
+        raise WormsError(f"WoRMS answered {got} results for {len(names)} names")
     result: dict[str, dict | None] = {}
-    for name, matches in zip(names, data, strict=False):
+    for name, matches in zip(names, data, strict=True):
         rec = pick_best_match(matches if isinstance(matches, list) else [])
         result[name] = rec
     return result
@@ -394,6 +414,26 @@ def _live_match_batch() -> MatchBatch:
     return match
 
 
+def write_atomic(path: Path, text: str) -> None:
+    """Replace `path` with `text` so no reader ever sees a partial file:
+    write a temporary file in the same directory, then os.replace it over
+    the old one. The old file's permission bits are kept (mkstemp's 0600
+    would otherwise replace them)."""
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
 def main(argv: list[str] | None = None, match_batch: MatchBatch | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
@@ -407,24 +447,36 @@ def main(argv: list[str] | None = None, match_batch: MatchBatch | None = None) -
               file=sys.stderr)
         return 1
     records = json.loads(args.manifest.read_text())
-    classes = json.loads(args.classes.read_text()) if args.classes.exists() else []
+    # Without the classifier's classes, every classifier-only name would
+    # silently drop out of taxonomy.csv (and so out of the review catalogue).
+    if not args.classes.exists():
+        print(f"missing classifier classes: {args.classes} (pass --classes or set "
+              "CLASSIFIER_V2_CLASSES_JSON)", file=sys.stderr)
+        return 1
+    classes = json.loads(args.classes.read_text())
     if not classes:
-        print(f"note: no classifier classes read from {args.classes}", file=sys.stderr)
+        print(f"no classifier classes in {args.classes}", file=sys.stderr)
+        return 1
 
     raw_names = collect_raw_names(records, classes)
     print(f"resolving {len(raw_names)} distinct names via WoRMS")
-    resolved = resolve_names(raw_names, match_batch or _live_match_batch())
+    try:
+        resolved = resolve_names(raw_names, match_batch or _live_match_batch())
+    except WormsError as e:
+        print(f"{e}; nothing written", file=sys.stderr)
+        return 1
 
     rows = build_rows(resolved, records)
-    with args.out.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        w.writeheader()
-        for row in rows:
-            w.writerow({k: ("" if row.get(k) is None else row[k]) for k in FIELDNAMES})
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=FIELDNAMES)
+    w.writeheader()
+    for row in rows:
+        w.writerow({k: ("" if row.get(k) is None else row[k]) for k in FIELDNAMES})
     problems = unresolved_lines(resolved)
-    args.unresolved.write_text(
-        "# raw_name\tproblem\taccepted_name  (fix these names in the Species Log)\n"
-        + "".join(line + "\n" for line in problems))
+    write_atomic(args.out, buf.getvalue())
+    write_atomic(args.unresolved,
+                 "# raw_name\tproblem\taccepted_name  (fix these names in the Species Log)\n"
+                 + "".join(line + "\n" for line in problems))
     print(f"wrote {args.out} ({len(rows)} rows); {len(problems)} names need attention "
           f"(see {args.unresolved})")
     return 0

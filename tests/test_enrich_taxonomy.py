@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from pathlib import Path
+
+import httpx
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -150,3 +154,97 @@ def test_main_writes_the_csv_and_the_unresolved_list(tmp_path):
     assert rows["Seriola zonata"]["family"] == "Fam"
     assert list(rows["Seriola zonata"])[:3] == ["raw_name", "aphia_id", "accepted_name"]
     assert "Pomatomus saltarix" in unresolved.read_text()
+
+
+# ---- final review, ledger 87/88: WoRMS failures must not pass for "no match" --
+# worms_match_batch gets an httpx client whose transport is a local
+# function (httpx.MockTransport), so nothing here touches the network.
+
+def _worms(handler):
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return lambda names: enr.worms_match_batch(client, names)
+
+
+def _unreachable(request):
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+def _answers(status, **kw):
+    return lambda request: httpx.Response(status, **kw)
+
+
+def _run(tmp_path, match_batch, *, classes=("Pomatomus_saltarix",)):
+    """main() over a one-name manifest and `classes` (None: no classes.json
+    at all), with outputs in tmp_path. Returns (exit code, csv, unresolved)."""
+    manifest = tmp_path / "species_manifest.json"
+    manifest.write_text(json.dumps([{"binomial": "Seriola zonata", "family": "Carangidae"}]))
+    classes_json = tmp_path / "classes.json"
+    if classes is not None:
+        classes_json.write_text(json.dumps(list(classes)))
+    out_csv, unresolved = tmp_path / "taxonomy.csv", tmp_path / "taxonomy_unresolved.txt"
+    code = enr.main(["--manifest", str(manifest), "--classes", str(classes_json),
+                     "--out", str(out_csv), "--unresolved", str(unresolved)],
+                    match_batch=match_batch)
+    return code, out_csv, unresolved
+
+
+@pytest.mark.parametrize("handler", [
+    _unreachable,
+    _answers(503, text="Service Unavailable"),
+    _answers(400, text="Bad Request"),
+    _answers(200, json=[]),                     # fewer results than names asked
+    _answers(200, text="<html>maintenance</html>"),
+], ids=["transport-error", "http-503", "http-400", "short-result", "not-json"])
+def test_a_worms_failure_writes_nothing_and_exits_nonzero(tmp_path, handler):
+    (tmp_path / "taxonomy.csv").write_text("previous csv\n")
+    (tmp_path / "taxonomy_unresolved.txt").write_text("previous list\n")
+    code, out_csv, unresolved = _run(tmp_path, _worms(handler))
+    assert code != 0
+    assert out_csv.read_text() == "previous csv\n"
+    assert unresolved.read_text() == "previous list\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "classes.json", "species_manifest.json", "taxonomy.csv", "taxonomy_unresolved.txt"]
+
+
+def test_worms_no_match_at_all_is_still_just_no_match():
+    # HTTP 204 is WoRMS's documented "nothing matched", not a failure
+    assert _worms(_answers(204))(["Nothing here"]) == {"Nothing here": None}
+    found = _worms(_answers(200, json=[[FAKE["Seriola zonata"]], []]))(
+        ["Seriola zonata", "Nothing here"])
+    assert found == {"Seriola zonata": FAKE["Seriola zonata"], "Nothing here": None}
+
+
+@pytest.mark.parametrize("classes", [None, []], ids=["missing", "empty"])
+def test_main_fails_without_the_classifier_classes(tmp_path, classes):
+    asked = []
+    code, out_csv, unresolved = _run(tmp_path, lambda names: asked.append(names) or {},
+                                     classes=classes)
+    assert code != 0 and asked == []
+    assert not out_csv.exists() and not unresolved.exists()
+
+
+def test_main_replaces_both_outputs_atomically(tmp_path, monkeypatch):
+    """The dashboard hot-reloads taxonomy.csv on its mtime, so it must never
+    see a half-written file: each output is written to a temporary file in
+    the same directory and renamed over the old one, keeping its mode."""
+    for name in ("taxonomy.csv", "taxonomy_unresolved.txt"):
+        (tmp_path / name).write_text("previous\n")
+        (tmp_path / name).chmod(0o644)
+    replaced = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        replaced.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(enr.os, "replace", spy)
+    code, out_csv, unresolved = _run(tmp_path, fake_batch)
+    assert code == 0
+    ours = {dst: src for src, dst in replaced if dst in (out_csv, unresolved)}
+    assert set(ours) == {out_csv, unresolved}
+    assert all(src.parent == tmp_path and src != dst for dst, src in ours.items())
+    assert "Pomatomus saltatrix" in out_csv.read_text()
+    assert "Pomatomus saltarix" in unresolved.read_text()
+    assert {out_csv.stat().st_mode & 0o777, unresolved.stat().st_mode & 0o777} == {0o644}
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "classes.json", "species_manifest.json", "taxonomy.csv", "taxonomy_unresolved.txt"]
