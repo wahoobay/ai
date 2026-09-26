@@ -572,6 +572,24 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
                   JOIN review_items ri ON ri.id = c.review_item_id
                  WHERE c.event_id = %s AND c.user_id = %s AND ri.pass = 2
                  ORDER BY c.created_at DESC, c.id DESC LIMIT 1""", (body.event_id, user.id))
+            # Fix round 1 (ruling T2b): a pass-2 item open or claimed on this
+            # box is a live second opinion. Someone with no answer of their
+            # own is an outsider to it, not the first reviewer changing
+            # their mind (who does have an answer here) or the spot-check
+            # reviewer re-answering their own pass-2 item (caught above, by
+            # `item` being set) -- refuse them rather than letting them
+            # jump the queue through the whole-frame path.
+            if item is None:
+                have_answer = await fetch_one(conn, """
+                    SELECT 1 FROM detection_corrections
+                     WHERE event_id = %s AND user_id = %s LIMIT 1""",
+                    (body.event_id, user.id))
+                pending_spot = await fetch_one(conn, """
+                    SELECT 1 FROM review_items
+                     WHERE event_id = %s AND pass = 2 AND status IN ('open', 'claimed')
+                     LIMIT 1""", (body.event_id,))
+                if not have_answer and pending_spot:
+                    raise Conflict("a second opinion is pending on this box")
 
         blind = item is not None and item["pass"] == 2
         guess = (item or {}).get("predicted") or catalogue.accepted(ev["best_species_id"])
@@ -701,12 +719,11 @@ async def recent_verdicts(conn, *, user_id: int, session_id: int | None, catalog
 async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target: int) -> dict:
     role = effective_role(user.status, user.role)
     mine = await fetch_one(conn, """
-        SELECT c.corrected_name, c.not_a_fish, c.unidentifiable, c.life_stage,
-               c.corrected_bbox, c.confidence, c.celebrity_id, ri.pass AS item_pass
-          FROM detection_corrections c
-          LEFT JOIN review_items ri ON ri.id = c.review_item_id
-         WHERE c.event_id = %s AND c.user_id = %s
-         ORDER BY c.created_at DESC, c.id DESC LIMIT 1""", (event_id, user.id))
+        SELECT corrected_name, not_a_fish, unidentifiable, life_stage, corrected_bbox,
+               confidence, celebrity_id
+          FROM detection_corrections
+         WHERE event_id = %s AND user_id = %s
+         ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user.id))
     if mine is None and role != "admin":
         raise Forbidden("you can only reopen boxes you answered")
     ev = await event_with_frame(conn, event_id)
@@ -720,13 +737,21 @@ async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target
     # Follow-up C1 (phase-1 triage 155) and C2: the picture alone -- no
     # guess, hints or target -- while a spot-check on the box is waiting or
     # being answered and the caller has no answer on it (an admin typing the
-    # URL), and when the caller's own latest answer is their spot-check
-    # answer, whose re-answer stays a second opinion.
+    # URL), and when the caller has answered their own spot-check.
     pending_spot = await fetch_one(conn, """
         SELECT 1 FROM review_items
          WHERE event_id = %s AND pass = 2 AND status IN ('open', 'claimed')""", (event_id,))
-    blind = ((mine is None and pending_spot is not None)
-             or (mine is not None and mine["item_pass"] == 2))
+    # Ruling T2a: mirror submit_verdict's own-spot lookup exactly -- ANY of
+    # the caller's answers on this event linked to a pass-2 item, not only
+    # their latest row. An admin's later adjudication (or an older,
+    # unlinked re-answer) must not un-blind a spot-check they answered;
+    # `mine` still shows their latest row, for display, regardless.
+    own_spot_answer = await fetch_one(conn, """
+        SELECT 1 FROM detection_corrections c
+          JOIN review_items ri ON ri.id = c.review_item_id
+         WHERE c.event_id = %s AND c.user_id = %s AND ri.pass = 2
+         LIMIT 1""", (event_id, user.id))
+    blind = (mine is None and pending_spot is not None) or own_spot_answer is not None
     pseudo = {**base, "id": None, "pass": 2 if blind else 1, "event_id": event_id}
     payload = await build_payload(conn, pseudo, catalogue=catalogue, counts=counts,
                                   target=target,
@@ -753,5 +778,10 @@ async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target
                AND claimed_until > now()
              LIMIT 1""", (event_id, user.id)):
         editable, reason = False, "another volunteer is answering this box"
+    elif mine is None and pending_spot is not None:
+        # Ruling T2b: matches the new submit_verdict guard -- an outsider
+        # (no answer of their own) can't jump in while a second opinion is
+        # pending. An earlier refusal reason above still wins.
+        editable, reason = False, "a second opinion is pending on this box"
     payload["editable"], payload["reason"] = editable, reason
     return payload

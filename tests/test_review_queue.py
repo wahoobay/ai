@@ -1106,6 +1106,8 @@ async def test_an_admin_reopening_a_pending_spot_check_sees_the_picture_alone(rd
     boss = await make_user(rdb, "boss", role="admin")
     payload = await _reopen(rdb, cat, as_user(boss, role="admin"), f["event_ids"][0])
     assert _is_blind(payload) and "mine" not in payload
+    assert payload["editable"] is False
+    assert payload["reason"] == "a second opinion is pending on this box"
 
 
 async def test_once_the_spot_check_is_answered_an_admin_reopen_shows_the_guess(rdb, tmp_path,
@@ -1125,6 +1127,21 @@ async def test_an_admin_reopening_their_own_spot_check_answer_sees_it_blind(rdb,
     assert _is_blind(payload)
     assert payload["mine"]["outcome"] == "unidentifiable"
     assert payload["mine"]["bbox"] == [110, 110, 290, 240]
+
+
+async def test_an_admins_later_adjudication_does_not_unblind_their_spot_check_answer(
+        rdb, tmp_path, cat):
+    """Ruling T2a: reopen's blind check must look at ANY of the caller's
+    answers linked to a pass-2 item, not only their latest row -- an
+    adjudication recorded after the spot-check answer must not make the
+    box look answerable-with-a-guess again."""
+    f, _one, spot = await _spot_checked_box(rdb, tmp_path, status="done")
+    boss = await make_user(rdb, "boss", role="admin")
+    await add_verdict(rdb, f["event_ids"][0], boss, unidentifiable=True, item_id=spot)
+    await add_verdict(rdb, f["event_ids"][0], boss, name="Seriola zonata", is_adjudication=True)
+    payload = await _reopen(rdb, cat, as_user(boss, role="admin"), f["event_ids"][0])
+    assert _is_blind(payload)
+    assert "mine" in payload
 
 
 async def test_an_admins_re_answer_to_their_own_spot_check_stays_a_second_opinion(rdb, tmp_path,
@@ -1157,3 +1174,34 @@ async def test_the_re_answer_is_deduplicated(rdb, tmp_path, cat):
     again = await _verdict(rdb, cat, admin, **body)
     assert again["duplicate"] is True and again["id"] == first["id"]
     assert again["first_pass"] is False
+
+
+async def test_an_outsider_with_no_answer_is_refused_while_a_spot_check_is_pending(rdb, tmp_path,
+                                                                                  cat):
+    """Ruling T2b: a pending pass-2 item is a live second opinion -- an
+    admin with no answer of their own on the box is an outsider to it, not
+    the first reviewer changing their mind, and must be refused rather
+    than being allowed to jump in through the whole-frame path."""
+    f, _one, _spot = await _spot_checked_box(rdb, tmp_path, status="open")
+    boss = await make_user(rdb, "boss", role="admin")
+    admin = as_user(boss, role="admin")
+    with pytest.raises(Conflict):
+        await _verdict(rdb, cat, admin, event_id=f["event_ids"][0], outcome="species",
+                       label="Seriola zonata", label_source="search")
+    count = await _row(rdb, "SELECT count(*) FROM detection_corrections WHERE user_id = %s",
+                       boss)
+    assert count[0] == 0
+
+
+async def test_the_first_reviewer_reopening_while_their_spot_check_is_pending_is_not_blind(
+        rdb, tmp_path, cat):
+    """The first reviewer already has an answer on the box, so a spot-check
+    pending on it does not make them an outsider: their reopen still shows
+    the guess, and their whole-frame re-answer still goes through."""
+    f, one, _spot = await _spot_checked_box(rdb, tmp_path, status="open")
+    payload = await _reopen(rdb, cat, as_user(one), f["event_ids"][0])
+    assert payload["item"]["pass"] == 1 and payload["model"] is not None
+    assert payload["editable"] is True and payload["reason"] is None
+    out = await _verdict(rdb, cat, as_user(one), event_id=f["event_ids"][0],
+                         outcome="species", label="Seriola zonata", label_source="search")
+    assert out["id"]
