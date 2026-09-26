@@ -231,7 +231,11 @@ class ReviewPool:
         self._baseline, self._baseline_stamp, self._baseline_catalogue = counts, stamp, catalogue
 
     async def refresh_progress(self) -> None:
-        self._load_baseline()
+        # Off the event loop (follow-up C6): refresh_progress runs on every
+        # /api/review/progress request and every pool cycle, not once at
+        # start-up, and _load_baseline stats the manifest, may rebuild the
+        # catalogue, and may parse the whole baseline JSON.
+        await asyncio.to_thread(self._load_baseline)
         async with self.db.connection() as conn, conn.transaction():
             await conn.execute("SELECT set_config('statement_timeout', %s, true)",
                                (str(self.s.statement_timeout_ms),))

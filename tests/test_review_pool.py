@@ -6,6 +6,7 @@ import csv
 import io
 import os
 import random
+import threading
 import time
 from datetime import timedelta
 
@@ -232,6 +233,25 @@ async def test_progress_counts_baseline_and_verified_boxes(rdb, review_assets, t
     order = pool.species_order()
     assert "Acanthurus coeruleus" not in order         # 10 >= target 5
     assert order.index("Neopomacentrus cyanomos") < order.index("Seriola zonata")
+
+
+@pytestmark_db
+async def test_load_baseline_runs_off_the_event_loop(rdb, review_assets, monkeypatch):
+    """Fix round 1, ruling T5a: refresh_progress runs on every /api/review/
+    progress request and every pool cycle, not once at start-up as the
+    original brief assumed -- _load_baseline's stat, catalogue rebuild and
+    JSON parse must not block the event loop there either."""
+    pool = _pool(rdb, review_assets)
+    seen = []
+    real = pool._load_baseline
+
+    def spy():
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real()
+
+    monkeypatch.setattr(pool, "_load_baseline", spy)
+    await pool.refresh_progress()
+    assert seen == [False]
 
 
 @pytestmark_db
