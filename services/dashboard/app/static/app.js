@@ -790,20 +790,39 @@ function renderAlerts(rows) {
   const banner = document.getElementById("alerts-banner");
   if (!rows || rows.length === 0) {
     banner.classList.add("hidden");
-    banner.innerHTML = "";
+    banner.replaceChildren();
     return;
   }
   banner.classList.remove("hidden");
-  banner.innerHTML = rows.map((a) => `
-    <div class="alert-row">
-      <span class="alert-sev ${a.severity}">${a.severity}</span>
-      <span class="alert-msg"><b>${a.name}</b>: ${a.message}</span>
-      <span class="alert-age">${AGE_FMT(a.first_seen)} old</span>
-      ${a.acknowledged_at
-        ? `<span class="alert-age">ack'd by ${a.acknowledged_by}</span>`
-        : `<button class="alert-ack" onclick="ackAlert(${a.id})">ack</button>`
-      }
-    </div>`).join("");
+  // Follow-up D5: alert names and messages come from the database, so they
+  // are set as text, never parsed as markup; the acknowledger's name only
+  // arrives for admins.
+  const span = (cls, text) => {
+    const s = document.createElement("span");
+    s.className = cls;
+    s.textContent = text;
+    return s;
+  };
+  banner.replaceChildren(...rows.map((a) => {
+    const row = document.createElement("div");
+    row.className = "alert-row";
+    const name = document.createElement("b");
+    name.textContent = a.name;
+    const msg = span("alert-msg", "");
+    msg.append(name, `: ${a.message}`);
+    row.append(span(`alert-sev ${a.severity}`, a.severity), msg,
+      span("alert-age", `${AGE_FMT(a.first_seen)} old`));
+    if (a.acknowledged_at) {
+      row.append(span("alert-age", a.acknowledged_by ? `ack'd by ${a.acknowledged_by}` : "ack'd"));
+    } else {
+      const ack = document.createElement("button");
+      ack.className = "alert-ack";
+      ack.textContent = "ack";
+      ack.addEventListener("click", () => ackAlert(a.id));
+      row.append(ack);
+    }
+    return row;
+  }));
 }
 
 async function ackAlert(id) {

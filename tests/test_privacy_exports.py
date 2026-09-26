@@ -2,13 +2,23 @@
 box's frame is the one captured at the box's own timestamp (spec §12.3)."""
 from __future__ import annotations
 
+import csv
 import inspect
 import io
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
-from review_fixtures import CELEBRITIES, CSRF, T0, add_verdict, login, make_user, seed_frame
+from review_fixtures import (
+    CELEBRITIES,
+    CSRF,
+    T0,
+    add_item,
+    add_verdict,
+    login,
+    make_user,
+    seed_frame,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -141,3 +151,136 @@ async def test_labeled_corrections_frame_path_matches_the_timestamp(rdb, rclient
     await add_verdict(rdb, before["event_ids"][0], uid, not_a_fish=True)
     text = rclient.get("/api/export/labeled_corrections.csv").text
     assert before["image_path"] in text and after["image_path"] not in text
+
+
+def _csv_events(text: str) -> set[int]:
+    return {int(r["event_id"]) for r in csv.DictReader(io.StringIO(text))}
+
+
+async def _spot_pending(rdb, tmp_path, status="open"):
+    frame = await _seed_named_verdict(rdb, tmp_path)
+    async with rdb.connection() as conn:
+        cur = await conn.execute("SELECT id, user_id FROM detection_corrections")
+        first, alice = await cur.fetchone()
+    spot = await add_item(rdb, frame, pass_=2, status=status, exclude_user_id=alice,
+                          first_correction_id=first)
+    return frame["event_ids"][0], spot
+
+
+@pytest.mark.parametrize("status", ["open", "claimed"])
+async def test_a_pending_spot_checks_first_answer_stays_out_of_public_lists(rdb, rclient,
+                                                                           tmp_path, status):
+    event, spot = await _spot_pending(rdb, tmp_path, status)
+    assert event not in {r["event_id"] for r in rclient.get("/api/corrections").json()}
+    assert event not in _csv_events(rclient.get("/api/export/corrections.csv").text)
+    assert event not in _csv_events(rclient.get("/api/export/labeled_corrections.csv").text)
+    await make_user(rdb, "boss", role="admin")
+    login(rclient, "boss")
+    assert event in {r["event_id"] for r in rclient.get("/api/corrections").json()}
+    assert event in _csv_events(rclient.get("/api/export/corrections.csv").text)
+    rclient.cookies.clear()
+    async with rdb.connection() as conn:
+        await conn.execute("UPDATE review_items SET status = 'done' WHERE id = %s", (spot,))
+    assert event in {r["event_id"] for r in rclient.get("/api/corrections").json()}
+
+
+async def test_cant_identify_shows_as_such_in_public_outputs(rdb, rclient, tmp_path):
+    frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250]}])
+    await add_verdict(rdb, frame["event_ids"][0], await make_user(rdb, "alice"),
+                      unidentifiable=True)
+    [row] = rclient.get("/api/corrections").json()
+    assert row["unidentifiable"] is True and row["corrected_name"] is None
+    [csv_row] = list(csv.DictReader(io.StringIO(
+        rclient.get("/api/export/corrections.csv").text)))
+    assert csv_row["unidentifiable"] == "True"
+
+
+async def test_the_celebrity_gallery_counts_each_event_once_and_hides_a_pending_spot_check(
+        rdb, rclient, tmp_path, monkeypatch):
+    bobby = CELEBRITIES["celebrities"][0]
+    state = _app_state(rclient)
+    monkeypatch.setitem(state, "celebrities_by_id", {bobby["id"]: bobby})
+    monkeypatch.setitem(state, "celebrities", [bobby])
+    frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                    "species": "Acanthurus coeruleus"}])
+    alice = await make_user(rdb, "alice")
+    event = frame["event_ids"][0]
+    async with rdb.connection() as conn:
+        for _ in range(2):   # an answer, then the same volunteer changing it
+            await conn.execute(
+                """INSERT INTO detection_corrections (event_id, corrected_name, user_id,
+                                                      celebrity_id)
+                   VALUES (%s, 'Acanthurus coeruleus', %s, %s)""", (event, alice, bobby["id"]))
+    detail = rclient.get(f"/api/celebrities/{bobby['id']}").json()
+    assert detail["sightings"] == 1 and [g["event_id"] for g in detail["gallery"]] == [event]
+    [listed] = rclient.get("/api/celebrities").json()["celebrities"]
+    assert listed["sightings"] == 1
+    async with rdb.connection() as conn:
+        cur = await conn.execute("SELECT min(id) FROM detection_corrections")
+        first = (await cur.fetchone())[0]
+    await add_item(rdb, frame, pass_=2, exclude_user_id=alice, first_correction_id=first)
+    assert rclient.get(f"/api/celebrities/{bobby['id']}").json()["gallery"] == []
+    await make_user(rdb, "boss", role="admin")
+    login(rclient, "boss")
+    assert len(rclient.get(f"/api/celebrities/{bobby['id']}").json()["gallery"]) == 1
+
+
+async def test_the_species_gallery_uses_the_frame_saved_at_the_detections_own_time(
+        rdb, rclient, tmp_path):
+    now = datetime.now(UTC)
+    mine = await seed_frame(rdb, tmp_path, ts=now - timedelta(hours=2), frame_id=7,
+                            boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}])
+    # frame_id restarts with every worker run: the same camera and frame_id
+    # an hour later is another frame, with no Seriola in it
+    await seed_frame(rdb, tmp_path, ts=now - timedelta(hours=1), frame_id=7, boxes=[])
+    r = rclient.get("/api/species/Seriola%20zonata/profile?hours=24")
+    assert r.status_code == 200, r.text
+    frames = r.json()["recent_frames"]
+    assert [fr["image_path"] for fr in frames] == [mine["image_path"]]
+
+
+async def _alert(rdb):
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """INSERT INTO alerts (name, severity, message, first_seen, last_seen,
+                                   acknowledged_by, acknowledged_at)
+               VALUES ('privacy_test_alert', 'warning', 'no frames for 5 min', now(), now(),
+                       'Boss Person', now())""")
+    # a name no SLO rule uses, so the app's own checker never resolves it
+
+
+async def test_the_alert_acknowledger_is_named_to_admins_only(rdb, rclient):
+    await _alert(rdb)
+    r = rclient.get("/api/alerts/active")
+    assert r.status_code == 200 and r.json()
+    assert all("acknowledged_by" not in a for a in r.json()) and "Boss Person" not in r.text
+    text = rclient.get("/api/export/alerts.csv").text
+    assert "acknowledged_by" not in _header(text) and "Boss Person" not in text
+    await make_user(rdb, "boss", role="admin")
+    login(rclient, "boss")
+    rows = rclient.get("/api/alerts/active").json()
+    # The dashboard's own SLOChecker fires a critical pipeline_silence alert
+    # the moment it starts against an empty test database (see conftest's
+    # _isolate_network docstring), which always sorts ahead of this test's
+    # own warning-severity alert -- so look ours up by name rather than
+    # assuming it is rows[0].
+    mine = next(a for a in rows if a["name"] == "privacy_test_alert")
+    assert mine["acknowledged_by"] == "Boss Person"
+    assert "Boss Person" in rclient.get("/api/export/alerts.csv").text
+
+
+async def test_a_reviewer_session_is_never_treated_as_admin(rdb, rclient, tmp_path):
+    """Phase-1 triage 77: a signed-in reviewer is the likeliest non-admin
+    caller of every identity-filtered endpoint."""
+    await _seed_named_verdict(rdb, tmp_path)
+    await _alert(rdb)
+    login(rclient, "alice")
+    rows = rclient.get("/api/corrections").json()
+    assert rows and all("reviewer" not in r and "notes" not in r for r in rows)
+    assert rclient.get("/api/corrections?reviewer=Alice%20Example").status_code == 403
+    for path in ("/api/export/corrections.csv", "/api/export/labeled_corrections.csv",
+                 "/api/export/alerts.csv"):
+        text = rclient.get(path).text
+        assert not ((IDENTITY | {"acknowledged_by"}) & _header(text)), path
+        assert "Alice Example" not in text and "Boss Person" not in text, path
+    assert all("acknowledged_by" not in a for a in rclient.get("/api/alerts/active").json())

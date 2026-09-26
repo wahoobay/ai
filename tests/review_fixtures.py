@@ -27,7 +27,7 @@ T0 = datetime(2026, 6, 1, 14, 0, tzinfo=UTC)
 TRUNCATE_SQL = """
     TRUNCATE review_skips, review_frames, review_added_boxes, review_settings,
              review_items, detection_corrections, detection_events, saved_frames,
-             user_sessions, user_tokens, user_audit, users
+             user_sessions, user_tokens, user_audit, users, alerts
     RESTART IDENTITY CASCADE
 """
 

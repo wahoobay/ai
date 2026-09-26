@@ -76,6 +76,7 @@ from .exports import (
     export_water_quality,
     export_weather,
     fetch_parquet_bytes,
+    hide_pending_spot_checks,
     query_for,
 )
 from .matviews import MatviewRefresher
@@ -1392,13 +1393,16 @@ def build_app() -> FastAPI:
         where = []
         params: list = []
         if reviewer:
-            where.append("reviewer = %s")
+            where.append("c.reviewer = %s")
             params.append(reviewer)
+        if not admin:
+            where.append(hide_pending_spot_checks("c"))
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
         params.append(limit)
         sql = f"""
             SELECT c.id, c.event_id, c.corrected_name, c.corrected_species_id,
-                   c.not_a_fish, c.confidence, c.reviewer, c.notes, c.created_at,
+                   c.not_a_fish, c.unidentifiable, c.confidence, c.reviewer, c.notes,
+                   c.created_at,
                    e.best_name AS original_name, e.best_accuracy, e.ts AS event_ts
               FROM detection_corrections c
               JOIN detection_events e ON e.id = c.event_id
@@ -1464,7 +1468,7 @@ def build_app() -> FastAPI:
                     # most recent tagged event_id, first + last tag time.
                     await cur.execute("""
                         SELECT celebrity_id,
-                               COUNT(*)::int  AS sightings,
+                               COUNT(DISTINCT event_id)::int  AS sightings,
                                MAX(created_at) AS last_tagged_at,
                                MIN(created_at) AS first_tagged_at,
                                (ARRAY_AGG(event_id ORDER BY created_at DESC))[1] AS recent_event_id
@@ -1516,7 +1520,7 @@ def build_app() -> FastAPI:
             async with pool.connection() as conn:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute("""
-                        SELECT COUNT(*)::int   AS sightings,
+                        SELECT COUNT(DISTINCT event_id)::int   AS sightings,
                                MIN(created_at) AS first_tagged_at,
                                MAX(created_at) AS last_tagged_at
                           FROM detection_corrections
@@ -1527,17 +1531,22 @@ def build_app() -> FastAPI:
                         sightings = int(r["sightings"] or 0)
                         first_tagged_at = r["first_tagged_at"].isoformat() if r["first_tagged_at"] else None
                         last_tagged_at = r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None
-                    # Recent tagged events for the gallery. LEFT JOIN
-                    # so a correction whose event was wiped (e.g. by a
-                    # reset) still surfaces but with image_path NULL.
-                    await cur.execute("""
-                        SELECT dc.event_id, dc.created_at, dc.reviewer, dc.confidence,
-                               dc.corrected_name,
-                               e.ts AS event_ts, e.source_name, e.bbox
-                          FROM detection_corrections dc
-                          LEFT JOIN detection_events e ON e.id = dc.event_id
-                         WHERE dc.celebrity_id = %s
-                         ORDER BY dc.created_at DESC
+                    # One entry per event -- its latest tag -- and, for the
+                    # public, none while a spot-check on it is pending
+                    # (follow-up D2, D3).
+                    hide = "" if _is_admin(user) else f"AND {hide_pending_spot_checks('dc')}"
+                    await cur.execute(f"""
+                        SELECT * FROM (
+                            SELECT DISTINCT ON (dc.event_id)
+                                   dc.event_id, dc.created_at, dc.reviewer, dc.confidence,
+                                   dc.corrected_name,
+                                   e.ts AS event_ts, e.source_name, e.bbox
+                              FROM detection_corrections dc
+                              LEFT JOIN detection_events e ON e.id = dc.event_id
+                             WHERE dc.celebrity_id = %s {hide}
+                             ORDER BY dc.event_id, dc.created_at DESC, dc.id DESC
+                        ) latest
+                         ORDER BY created_at DESC
                          LIMIT %s
                     """, (celebrity_id, gallery_limit))
                     for r in await cur.fetchall():
@@ -1700,7 +1709,7 @@ def build_app() -> FastAPI:
     # ------------------------------------------------------------------
 
     @app.get("/api/alerts/active")
-    async def alerts_active() -> Response:
+    async def alerts_active(user=Depends(optional_user)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1724,6 +1733,10 @@ def build_app() -> FastAPI:
             for k in ("first_seen", "last_seen", "acknowledged_at"):
                 if r.get(k):
                     r[k] = r[k].isoformat()
+        if not _is_admin(user):
+            # Follow-up D5: an acknowledger is an admin's display name.
+            for r in rows:
+                r.pop("acknowledged_by", None)
         return JSONResponse(rows)
 
     @app.post("/api/alerts/{alert_id}/ack", dependencies=[Depends(require_csrf)])
@@ -2159,8 +2172,11 @@ def build_app() -> FastAPI:
                     """
                     SELECT sf.image_path, sf.ts, sf.source_name, sf.num_fish
                       FROM saved_frames sf
+                      -- camera + frame_id + ts: frame_id restarts with every
+                      -- worker run (follow-up D1)
                       JOIN detection_events e ON e.frame_id = sf.frame_id
                                               AND e.source_name = sf.source_name
+                                              AND e.ts = sf.ts
                      WHERE e.best_species_id = %s
                        AND sf.ts >= NOW() - (%s::int || ' hours')::interval
                        AND sf.image_path IS NOT NULL
@@ -2309,11 +2325,12 @@ def build_app() -> FastAPI:
     @app.get("/api/export/alerts.csv")
     async def export_alerts_csv(
         include_resolved: bool = Query(False),
+        user=Depends(optional_user),
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        gen = export_alerts(pool, include_resolved)
+        gen = export_alerts(pool, include_resolved, include_identity=_is_admin(user))
         return _csv_response(gen, _csv_filename("alerts", scope="all" if include_resolved else "active"))
 
     # ----- biology-friendly + ML-friendly bonus exports ----------------------

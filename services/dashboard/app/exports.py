@@ -73,16 +73,25 @@ async def _fetch_all(pool: AsyncConnectionPool, sql: str, params: tuple,
     return rows
 
 
-# Columns that say who labelled a box and what they wrote. Spec §12.1:
-# since spec 1, `reviewer` is an account's display name, so these are
-# returned to administrators only.
-IDENTITY_COLUMNS = ("reviewer", "notes", "user_id", "session_id")
+# Columns that say who labelled a box, what they wrote, or which admin
+# acknowledged an alert. Spec §12.1: since spec 1 these are accounts'
+# display names, so they are returned to administrators only.
+IDENTITY_COLUMNS = ("reviewer", "notes", "user_id", "session_id", "acknowledged_by")
 
 
 def _without_identity(columns: list[str], include_identity: bool) -> list[str]:
     if include_identity:
         return columns
     return [c for c in columns if c not in IDENTITY_COLUMNS]
+
+
+def hide_pending_spot_checks(alias: str) -> str:
+    """SQL condition for public outputs (follow-up spec D3): leave out every
+    answer on a box whose spot-check is waiting or being answered. The
+    second volunteer is shown the box's event id, so a public list naming
+    that event's first answer would let them look it up."""
+    return (f"NOT EXISTS (SELECT 1 FROM review_items ri WHERE ri.event_id = {alias}.event_id"
+            " AND ri.pass = 2 AND ri.status IN ('open', 'claimed'))")
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +243,8 @@ def export_saved_frames(pool: AsyncConnectionPool, hours: int):
 
 def export_corrections(pool: AsyncConnectionPool, hours: int | None,
                        reviewer: str | None, include_identity: bool = False):
+    # include_identity: an admin is asking; they also see answers under a
+    # pending spot-check.
     where = []
     params: list = []
     if hours is not None:
@@ -242,10 +253,12 @@ def export_corrections(pool: AsyncConnectionPool, hours: int | None,
     if reviewer:
         where.append("c.reviewer = %s")
         params.append(reviewer)
+    if not include_identity:
+        where.append(hide_pending_spot_checks("c"))
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     sql = f"""
         SELECT c.id, c.created_at, c.event_id,
-               c.corrected_name, c.corrected_species_id, c.not_a_fish,
+               c.corrected_name, c.corrected_species_id, c.not_a_fish, c.unidentifiable,
                c.confidence, c.reviewer, c.notes, c.user_id, c.session_id,
                e.ts AS event_ts, e.source_name, e.frame_id,
                e.best_name AS original_name, e.best_species_id AS original_species_id,
@@ -256,7 +269,7 @@ def export_corrections(pool: AsyncConnectionPool, hours: int | None,
          ORDER BY c.created_at DESC
     """
     cols = ["id", "created_at", "event_id",
-            "corrected_name", "corrected_species_id", "not_a_fish",
+            "corrected_name", "corrected_species_id", "not_a_fish", "unidentifiable",
             "confidence", "reviewer", "notes", "user_id", "session_id",
             "event_ts", "source_name", "frame_id",
             "original_name", "original_species_id",
@@ -264,7 +277,8 @@ def export_corrections(pool: AsyncConnectionPool, hours: int | None,
     return _stream(pool, sql, tuple(params), _without_identity(cols, include_identity))
 
 
-def export_alerts(pool: AsyncConnectionPool, include_resolved: bool):
+def export_alerts(pool: AsyncConnectionPool, include_resolved: bool,
+                  include_identity: bool = False):
     where = "" if include_resolved else "WHERE resolved_at IS NULL"
     sql = f"""
         SELECT id, name, severity, message, details,
@@ -277,7 +291,7 @@ def export_alerts(pool: AsyncConnectionPool, include_resolved: bool):
     cols = ["id", "name", "severity", "message", "details",
             "first_seen", "last_seen", "resolved_at",
             "acknowledged_by", "acknowledged_at"]
-    return _stream(pool, sql, tuple(), cols)
+    return _stream(pool, sql, tuple(), _without_identity(cols, include_identity))
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +478,8 @@ def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool
     # with every worker restart, so frame_id + camera alone can name a
     # different frame. When one frame was saved under several reasons, the
     # lowest id wins.
-    sql = """
+    where_sql = "" if include_identity else "WHERE " + hide_pending_spot_checks("c")
+    sql = f"""
         SELECT c.id AS correction_id,
                c.created_at,
                c.event_id,
@@ -491,6 +506,7 @@ def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool
                ORDER BY id
                LIMIT 1
           ) sf ON true
+          {where_sql}
          ORDER BY c.created_at DESC
     """
     cols = ["correction_id", "created_at", "event_id",
