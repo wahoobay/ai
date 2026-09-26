@@ -74,3 +74,27 @@ def test_eastern_times_follow_daylight_saving(tmp_path):
     assert out["date"] == "6/30/2026"
     assert out["parts"] == {"month": 6, "day": 30, "hour": 23, "minute": 30}
     assert out["midnight"] == 0
+
+
+def test_the_old_forms_buttons_need_a_saved_frame():
+    """Final review F3: eventActionsHtml (shared by the list card's
+    renderEventCard and the ROI modal's openRoiModal) offers the old
+    form's endorse/correct buttons only on a detection with a saved frame
+    -- POST /api/corrections refuses anything else outright."""
+    app = read("app.js")
+    body = function_body(app, "eventActionsHtml")
+    assert "r?.image_path" in body or "r.image_path" in body
+    assert "no saved frame, so it can't be reviewed" in body
+
+
+@needs_node
+def test_the_old_forms_buttons_render_only_with_a_saved_frame(tmp_path):
+    app = read("app.js")
+    out = run_node(["const EVENT_CACHE = new Map();", function_source(app, "eventActionsHtml")], """
+      EVENT_CACHE.set(1, { id: 1, image_path: "frames/1.jpg", best_name: "Seriola zonata" });
+      EVENT_CACHE.set(2, { id: 2, image_path: null, best_name: "Seriola zonata" });
+      return { withFrame: eventActionsHtml(1), withoutFrame: eventActionsHtml(2) };
+    """, tmp_path)
+    assert "ev-btn" in out["withFrame"]
+    assert "ev-btn" not in out["withoutFrame"]
+    assert "no saved frame, so it can't be reviewed" in out["withoutFrame"]

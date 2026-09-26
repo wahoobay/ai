@@ -293,6 +293,7 @@ li.empty { color: var(--muted); font-style: italic; }
 .event-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .event-line1 { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
 .event-actions { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.event-actions-empty { margin-top: 4px; color: var(--muted); font-size: 11px; font-style: italic; }
 .ev-btn {
   background: none;
   border: 1px solid #1f3b4f;

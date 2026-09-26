@@ -249,8 +249,15 @@ function renderEventCard(r) {
 // ROI lightbox so a reviewer can accept / correct / reject from whichever
 // view they're focused on. EVENT_CACHE drives the per-event eligibility
 // checks (e.g. only show "Looks right" when the model produced a best_name).
+// A detection with no saved frame (r.image_path falsy) has nothing for the
+// old form's endpoints to work from -- POST /api/corrections refuses it
+// with "this detection's frame was not saved" -- so neither view offers
+// the buttons at all; static text, no data interpolated.
 function eventActionsHtml(eventId) {
   const r = EVENT_CACHE.get(eventId);
+  if (!r?.image_path) {
+    return `<div class="event-actions-empty">no saved frame, so it can't be reviewed</div>`;
+  }
   const canEndorse = !!r?.best_name;
   const endorse = canEndorse
     ? `<button class="ev-btn ev-btn-ok"   onclick="endorseEvent(${eventId})" title="confirm the model got it right">✓ Looks right</button>`
