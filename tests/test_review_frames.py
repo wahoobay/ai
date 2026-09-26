@@ -526,6 +526,14 @@ async def test_release_and_skip_over_http(rdb, rclient, tmp_path):
     item = await add_item(rdb, f, 0, predicted="Seriola zonata", route="Seriola zonata")
     for action in ("release", "skip"):
         assert rclient.post(f"/api/review/frames/{sf}/{action}").status_code == 403   # no CSRF
+    # Fix round 1, finding 2: role is enforced too, not just CSRF.
+    await make_user(rdb, "watcher", role="viewer")
+    login(rclient, "watcher")
+    for action in ("release", "skip"):
+        assert rclient.post(f"/api/review/frames/{sf}/{action}",
+                            headers=CSRF).status_code == 403   # not a reviewer
+    assert await _status(rdb, item) == ("open", None)
+    login(rclient, "rev")
     rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF)
     assert await _status(rdb, item) == ("claimed", me)
     assert rclient.post(f"/api/review/frames/{sf}/release", headers=CSRF).json() == {"ok": True}

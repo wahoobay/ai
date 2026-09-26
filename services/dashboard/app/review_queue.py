@@ -171,6 +171,16 @@ async def next_item(conn, *, user_id: int, lane: str, species_order: list[str],
         # Handing back a box the volunteer already holds refreshes its
         # claim like a fresh one (final review Minor 5): a reload late in
         # the claim window would otherwise leave them only seconds.
+        #
+        # The outer WHERE repeats the subquery's own predicates (fix round
+        # 1, finding 1): under READ COMMITTED, if this row changes while
+        # the UPDATE is blocked on a concurrent writer's lock -- another
+        # volunteer's next_item re-claiming a lapsed row, or a release or
+        # verdict from a second tab -- Postgres re-checks the WHERE clause
+        # against the row's newest version before applying the write. An
+        # outer WHERE of only `id = ...` would pass that re-check
+        # regardless (id never changes), refreshing and returning a claim
+        # that is no longer this volunteer's live one.
         held = await fetch_one(conn, """
             UPDATE review_items
                SET claimed_until = now() + make_interval(secs => %(claim_s)s)
@@ -178,6 +188,7 @@ async def next_item(conn, *, user_id: int, lane: str, species_order: list[str],
                           WHERE status = 'claimed' AND claimed_by = %(uid)s
                             AND (lane = %(lane)s OR pass = 2)
                           ORDER BY id LIMIT 1)
+               AND status = 'claimed' AND claimed_by = %(uid)s
             RETURNING *""", params)
         if held:
             return held

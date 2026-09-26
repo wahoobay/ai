@@ -155,6 +155,38 @@ async def test_asking_again_refreshes_the_claim_on_the_box_you_hold(rdb, tmp_pat
     assert left > timedelta(minutes=5)
 
 
+async def test_the_held_refresh_does_not_resurrect_a_claim_that_moved_on_under_it(rdb, tmp_path):
+    """Fix round 1, finding 1: the held-item UPDATE's outer WHERE checked
+    only `id = (...)`, so if the row changed while the UPDATE was blocked
+    waiting on another transaction's lock, Postgres's re-check (against
+    the row's newest committed version) let the write through regardless.
+    Real concurrency, not two coroutines sharing one connection: connection
+    B holds the row's lock and moves it to 'done' -- as another volunteer's
+    next_item re-claiming a lapsed row, or a release/verdict from a second
+    tab, would -- while connection A's held-item UPDATE is blocked waiting
+    for that very lock to release."""
+    [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one = await make_user(rdb, "one")
+    live = datetime.now(UTC) + timedelta(minutes=5)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """UPDATE review_items SET status = 'claimed', claimed_by = %s,
+                      claimed_until = %s WHERE id = %s""", (one, live, item))
+    async with rdb.connection() as locker, locker.transaction():
+        await locker.execute("SELECT id FROM review_items WHERE id = %s FOR UPDATE", (item,))
+        task = asyncio.create_task(_next(rdb, one))
+        await asyncio.sleep(0.3)   # let A's held-item UPDATE reach and block on our lock
+        await locker.execute(
+            """UPDATE review_items SET status = 'done', claimed_by = NULL,
+                      claimed_until = NULL WHERE id = %s""", (item,))
+    # locker's transaction commits here, releasing the lock A was waiting on
+    got = await task
+    assert got is None
+    row = await _row(rdb, """SELECT status, claimed_by, claimed_until
+                                FROM review_items WHERE id = %s""", item)
+    assert row == ("done", None, None)
+
+
 async def test_a_lapsed_claim_goes_back_to_the_pool(rdb, tmp_path):
     [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
     one, two = await make_user(rdb, "one"), await make_user(rdb, "two")
