@@ -4,15 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Create an account — Wahoo Bay</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body class="auth-page">
+  <header class="auth-top">
+    <h1><a href="/">Wahoo Bay · Live Fish ID</a></h1>
+  </header>
   <main class="auth-card">
+    <p class="auth-eyebrow">Reviewers</p>
     <h1>Create an account</h1>
+    <p class="auth-sub">Sign up to review and label the fish the cameras detect.</p>
     {% if verify_token %}
       <div id="verify-token" data-token="{{ verify_token }}">Confirming your email…</div>
     {% elif not open %}
-      <p>Registration is currently closed. Ask an administrator for an account.</p>
+      <p class="auth-sub">Registration is currently closed. Ask an administrator for an account.</p>
     {% else %}
       <form id="register-form" autocomplete="on">
         <label for="username">Username</label>

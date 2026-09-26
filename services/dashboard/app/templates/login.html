@@ -4,12 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Sign in — Wahoo Bay</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body class="auth-page">
+  <header class="auth-top">
+    <h1><a href="/">Wahoo Bay · Live Fish ID</a></h1>
+  </header>
   <main class="auth-card">
-    <h1>Wahoo Bay</h1>
-    <p class="auth-sub">Sign in to review detections.</p>
+    <p class="auth-eyebrow">Reviewers</p>
+    <h1>Sign in</h1>
+    <p class="auth-sub">Sign in to review and label the fish the cameras detect.</p>
     <form id="login-form" autocomplete="on">
       <input type="hidden" name="next" value="{{ next }}">
       <label for="username">Username</label>

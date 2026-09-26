@@ -1332,13 +1332,91 @@ li.empty { color: var(--muted); font-style: italic; }
   font-size: 13px;
 }
 
-/* Auth: sign-in page + identity chip */
-.auth-page { display: grid; place-items: center; min-height: 100vh; }
-.auth-card { width: min(28rem, 92vw); padding: 2rem; }
-.auth-card label { display: block; margin-top: 0.75rem; }
-.auth-card input { width: 100%; padding: 0.5rem; }
-.auth-card button { margin-top: 1rem; padding: 0.5rem 1rem; }
-.auth-error { color: #b3261e; }
-.auth-links { margin-top: 1rem; font-size: 0.9rem; }
+/* Auth pages (sign in, create account, forgot/reset password): the
+   dashboard's header bar over one centred panel in the dashboard's colours. */
+.auth-page { display: flex; flex-direction: column; min-height: 100vh; }
+.auth-top h1 a { color: var(--ink); text-decoration: none; }
+.auth-top h1 a:hover { color: var(--accent); }
+/* display:block: style.css gives every <main> the dashboard's 3fr/2fr grid. */
+.auth-card {
+  display: block;
+  width: min(26rem, calc(100vw - 32px));
+  margin: clamp(24px, 10vh, 96px) auto 32px;
+  padding: 24px 24px 20px;
+  background: var(--panel);
+  border: 1px solid #1f3b4f;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+/* auth.js shows and hides messages and forms with the hidden attribute. */
+.auth-card [hidden] { display: none !important; }
+.auth-eyebrow {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.auth-card h1 { margin: 0 0 6px; font-size: 22px; font-weight: 600; }
+.auth-sub { margin: 0 0 14px; font-size: 14px; color: var(--muted); line-height: 1.45; }
+.auth-card form { display: flex; flex-direction: column; }
+.auth-card label {
+  margin: 12px 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.auth-card input {
+  width: 100%;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #1f3b4f;
+  border-radius: 5px;
+}
+.auth-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 193, 255, 0.25);
+}
+.auth-card button {
+  margin-top: 18px;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0b1a24;
+  background: var(--accent);
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.auth-card button:hover { background: #7dd3ff; }
+.auth-card button:active { transform: translateY(1px); }
+.auth-card button:disabled { opacity: 0.5; cursor: default; }
+.auth-card a { color: var(--accent); text-decoration: none; }
+.auth-card a:hover { text-decoration: underline; }
+.auth-hint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.auth-error, .auth-done, #verify-token {
+  margin: 14px 0 0;
+  padding: 9px 11px;
+  font-size: 13px;
+  line-height: 1.45;
+  border-radius: 5px;
+}
+.auth-error { color: #f87171; background: rgba(239, 68, 68, 0.10); border: 1px solid #5c1f1f; }
+.auth-done, #verify-token { color: var(--good); background: rgba(122, 239, 161, 0.08); border: 1px solid #1d4a2e; }
+.auth-links {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid #1f3b4f;
+  font-size: 13px;
+  color: var(--muted);
+}
 #identity-chip { display: flex; gap: 0.5rem; align-items: center; }
 .pending-banner { padding: 0.6rem 1rem; background: #fff4ce; color: #3b3100; }
