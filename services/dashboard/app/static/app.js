@@ -512,11 +512,18 @@ async function postCorrection(eventId, body, label) {
       alert("sign in as a reviewer to submit corrections");
       return;
     }
-    if (resp.status === 403) {
+    let data = {};
+    try { data = await resp.json(); } catch (e) { data = {}; }
+    // A role refusal has no `error` field (it is FastAPI's `detail`); the
+    // review rules' refusals do, and say why (follow-up spec A1).
+    if (resp.status === 403 && !data.error) {
       alert("your account isn't approved for corrections yet — an administrator needs to grant reviewer access");
       return;
     }
-    if (!resp.ok) throw new Error(`${resp.status}`);
+    if (!resp.ok) {
+      alert(data.error || `save failed: ${resp.status}`);
+      return;
+    }
     // Reflect the save on BOTH surfaces (list card + modal action panel) so
     // the reviewer sees the same "✓ saved" state whichever one they look at,
     // and can't double-submit by switching between them.

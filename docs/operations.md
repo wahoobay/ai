@@ -567,6 +567,22 @@ them (`POST /api/review/frames/{id}/release`).
 `REVIEW_SKIP_TTL_DAYS` days (default 30), then it can be served to them again; skipping it
 again restarts the clock.
 
+### The dashboard's older correction form
+
+`POST /api/corrections` (the endorse / correct / not-a-fish buttons on the public
+dashboard) is saved through the review tool's rules. It is never spot-checked. It answers
+403 when another volunteer already answered the box, 409 while someone holds it, and 400
+for a name outside the species list or a detection whose frame was not saved (most live
+detections).
+
+Rows the form wrote before this change can carry raw or misspelled names. To see what
+would be mapped to accepted names, run:
+
+    python scripts/dev/remap_legacy_corrections.py --env .env
+
+Then run it with `--apply` to make the changes in one transaction. Names it can't map
+are listed and left alone.
+
 ### The pool task
 
 A background task in the dashboard keeps `review_items` topped up, every

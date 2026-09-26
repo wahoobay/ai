@@ -395,6 +395,35 @@ def _validate(body: VerdictIn, *, catalogue, guess, item, blind: bool, width: in
             "notes": (body.notes or "").strip() or None}
 
 
+def legacy_verdict(body, *, catalogue) -> VerdictIn:
+    """The dashboard's older correction form (POST /api/corrections;
+    main.CorrectionIn) as a review verdict (follow-up spec A1), so it is
+    saved under every rule submit_verdict enforces. That form has no
+    life-stage picker, so a species with one catalogue entry takes that
+    entry's stage, and a species with several is sent to the review page.
+    A box on "not a fish" is dropped, and "uncertain" becomes "not sure"
+    only where a species was chosen: the review rules refuse either
+    otherwise."""
+    common = {"event_id": body.event_id, "celebrity_id": body.celebrity_id,
+              "notes": body.notes}
+    if body.not_a_fish:
+        return VerdictIn(outcome="no_animal", **common)
+    raw = body.corrected_name or body.corrected_species_id
+    if not raw:
+        raise Invalid("provide corrected_name, corrected_species_id, or set not_a_fish")
+    name = catalogue.accepted(raw)
+    if not catalogue.has_name(name):
+        raise Invalid(f"{raw!r} is not in the species list")
+    stages = catalogue.stages(name)
+    if len(stages) > 1:
+        raise Invalid(f"choose a life stage for {name} on the review page")
+    fields = {**common, "life_stage": stages[0], "bbox": body.corrected_bbox,
+              "not_sure": body.confidence == "uncertain"}
+    if body.is_endorsement:
+        return VerdictIn(outcome="accept", **fields)
+    return VerdictIn(outcome="species", label=name, label_source="search", **fields)
+
+
 # Every stored column that records the volunteer's answer, the box
 # included: a same-user resubmit within DUPLICATE_WINDOW_S is a duplicate
 # only when all of them match their last verdict on the event. Both the

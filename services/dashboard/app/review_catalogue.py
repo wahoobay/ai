@@ -100,6 +100,10 @@ class Catalogue:
     def has_name(self, name: str) -> bool:
         return name in self._by_name
 
+    def stages(self, name: str) -> list[str | None]:
+        """The life stages recorded for `name`; None is "no stage"."""
+        return [e.life_stage for e in self._by_name.get(name, [])]
+
     def names(self) -> list[str]:
         return sorted(self._by_name)
 

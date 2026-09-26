@@ -41,6 +41,7 @@ import io
 import json
 import logging
 import os
+import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -55,7 +56,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .alerts import SLO_RULES, SLOChecker
 from .common_names import common as common_name
@@ -78,6 +79,7 @@ from .exports import (
     query_for,
 )
 from .matviews import MatviewRefresher
+from .review_queue import ReviewError, legacy_verdict, submit_verdict
 from .sheet_poller import SheetPoller
 from .stats import (
     rate_ci,
@@ -1344,61 +1346,35 @@ def build_app() -> FastAPI:
               dependencies=[Depends(require_csrf)])
     async def post_correction(body: CorrectionIn,
                               user=Depends(require_role("reviewer", "admin"))) -> Response:
+        """The dashboard's older correction form, saved through the review
+        tool's own rules (follow-up spec A1): submit_verdict's no-item path,
+        never spot-checked (spec §8). The form gets the event lock, the
+        live-claim and pending-spot-check guards, accepted names, and the
+        closing of the box's open queue items. It therefore answers 403 when
+        another volunteer already answered the box, 409 while someone holds
+        it, and 400 for a name outside the species list or a detection whose
+        frame was not saved."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        if not body.not_a_fish and not (body.corrected_name or body.corrected_species_id):
-            return JSONResponse(
-                {"error": "provide corrected_name, corrected_species_id, or set not_a_fish"},
-                status_code=400,
-            )
-        # Validate corrected_bbox shape if provided — must be exactly four
-        # integers, x1 < x2 and y1 < y2. Anything else is a client bug and
-        # we reject rather than silently writing garbage to Postgres.
-        bbox = body.corrected_bbox
-        if bbox is not None:
-            if len(bbox) != 4 or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
-                return JSONResponse(
-                    {"error": "corrected_bbox must be [x1,y1,x2,y2] with x1<x2 and y1<y2"},
-                    status_code=400,
-                )
-            bbox = [int(v) for v in bbox]
-
-        # If a celebrity_id was supplied, validate it against the loaded
-        # catalogue so a typo can't poison the gallery / sightings count.
-        celeb_id = (body.celebrity_id or "").strip() or None
-        if celeb_id is not None:
-            known = state.get("celebrities_by_id") or {}
-            if celeb_id not in known:
-                return JSONResponse(
-                    {"error": f"unknown celebrity_id={celeb_id!r}; not in assets/celebrities.json"},
-                    status_code=400,
-                )
-
-        async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
-                    """
-                    INSERT INTO detection_corrections
-                    (event_id, corrected_name, corrected_species_id,
-                     not_a_fish, is_endorsement, corrected_bbox,
-                     confidence, reviewer, notes, celebrity_id,
-                     user_id, session_id)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    RETURNING id, created_at
-                    """,
-                    (body.event_id, body.corrected_name, body.corrected_species_id,
-                     body.not_a_fish, body.is_endorsement, bbox,
-                     body.confidence, user.display_name, body.notes, celeb_id,
-                     user.id, user.session_id),
-                )
-                row = await cur.fetchone()
-        return JSONResponse({
-            "id": row["id"],
-            "event_id": body.event_id,
-            "created_at": row["created_at"].isoformat(),
-            "is_endorsement": body.is_endorsement,
-        })
+        catalogue = state["review_catalogue"].get()
+        try:
+            verdict = legacy_verdict(body, catalogue=catalogue)
+            async with pool.connection() as conn:
+                out = await submit_verdict(conn, user=user, body=verdict, catalogue=catalogue,
+                                           spot_rate=0.0, rng=random.Random())
+        except ValidationError as e:
+            return JSONResponse({"error": "; ".join(
+                f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())},
+                status_code=400)
+        except ReviewError as e:
+            return JSONResponse({"error": e.message}, status_code=e.status)
+        pool_obj = state.get("review_pool")
+        if pool_obj and out["first_pass"] and out["counts"] and not out["duplicate"]:
+            pool_obj.note_verified(out["label"])
+        return JSONResponse({"id": out["id"], "event_id": body.event_id,
+                             "created_at": out["created_at"],
+                             "is_endorsement": body.is_endorsement})
 
     @app.get("/api/corrections")
     async def list_corrections(

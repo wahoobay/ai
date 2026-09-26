@@ -21,3 +21,9 @@ def test_operations_doc_covers_the_pool_task():
     for phrase in ("REVIEW_POOL_ENABLED", "2026-09-24-review-tool.sql", "/api/review/status",
                    "seed_review_demo.py"):
         assert phrase in ops, phrase
+
+
+def test_operations_doc_covers_the_old_form_and_its_remap():
+    ops = (REPO / "docs" / "operations.md").read_text()
+    for phrase in ("remap_legacy_corrections.py", "--apply", "REVIEW_SKIP_TTL_DAYS"):
+        assert phrase in ops, phrase

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from review_fixtures import T0, jpeg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services" / "dashboard"))
 
@@ -79,7 +80,8 @@ async def pool():
         # correction seeds a fixed-id (4242) detection_events row and a
         # correction referencing it. Truncate both here so a second run
         # against the same database doesn't collide on that primary key.
-        await conn.execute("TRUNCATE detection_events, detection_corrections CASCADE")
+        await conn.execute(
+            "TRUNCATE detection_events, detection_corrections, saved_frames CASCADE")
     yield p
     await p.close()
 
@@ -889,16 +891,23 @@ async def test_approve_promotes_pending_user_and_writes_audit(pool, client):
 
 
 @pytest.mark.anyio
-async def test_approved_reviewer_can_submit_a_correction(pool, client):
+async def test_approved_reviewer_can_submit_a_correction(pool, client, tmp_path):
     # The whole point of the feature: approval is what opens the write path.
     client.post("/api/auth/register", json=REG, headers=CSRF)
     async with pool.connection() as conn:
         cur = await conn.execute("SELECT id FROM users WHERE username = 'newbie'")
         target = (await cur.fetchone())[0]
         await conn.execute(
-            """INSERT INTO detection_events (id, frame_id, source_name, det_conf,
+            """INSERT INTO detection_events (id, ts, frame_id, source_name, det_conf,
                                              bbox, topk)
-               VALUES (4242, 1, 'seahivecam', 0.9, '{1,2,3,4}', '[]'::jsonb)""")
+               VALUES (4242, %s, 1, 'seahivecam', 0.9, '{1,2,3,4}', '[]'::jsonb)""", (T0,))
+        # The form saves through the review rules now, which need the frame.
+        image_path = jpeg(tmp_path / "frame.jpg")
+        await conn.execute(
+            """INSERT INTO saved_frames (ts, frame_id, source_name, reason, image_path,
+                                         coco_path, num_fish)
+               VALUES (%s, 1, 'seahivecam', 'interesting:high_conf', %s, %s, 1)""",
+            (T0, image_path, image_path + ".coco.json"))
     client.cookies.clear()
     await _login_as(pool, client, "boss")
     client.post(f"/api/admin/users/{target}/approve",
