@@ -1072,3 +1072,88 @@ async def test_reopen_marks_the_box_read_only_once_a_resubmit_would_be_refused(r
                                  counts=lambda n: 0, target=200)
     assert p["editable"] is False
     assert p["reason"] == "another volunteer already answered this box"
+
+
+async def _reopen(rdb, cat, user, event_id):
+    async with rdb.connection() as conn:
+        return await reopen_payload(conn, user=user, event_id=event_id, catalogue=cat,
+                                    counts=lambda _name: 0, target=5)
+
+
+async def _spot_checked_box(rdb, tmp_path, *, status="open"):
+    """A box volunteer "one" answered first, with a spot-check on it."""
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                "species": "Seriola zonata"}])
+    one = await make_user(rdb, "one")
+    await add_item(rdb, f, predicted="Seriola zonata", route="Seriola zonata", hints=HINTS,
+                   status="done")
+    first = await add_verdict(rdb, f["event_ids"][0], one, name="Seriola zonata")
+    spot = await add_item(rdb, f, pass_=2, status=status, exclude_user_id=one,
+                          first_correction_id=first)
+    return f, one, spot
+
+
+def _is_blind(payload):
+    return (payload["model"] is None and payload["hints"] is None
+            and payload["counts_toward"] is None and payload["item"]["pass"] == 2
+            and payload["item"]["lane"] is None)
+
+
+@pytest.mark.parametrize("status", ["open", "claimed"])
+async def test_an_admin_reopening_a_pending_spot_check_sees_the_picture_alone(rdb, tmp_path,
+                                                                             cat, status):
+    f, _one, _spot = await _spot_checked_box(rdb, tmp_path, status=status)
+    boss = await make_user(rdb, "boss", role="admin")
+    payload = await _reopen(rdb, cat, as_user(boss, role="admin"), f["event_ids"][0])
+    assert _is_blind(payload) and "mine" not in payload
+
+
+async def test_once_the_spot_check_is_answered_an_admin_reopen_shows_the_guess(rdb, tmp_path,
+                                                                              cat):
+    f, _one, _spot = await _spot_checked_box(rdb, tmp_path, status="done")
+    boss = await make_user(rdb, "boss", role="admin")
+    payload = await _reopen(rdb, cat, as_user(boss, role="admin"), f["event_ids"][0])
+    assert payload["model"]["name"] == "Seriola zonata" and payload["item"]["pass"] == 1
+
+
+async def test_an_admin_reopening_their_own_spot_check_answer_sees_it_blind(rdb, tmp_path, cat):
+    f, _one, spot = await _spot_checked_box(rdb, tmp_path, status="done")
+    boss = await make_user(rdb, "boss", role="admin")
+    await add_verdict(rdb, f["event_ids"][0], boss, unidentifiable=True, item_id=spot,
+                      bbox=[110, 110, 290, 240])
+    payload = await _reopen(rdb, cat, as_user(boss, role="admin"), f["event_ids"][0])
+    assert _is_blind(payload)
+    assert payload["mine"]["outcome"] == "unidentifiable"
+    assert payload["mine"]["bbox"] == [110, 110, 290, 240]
+
+
+async def test_an_admins_re_answer_to_their_own_spot_check_stays_a_second_opinion(rdb, tmp_path,
+                                                                                 cat):
+    f, _one, spot = await _spot_checked_box(rdb, tmp_path, status="done")
+    boss = await make_user(rdb, "boss", role="admin")
+    await add_verdict(rdb, f["event_ids"][0], boss, unidentifiable=True, item_id=spot)
+    admin = as_user(boss, role="admin")
+    out = await _verdict(rdb, cat, admin, spot=1.0, event_id=f["event_ids"][0],
+                         outcome="species", label="Seriola zonata", label_source="search")
+    assert out["first_pass"] is False and out["spot_check_scheduled"] is False
+    row = await _row(rdb, "SELECT review_item_id FROM detection_corrections WHERE id = %s",
+                     out["id"])
+    assert row[0] == spot
+    count = await _row(rdb, """SELECT count(*) FROM review_items
+                                WHERE event_id = %s AND pass = 2""", f["event_ids"][0])
+    assert count[0] == 1
+    with pytest.raises(Invalid):   # a second opinion has no guess to accept
+        await _verdict(rdb, cat, admin, event_id=f["event_ids"][0], outcome="accept")
+
+
+async def test_the_re_answer_is_deduplicated(rdb, tmp_path, cat):
+    f, _one, spot = await _spot_checked_box(rdb, tmp_path, status="done")
+    boss = await make_user(rdb, "boss", role="admin")
+    await add_verdict(rdb, f["event_ids"][0], boss, unidentifiable=True, item_id=spot)
+    admin = as_user(boss, role="admin")
+    body = {"event_id": f["event_ids"][0], "outcome": "species", "label": "Seriola zonata",
+            "label_source": "search"}
+    first = await _verdict(rdb, cat, admin, **body)
+    again = await _verdict(rdb, cat, admin, **body)
+    assert again["duplicate"] is True and again["id"] == first["id"]
+    assert again["first_pass"] is False

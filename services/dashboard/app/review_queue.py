@@ -447,8 +447,8 @@ def _stored_outcome(row: dict) -> str:
     return "accept" if row["label_source"] == "model_guess" else "species"
 
 
-async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outcome: str
-                             ) -> dict | None:
+async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outcome: str,
+                             first_pass: bool = True) -> dict | None:
     """A same-user resubmit within DUPLICATE_WINDOW_S whose stored columns
     -- every one of _VERDICT_IDENTITY_COLUMNS, the box included -- all match
     their own last verdict on this event: return that existing verdict's
@@ -458,7 +458,10 @@ async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outc
     change to any stored field -- an accept followed within the window by
     the same species chosen from search is a *different* verdict (a
     different label_source), not a duplicate of it. None means: insert
-    normally, this is not a duplicate."""
+    normally, this is not a duplicate.
+
+    first_pass is what the caller's verdict would have been: False for a
+    re-answer linked to the caller's own spot-check."""
     cols = ", ".join(_VERDICT_IDENTITY_COLUMNS)
     recent = await fetch_one(conn, f"""
         SELECT id, created_at, {cols}
@@ -482,7 +485,7 @@ async def _duplicate_verdict(conn, *, event_id: int, user_id: int, v: dict, outc
     # known-identical) incoming one.
     return {"id": recent["id"], "created_at": recent["created_at"].isoformat(),
             "outcome": _stored_outcome(recent), "label": recent["corrected_name"],
-            "first_pass": True,
+            "first_pass": first_pass,
             "counts": recent["corrected_name"] is not None
             and recent["confidence"] != "uncertain",
             "spot_check_scheduled": spot is not None, "duplicate": True}
@@ -559,6 +562,16 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
                        AND claimed_until > now()
                      LIMIT 1""", (body.event_id, user.id)):
                 raise Conflict("another volunteer is answering this box")
+            # Follow-up C2 (phase-1 Minor 4): re-answering a box you answered
+            # as a spot-check -- only admins get here, by reopening it --
+            # stays a second opinion. Linked to your own pass-2 item, so the
+            # resolved pair is still the first reviewer against the second,
+            # the answer is blind, and nothing new is scheduled.
+            item = await fetch_one(conn, """
+                SELECT ri.* FROM detection_corrections c
+                  JOIN review_items ri ON ri.id = c.review_item_id
+                 WHERE c.event_id = %s AND c.user_id = %s AND ri.pass = 2
+                 ORDER BY c.created_at DESC, c.id DESC LIMIT 1""", (body.event_id, user.id))
 
         blind = item is not None and item["pass"] == 2
         guess = (item or {}).get("predicted") or catalogue.accepted(ev["best_species_id"])
@@ -580,9 +593,9 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
         v = _validate(body, catalogue=catalogue, guess=guess, item=hint_item, blind=blind,
                       width=width, height=height, adjudication=adjudication)
 
-        if item is None and not adjudication:
+        if body.review_item_id is None and not adjudication:
             dup = await _duplicate_verdict(conn, event_id=body.event_id, user_id=user.id, v=v,
-                                           outcome=body.outcome)
+                                           outcome=body.outcome, first_pass=item is None)
             if dup is not None:
                 return dup
 
@@ -688,11 +701,12 @@ async def recent_verdicts(conn, *, user_id: int, session_id: int | None, catalog
 async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target: int) -> dict:
     role = effective_role(user.status, user.role)
     mine = await fetch_one(conn, """
-        SELECT corrected_name, not_a_fish, unidentifiable, life_stage, corrected_bbox,
-               confidence, celebrity_id
-          FROM detection_corrections
-         WHERE event_id = %s AND user_id = %s
-         ORDER BY created_at DESC, id DESC LIMIT 1""", (event_id, user.id))
+        SELECT c.corrected_name, c.not_a_fish, c.unidentifiable, c.life_stage,
+               c.corrected_bbox, c.confidence, c.celebrity_id, ri.pass AS item_pass
+          FROM detection_corrections c
+          LEFT JOIN review_items ri ON ri.id = c.review_item_id
+         WHERE c.event_id = %s AND c.user_id = %s
+         ORDER BY c.created_at DESC, c.id DESC LIMIT 1""", (event_id, user.id))
     if mine is None and role != "admin":
         raise Forbidden("you can only reopen boxes you answered")
     ev = await event_with_frame(conn, event_id)
@@ -703,7 +717,17 @@ async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target
     guess = catalogue.accepted(ev["best_species_id"])
     base = item or {"lane": "check" if guess else "identify", "predicted": guess,
                     "predicted_p": ev["best_accuracy"], "hints": None, "route_species": guess}
-    pseudo = {**base, "id": None, "pass": 1, "event_id": event_id}
+    # Follow-up C1 (phase-1 triage 155) and C2: the picture alone -- no
+    # guess, hints or target -- while a spot-check on the box is waiting or
+    # being answered and the caller has no answer on it (an admin typing the
+    # URL), and when the caller's own latest answer is their spot-check
+    # answer, whose re-answer stays a second opinion.
+    pending_spot = await fetch_one(conn, """
+        SELECT 1 FROM review_items
+         WHERE event_id = %s AND pass = 2 AND status IN ('open', 'claimed')""", (event_id,))
+    blind = ((mine is None and pending_spot is not None)
+             or (mine is not None and mine["item_pass"] == 2))
+    pseudo = {**base, "id": None, "pass": 2 if blind else 1, "event_id": event_id}
     payload = await build_payload(conn, pseudo, catalogue=catalogue, counts=counts,
                                   target=target,
                                   starting_bbox=(mine or {}).get("corrected_bbox"))
@@ -711,7 +735,9 @@ async def reopen_payload(conn, *, user, event_id: int, catalogue, counts, target
         payload["mine"] = {"outcome": _outcome_word(mine), "label": mine["corrected_name"],
                            "life_stage": mine["life_stage"],
                            "not_sure": mine["confidence"] == "uncertain",
-                           "celebrity_id": mine["celebrity_id"]}
+                           "celebrity_id": mine["celebrity_id"],
+                           "bbox": list(mine["corrected_bbox"]) if mine["corrected_bbox"]
+                           else None}
     # A resubmit from here goes through submit_verdict's no-item path, whose
     # guards this mirrors, so the page learns up front whether the box is
     # still editable instead of only finding out from a 403/409 on submit.
