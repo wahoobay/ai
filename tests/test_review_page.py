@@ -544,3 +544,17 @@ def test_a_recent_box_is_not_reopened_while_an_answer_is_in_flight():
     onclick = body[body.rindex("onclick:", 0, at):at]
     assert re.search(r"if \(busy\) return;", onclick), (
         "a recent-strip click must be ignored while the single view is busy")
+
+
+# Demo walk-through 2026-09-26: the dashboard's style.css gives every <main> a
+# two-column grid (3fr 2fr), so the review page sat in the left 3/5 of the
+# screen beside an empty column. The review page's own main is one centred
+# column instead.
+def test_the_review_page_is_one_centred_column():
+    css = _read("review.css")
+    m = re.search(r"\.rv-main\s*\{([^}]*)\}", css)
+    assert m, "review.css must style .rv-main"
+    rule = m.group(1)
+    assert re.search(r"display:\s*block", rule), ".rv-main must drop the dashboard's main grid"
+    assert re.search(r"margin:\s*0 auto", rule), ".rv-main must be centred"
+    assert re.search(r"max-width:\s*\d+px", rule), ".rv-main needs a width cap to centre"

@@ -11,7 +11,9 @@
 .rv-tabs button.on { background: var(--accent); border-color: var(--accent); color: #062033; font-weight: 600; }
 .rv-spacer { flex: 1; }
 .rv-meta { color: var(--muted); font-size: 13px; }
-.rv-main { padding: 12px 14px 96px; }
+/* style.css gives every <main> the dashboard's two-column grid (3fr 2fr);
+   the review page is one centred column instead. */
+.rv-main { display: block; max-width: 1600px; margin: 0 auto; padding: 12px 14px 96px; }
 .rv-banner { background: #5a2a14; color: #ffe2cf; padding: 8px 14px; }
 .rv-toast { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: var(--panel);
   border: 1px solid var(--accent); padding: 8px 14px; border-radius: 8px; z-index: 10; }
