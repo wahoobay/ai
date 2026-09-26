@@ -57,18 +57,44 @@ async function renderIdentityChip() {
   if (!slot) return;
   const r = await fetch("/api/auth/me", { credentials: "same-origin" });
   const me = await r.json();
-  if (!me.authenticated) { slot.hidden = true; return; }
+  const link = (href, text, cls) => {
+    const a = document.createElement("a");
+    a.href = href;
+    a.textContent = text;
+    if (cls) a.className = cls;
+    return a;
+  };
+  const span = (text, cls) => {
+    const s = document.createElement("span");
+    s.textContent = text;
+    s.className = cls;
+    return s;
+  };
   slot.hidden = false;
-  slot.innerHTML = "";
-  const name = document.createElement("span");
-  name.textContent = `${me.display_name} (${me.role})`;
+  if (!me.authenticated) {
+    // Signed out: the way in for reviewers (demo walk-through 2026-09-26).
+    // Log in returns to the review tool.
+    slot.classList.add("signed-out");
+    slot.replaceChildren(span("Reviewers:", "chip-label"), link("/register", "Sign up"),
+      span("·", "chip-sep"), link("/login?next=/review", "Log in"));
+    return;
+  }
+  slot.classList.remove("signed-out");
+  const parts = [];
+  const canReview = me.status === "active" && (me.role === "reviewer" || me.role === "admin");
+  if (canReview && !window.location.pathname.startsWith("/review")) {
+    parts.push(link("/review", "Review fish →", "chip-review"));
+  }
   const out = document.createElement("button");
+  out.type = "button";
+  out.className = "chip-signout";
   out.textContent = "Sign out";
   out.addEventListener("click", async () => {
     await postJSON("/api/auth/logout", {});
     window.location.reload();
   });
-  slot.append(name, out);
+  parts.push(span(`${me.display_name} (${me.role})`, "chip-name"), out);
+  slot.replaceChildren(...parts);
 
   if (me.status === "pending") {
     const banner = document.createElement("div");

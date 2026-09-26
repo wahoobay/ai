@@ -1447,5 +1447,26 @@ li.empty { color: var(--muted); font-style: italic; }
   font-size: 13px;
   color: var(--auth-muted);
 }
-#identity-chip { display: flex; gap: 0.5rem; align-items: center; }
+#identity-chip { display: flex; gap: 0.5rem; align-items: center; font-size: 13px; }
+#identity-chip[hidden] { display: none; }
+/* The reviewers' way in, on the dashboard header (demo walk-through
+   2026-09-26). --line/--on-accent come from theme.css on the review and
+   sign-in pages; the fallbacks are the dashboard's own palette. */
+#identity-chip a { color: var(--accent); text-decoration: none; }
+#identity-chip a:hover { text-decoration: underline; }
+#identity-chip.signed-out {
+  padding: 5px 12px; border: 1px solid var(--line, #1f3b4f); border-radius: 999px;
+  background: rgba(79, 193, 255, 0.06); white-space: nowrap;
+}
+#identity-chip .chip-label, #identity-chip .chip-sep, #identity-chip .chip-name { color: var(--muted); }
+#identity-chip .chip-review {
+  padding: 5px 12px; border-radius: 6px; font-weight: 600;
+  background: var(--accent); color: var(--on-accent, #0b1a24);
+}
+#identity-chip .chip-review:hover { text-decoration: none; filter: brightness(1.12); }
+#identity-chip .chip-signout {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line, #1f3b4f); background: transparent; color: var(--ink);
+}
+#identity-chip .chip-signout:hover { border-color: var(--accent); }
 .pending-banner { padding: 0.6rem 1rem; background: #fff4ce; color: #3b3100; }
