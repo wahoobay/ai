@@ -228,15 +228,16 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                 await frame_record(conn, saved_frame_id)
                 await open_frame(conn, saved_frame_id=saved_frame_id, user_id=user.id,
                                  claim_s=cfg.review_claim_s)
-                return JSONResponse(await frame_state(conn, saved_frame_id=saved_frame_id,
-                                                      user=user, catalogue=_catalogue()))
+                return JSONResponse(await frame_state(
+                    conn, saved_frame_id=saved_frame_id, user=user, catalogue=_catalogue(),
+                    counts=_counts, target=cfg.review_target))
             except ReviewError as e:
                 return _fail(e)
 
     @router.get("/api/review/frames/{saved_frame_id}")
     async def frame_get(saved_frame_id: int, user=Depends(reviewer)):
         return await _frame_call(frame_state, saved_frame_id=saved_frame_id, user=user,
-                                 catalogue=_catalogue())
+                                 catalogue=_catalogue(), counts=_counts, target=cfg.review_target)
 
     @router.post("/api/review/frames/{saved_frame_id}/boxes",
                  dependencies=[Depends(require_csrf)])

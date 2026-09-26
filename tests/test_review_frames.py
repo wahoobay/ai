@@ -25,6 +25,8 @@ from app.review_queue import (
     Forbidden,
     Invalid,
     VerdictIn,
+    build_payload,
+    fetch_one,
     next_item,
     skip_item,
     submit_verdict,
@@ -543,3 +545,46 @@ async def test_release_and_skip_over_http(rdb, rclient, tmp_path):
     assert await _status(rdb, item) == ("open", None)
     reopened = rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF).json()
     assert reopened["boxes"][0]["review_item_id"] is None      # skipped: not claimed again
+
+
+async def test_each_open_box_carries_the_progress_of_the_species_it_counts_toward(rdb, tmp_path,
+                                                                                    cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES)
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    e = f["event_ids"]
+    await add_verdict(rdb, e[0], other, name="Seriola zonata")                    # answered
+    first = await add_verdict(rdb, e[1], other, name="Pomatomus saltatrix")
+    await add_item(rdb, f, 1, pass_=2, exclude_user_id=other, first_correction_id=first)  # hidden
+    item = await add_item(rdb, f, 3, predicted="Seriola zonata", route="Seriola zonata")
+
+    def counts(name):
+        return {"Seriola zonata": 7}.get(name, 0)
+
+    async with rdb.connection() as conn:
+        state = await frame_state(conn, saved_frame_id=f["saved_frame_id"], user=as_user(me),
+                                  catalogue=cat, counts=counts, target=200)
+        row = await fetch_one(conn, "SELECT * FROM review_items WHERE id = %s", (item,))
+        single = await build_payload(conn, row, catalogue=cat, counts=counts, target=200)
+        bare = await frame_state(conn, saved_frame_id=f["saved_frame_id"], user=as_user(me),
+                                 catalogue=cat)
+    by_n = {b["n"]: b for b in state["boxes"]}
+    assert by_n[4]["counts_toward"] == {"name": "Seriola zonata",
+                                        "common": cat.common_name("Seriola zonata"),
+                                        "count": 7, "target": 200}
+    assert by_n[4]["counts_toward"] == single["counts_toward"]   # the same numbers as single view
+    assert by_n[1]["counts_toward"] is None          # answered
+    assert by_n[2]["counts_toward"] is None          # answer hidden behind a spot-check
+    assert by_n[3]["counts_toward"] is None          # the model made no guess
+    assert all(b["counts_toward"] is None for b in bare["boxes"])   # no counts given
+
+
+async def test_the_frame_routes_send_the_progress(rdb, rclient, tmp_path):
+    await make_user(rdb, "rev")
+    login(rclient, "rev")
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    sf = f["saved_frame_id"]
+    for r in (rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF),
+              rclient.get(f"/api/review/frames/{sf}")):
+        ct = r.json()["boxes"][0]["counts_toward"]
+        assert ct["name"] == "Seriola zonata" and isinstance(ct["count"], int)
+        assert ct["target"] > 0

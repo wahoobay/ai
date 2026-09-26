@@ -136,7 +136,8 @@ async def skip_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
                AND status IN ('claimed', 'open')""", params)
 
 
-async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
+async def frame_state(conn, *, saved_frame_id: int, user, catalogue, counts=None,
+                      target: int | None = None) -> dict:
     fr = await frame_record(conn, saved_frame_id)
     await refuse_during_second_opinion(conn, saved_frame_id=saved_frame_id, user_id=user.id)
     events = await fetch_all(conn, """
@@ -177,7 +178,7 @@ async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
                "zoom": {"url": f"/api/review/boxes/{e['id']}/zoom.jpg",
                         "region": list(zoom_region(e["bbox"], fr["width"], fr["height"]))},
                "outcome": None, "label": None, "common": None, "status": None,
-               "model": None, "hints": None}
+               "model": None, "hints": None, "counts_toward": None}
         if state == "answered":
             box.update(outcome=r.outcome[0], label=r.species,
                        common=catalogue.common_name(r.species), status=r.status)
@@ -186,6 +187,10 @@ async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
             if guess:
                 box["model"] = {"name": guess, "p": e["best_accuracy"],
                                 "common": catalogue.common_name(guess)}
+                if counts is not None:
+                    # the same numbers the single-box payload shows (build_payload)
+                    box["counts_toward"] = {"name": guess, "common": catalogue.common_name(guess),
+                                            "count": counts(guess), "target": target}
             if my_item and my_item["hints"]:
                 box["hints"] = [{"name": h["name"], "p": h.get("p"),
                                  "common": catalogue.common_name(h["name"])}
