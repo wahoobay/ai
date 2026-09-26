@@ -393,13 +393,19 @@ RV.MODE_KEY = "rv.mode";
 RV.modeValue = null;
 
 RV.mode = function mode() {
+  // Fix round 2, Minor (carried): RV.modeValue is only ever set by setMode
+  // during this page's lifetime, so it must win over whatever storage
+  // holds -- otherwise a readable-but-unwritable store (a stale "frame"
+  // read succeeds while a "single" write silently fails, e.g. quota full)
+  // would override the in-memory choice instead of the other way around.
+  if (RV.modeValue) return RV.modeValue;
   try {
     const stored = window.localStorage.getItem(RV.MODE_KEY);
     if (stored === "single" || stored === "frame") return stored;
   } catch (err) {
-    /* storage blocked: fall through to the in-memory value */
+    /* storage blocked: fall through to the default */
   }
-  return RV.modeValue || "frame";
+  return "frame";
 };
 
 RV.setMode = function setMode(value) {
@@ -479,8 +485,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       // frame view has its own answer in flight, or /next could claim a
       // fresh box for a view that then refuses to render it (frame.enter()
       // is itself busy-guarded), and a late reload() would re-claim the
-      // frame this leaves behind.
-      if (RV.view === "frame" && RV.views.frame.isBusy && RV.views.frame.isBusy()) return;
+      // frame this leaves behind. Fix round 2: dropped the RV.view ===
+      // "frame" condition -- a stale frame can still be busy (an answer
+      // started after RV.view already moved on, e.g. via "Change my
+      // answer") and must still be caught, regardless of which view is
+      // currently on screen.
+      if (RV.views.frame && RV.views.frame.isBusy && RV.views.frame.isBusy()) return;
       // Released -- and awaited -- before the queue is asked again, or
       // /next could hand back a box from the frame just left as "held".
       await RV.releaseAll();

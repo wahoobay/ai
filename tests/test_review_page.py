@@ -203,8 +203,17 @@ def test_the_mode_preference_survives_blocked_storage():
     # (setMode("single") silently drops and mode() falls back to "frame").
     assert re.search(r"RV\.modeValue\s*=\s*value", _function_body(core, "setMode")), (
         "setMode() must keep an in-memory copy before the storage write can fail")
-    assert 'return RV.modeValue || "frame"' in _function_body(core, "mode"), (
-        "mode() must fall back to the in-memory value, not unconditionally to \"frame\"")
+    # Fix round 2, Minor (carried): RV.modeValue is only ever set by setMode
+    # in this page's lifetime, so it must win over whatever storage holds --
+    # otherwise a readable-but-unwritable store (a stale "frame" read
+    # succeeds while the "single" write silently fails) overrides the
+    # in-memory choice instead of the other way around.
+    mode_body = _function_body(core, "mode")
+    assert re.search(r"if \(RV\.modeValue\) return RV\.modeValue;", mode_body), (
+        "mode() must prefer the in-memory value over a stored one")
+    assert mode_body.index("RV.modeValue") < mode_body.index("localStorage"), (
+        "the in-memory check must run before the storage read, not after it")
+    assert 'return "frame"' in mode_body, "whole frame is still the ultimate fallback"
 
 
 def test_opening_a_frame_keeps_the_box_the_queue_just_served():
@@ -295,6 +304,11 @@ def test_reload_does_not_reclaim_a_frame_the_volunteer_already_left():
 # otherwise /next claims a fresh box for a view that then refuses to render
 # it (frame.enter()'s own busy guard), and the served box is held but never
 # shown. review-frame.js exposes isBusy() so the nav handler can check it.
+# Fix round 2: the RV.view === "frame" condition was dropped from the
+# guard -- a lane click while the frame view is idle (busy already false,
+# but RV.view may since have flipped to something else via "Change my
+# answer") must still be caught by checking RV.views.frame.isBusy() on its
+# own, not gated on which view happens to be showing right now.
 def test_leaving_the_frame_view_waits_for_an_in_flight_action():
     frame_src = _read("review-frame.js")
     assert re.search(r"return\s*\{\s*enter\s*,\s*isBusy\b", frame_src), (
@@ -304,9 +318,14 @@ def test_leaving_the_frame_view_waits_for_an_in_flight_action():
     block = _braces_from(core, core.index("{", core.index(marker)))
     click_marker = 'addEventListener("click"'
     click_block = _braces_from(block, block.index("{", block.index(click_marker)))
-    assert re.search(
-        r'RV\.view === "frame" && RV\.views\.frame\.isBusy && RV\.views\.frame\.isBusy\(\)',
-        click_block), "the nav click handler must ignore a click while the frame view is busy"
+    guard = re.search(r'if \([^\n]*isBusy\(\)\s*\)\s*return;', click_block)
+    assert guard, "the nav click handler must ignore a click while the frame view is busy"
+    assert re.search(r"RV\.views\.frame\s*&&\s*RV\.views\.frame\.isBusy\s*&&\s*"
+                      r"RV\.views\.frame\.isBusy\(\)", guard.group(0)), (
+        "the guard must check the frame view's busy state directly")
+    assert "RV.view ===" not in guard.group(0), (
+        "the guard must not also require RV.view === \"frame\" -- a stale, no-longer-current "
+        "frame view can still be busy and must still be caught")
 
 
 # Minor A (carried, fix round 1): pressing F in single view passed no
@@ -324,3 +343,33 @@ def test_f_in_single_view_falls_back_to_the_held_box_if_the_frame_wont_open():
     assert "RV.setMode(\"frame\")" in body, "F must still remember the frame preference"
     assert body.index("RV.show(\"frame\"") < body.index("RV.setMode(\"frame\")"), (
         "the mode must only be remembered once the frame has actually opened")
+
+
+# ---- fix round 2 (re-review of dc65ba2..6eb069c) ---------------------------------
+
+# Important 1, still open after round 1: round 1's isBusy guard only closed
+# "answer in flight, then the volunteer leaves". The reverse still failed --
+# a lane button clicked while the frame view is idle releases RV.openFrameId,
+# but the stale frame stays on screen and keeps taking keys; an answer
+# started there sets busy; RV.next() then claims a box in a new frame and
+# that frame's enter() drops it at its own busy early-return, so the served
+# box is held but never shown. Every frame action that sends a request must
+# refuse once RV.openFrameId no longer names the frame it belongs to -- a
+# leave that has already released the frame (even if the old view is still
+# what's on screen) must stop any of these from starting. The check must
+# come before the busy check so the existing busy-guard tests still match
+# (FRAME_MUTATING_HANDLERS parametrizes over the same function names).
+FRAME_LEFT_GUARD = r"if \(!state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;"
+FRAME_LEAVE_AWARE_ACTIONS = ("answerModel", "saveAddedBox", "removeAddedBox", "complete", "toSingle")
+
+
+@pytest.mark.parametrize("name", FRAME_LEAVE_AWARE_ACTIONS)
+def test_frame_actions_refuse_once_the_frame_has_been_left(name):
+    body = _function_body((STATIC / "review-frame.js").read_text(), name)
+    left_guard = re.search(FRAME_LEFT_GUARD, body)
+    assert left_guard, (
+        f"{name}() must refuse once RV.openFrameId no longer matches this frame")
+    busy_check = re.search(r"\bbusy\b\s*\)\s*return", body)
+    assert busy_check, f"{name}() must still return early when busy is already true"
+    assert left_guard.start() < busy_check.start(), (
+        f"{name}()'s openFrameId guard must come before its busy check")

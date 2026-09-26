@@ -108,6 +108,12 @@ RV.views.frame = (() => {
   // mutating request, so it needs the same busy guard as every other
   // action here -- it is also the most direct way into Important 1.
   async function toSingle() {
+    // Fix round 2, Important 1: refuse once this frame has already been
+    // left (RV.openFrameId no longer names it) -- before the busy check,
+    // so a second F landing after the first's release, or any other stale
+    // action, can't run at all. See the identical guard on answerModel,
+    // saveAddedBox, removeAddedBox and complete below.
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
     if (busy) return;
     busy = true;
     try {
@@ -437,6 +443,13 @@ RV.views.frame = (() => {
   // ---- saving ------------------------------------------------------------------
 
   async function answerModel(outcome, extra) {
+    // Fix round 2, Important 1: a lane/Browse click while the frame view
+    // is idle nulls RV.openFrameId synchronously, but the stale frame's
+    // DOM stays up and keeps taking keys until the queue's response
+    // switches the view. Without this, an answer started in that window
+    // would set busy and block the new frame's enter() from rendering the
+    // box it just claimed -- held, but never shown.
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
     if (busy) return;
     busy = true;
     try {
@@ -459,6 +472,8 @@ RV.views.frame = (() => {
   }
 
   async function saveAddedBox(answer) {
+    // Fix round 2, Important 1: see answerModel's comment above.
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
     if (busy) return;
     busy = true;
     try {
@@ -482,6 +497,8 @@ RV.views.frame = (() => {
   }
 
   async function removeAddedBox() {
+    // Fix round 2, Important 1: see answerModel's comment above.
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
     if (busy) return;
     busy = true;
     try {
@@ -495,6 +512,8 @@ RV.views.frame = (() => {
   }
 
   async function complete() {
+    // Fix round 2, Important 1: see answerModel's comment above.
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
     if (busy) return;
     busy = true;
     let done = false;
