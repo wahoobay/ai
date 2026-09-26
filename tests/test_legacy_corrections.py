@@ -171,9 +171,12 @@ def spotty_client(rdb, review_assets, monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     monkeypatch.setenv("DASHBOARD_COOKIE_SECURE", "false")
-    monkeypatch.setenv("REVIEW_SPOTCHECK_RATE", "1.0")
     for key, value in review_assets["env"].items():
         monkeypatch.setenv(key, value)
+    # After the loop, so this wins over review_assets["env"]'s pinned 0
+    # (follow-up F1): this fixture exists to force spot-checks, not skip
+    # them.
+    monkeypatch.setenv("REVIEW_SPOTCHECK_RATE", "1.0")
     with TestClient(build_app()) as client:
         yield client
 

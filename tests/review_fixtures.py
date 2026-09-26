@@ -119,6 +119,13 @@ def write_review_assets(root: Path) -> dict:
         "REVIEW_TAXONOMY_CSV": str(assets / "taxonomy.csv"),
         "CLASSIFIER_V2_CLASSES_JSON": str(classes),
         "REVIEW_BASELINE_MANIFEST": str(baseline),
+        # Pinned so no test that builds a client through this dict gets an
+        # unrequested spot-check at the 10% production default (follow-up
+        # F1): that flakily hid a just-tagged celebrity's own answer from
+        # its own public gallery in test_privacy_exports.py. A test that
+        # wants spot-checks (e.g. spotty_client) sets this again itself,
+        # after applying this dict, so its explicit value wins.
+        "REVIEW_SPOTCHECK_RATE": "0",
     }
     return {"root": root, "assets": assets, "classes": classes, "baseline": baseline,
             "env": env}
