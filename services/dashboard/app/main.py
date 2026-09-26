@@ -1358,7 +1358,7 @@ def build_app() -> FastAPI:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
-        catalogue = state["review_catalogue"].get()
+        catalogue = await state["review_catalogue"].aget()
         try:
             verdict = legacy_verdict(body, catalogue=catalogue)
             async with pool.connection() as conn:

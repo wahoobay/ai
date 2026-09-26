@@ -17,6 +17,7 @@ usable as detector training data.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -58,8 +59,9 @@ async def frame_record(conn, saved_frame_id: int) -> dict:
                                      FROM saved_frames WHERE id = %s""", (saved_frame_id,))
     if row is None:
         raise NotFound("no such frame")
-    row["width"], row["height"] = safe_frame_size(row["image_path"],
-                                                   message="this frame is missing on disk")
+    # Off the event loop (follow-up C6): a PIL header read, and a stat.
+    row["width"], row["height"] = await asyncio.to_thread(
+        safe_frame_size, row["image_path"], "this frame is missing on disk")
     return row
 
 

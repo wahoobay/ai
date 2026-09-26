@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 
 import pytest
@@ -94,3 +95,46 @@ def test_missing_files_give_an_empty_working_catalogue(tmp_path):
                            tmp_path / "d.json", tmp_path / "e.json", photo_root=tmp_path)
     cat = load_catalogue(paths)
     assert cat.entries == [] and cat.accepted("X y") == "X y"
+
+
+def test_a_bad_file_keeps_the_previous_catalogue(review_assets):
+    """Phase-1 triage 97: this is what keeps labelling alive when the daily
+    poller writes a bad file."""
+    paths = catalogue_paths(review_assets)
+    store = CatalogueStore(paths)
+    before = store.get()
+    assert before.has_name("Seriola zonata")
+    manifest = paths.species_manifest
+    good, st = manifest.read_text(), manifest.stat()
+    manifest.write_text("{ not json")
+    os.utime(manifest, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert store.get() is before
+    manifest.write_text(good)
+    os.utime(manifest, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    after = store.get()
+    assert after is not before and after.has_name("Seriola zonata")
+
+
+def test_a_store_whose_first_load_fails_serves_an_empty_catalogue(review_assets):
+    paths = catalogue_paths(review_assets)
+    paths.species_manifest.write_text("{ not json")
+    assert CatalogueStore(paths).get().names() == []
+
+
+@pytest.mark.anyio
+async def test_aget_rebuilds_off_the_event_loop_and_current_never_rebuilds(review_assets,
+                                                                          monkeypatch):
+    from app import review_catalogue
+
+    seen = []
+    real = review_catalogue.load_catalogue
+
+    def spy(paths):
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real(paths)
+
+    monkeypatch.setattr(review_catalogue, "load_catalogue", spy)
+    store = CatalogueStore(catalogue_paths(review_assets))
+    cat = await store.aget()
+    assert cat.has_name("Seriola zonata") and seen == [False]
+    assert store.current() is cat and seen == [False]

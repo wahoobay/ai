@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from app.review_catalogue import CatalogueStore
+from app.review_frames import frame_record
 from app.review_queue import (
     _VERDICT_IDENTITY_COLUMNS,
     _VERDICT_NON_IDENTITY_COLUMNS,
@@ -412,6 +414,30 @@ async def test_submit_verdict_treats_an_unreadable_frame_as_missing_not_a_500(rd
     user = as_user(await make_user(rdb, "one"))
     with pytest.raises(FrameMissing):
         await _verdict(rdb, cat, user, event_id=f["event_ids"][0], outcome="accept")
+
+
+async def test_frame_sizes_are_read_off_the_event_loop(rdb, tmp_path, cat, monkeypatch):
+    """Phase-1 Minor 7: the PIL header read runs on a worker thread from
+    every async caller."""
+    from app import review_queue
+
+    seen = []
+    real = review_queue.frame_size
+
+    def spy(path):
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real(path)
+
+    monkeypatch.setattr(review_queue, "frame_size", spy)
+    [(f, _item)] = await _boxes(rdb, tmp_path, n=1)
+    me = await make_user(rdb, "me")
+    served = await _next(rdb, me)
+    async with rdb.connection() as conn:
+        await build_payload(conn, served, catalogue=cat, counts=lambda _n: 0, target=5)
+        await frame_record(conn, f["saved_frame_id"])
+    await _verdict(rdb, cat, as_user(me), event_id=f["event_ids"][0],
+                   review_item_id=served["id"], outcome="unidentifiable")
+    assert len(seen) == 3 and not any(seen)
 
 
 # ---- verdicts -----------------------------------------------------------------

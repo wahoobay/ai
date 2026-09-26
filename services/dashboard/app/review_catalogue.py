@@ -19,6 +19,7 @@ the files changes, so a sheet edit reaches the page without a restart.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import logging
@@ -258,3 +259,15 @@ class CatalogueStore:
                     self._catalogue = Catalogue([], {}, {})
             self._stamp = stamp
         return self._catalogue
+
+    async def aget(self) -> Catalogue:
+        """get() for async code (follow-up C6): its stat calls, and any
+        rebuild's file reads, run on a worker thread, not the event loop."""
+        return await asyncio.to_thread(self.get)
+
+    def current(self) -> Catalogue:
+        """The catalogue as last built, without looking at the files: for
+        sync code on the event loop (ReviewPool.species_order). The pool's
+        runs and every review route refresh it through aget(). Builds it
+        once if nothing has yet."""
+        return self._catalogue if self._catalogue is not None else self.get()

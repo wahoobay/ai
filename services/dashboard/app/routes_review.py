@@ -78,8 +78,8 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             raise HTTPException(status_code=503, detail="database unavailable")
         return pool
 
-    def _catalogue():
-        return state["review_catalogue"].get()
+    async def _catalogue():
+        return await state["review_catalogue"].aget()
 
     def _pool():
         return state.get("review_pool")
@@ -124,7 +124,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                         return JSONResponse(empty)
                     try:
                         return JSONResponse(await build_payload(
-                            conn, item, catalogue=_catalogue(), counts=_counts,
+                            conn, item, catalogue=await _catalogue(), counts=_counts,
                             target=cfg.review_target))
                     except FrameMissing:
                         # Review Focus 3: never hand out a box nobody can see.
@@ -137,7 +137,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def post_verdict(body: VerdictIn, user=Depends(reviewer)):
         async with _db().connection() as conn:
             try:
-                out = await submit_verdict(conn, user=user, body=body, catalogue=_catalogue(),
+                out = await submit_verdict(conn, user=user, body=body, catalogue=await _catalogue(),
                                            spot_rate=cfg.review_spotcheck_rate, rng=rng)
             except ReviewError as e:
                 return _fail(e)
@@ -166,7 +166,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         async with _db().connection() as conn:
             try:
                 return JSONResponse(await reopen_payload(
-                    conn, user=user, event_id=event_id, catalogue=_catalogue(),
+                    conn, user=user, event_id=event_id, catalogue=await _catalogue(),
                     counts=_counts, target=cfg.review_target))
             except ReviewError as e:
                 return _fail(e)
@@ -175,15 +175,15 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def mine(user=Depends(reviewer)):
         async with _db().connection() as conn:
             return JSONResponse(await recent_verdicts(
-                conn, user_id=user.id, session_id=user.session_id, catalogue=_catalogue()))
+                conn, user_id=user.id, session_id=user.session_id, catalogue=await _catalogue()))
 
     @router.get("/api/review/species")
     async def species(user=Depends(reviewer)):
-        return JSONResponse({"species": _catalogue().to_json()})
+        return JSONResponse({"species": (await _catalogue()).to_json()})
 
     @router.get("/api/review/species/{name_slug}/photo.jpg")
     async def species_photo(name_slug: str, user=Depends(reviewer)):
-        found = _catalogue().photo(name_slug)
+        found = (await _catalogue()).photo(name_slug)
         if found is None:
             return JSONResponse({"error": "no photo for that species"}, status_code=404)
         return await _jpeg(render_frame, str(found[0]), 320)
@@ -231,7 +231,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                                  claim_s=cfg.review_claim_s,
                                  skip_ttl_days=cfg.review_skip_ttl_days)
                 return JSONResponse(await frame_state(
-                    conn, saved_frame_id=saved_frame_id, user=user, catalogue=_catalogue(),
+                    conn, saved_frame_id=saved_frame_id, user=user, catalogue=await _catalogue(),
                     counts=_counts, target=cfg.review_target))
             except ReviewError as e:
                 return _fail(e)
@@ -239,20 +239,20 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     @router.get("/api/review/frames/{saved_frame_id}")
     async def frame_get(saved_frame_id: int, user=Depends(reviewer)):
         return await _frame_call(frame_state, saved_frame_id=saved_frame_id, user=user,
-                                 catalogue=_catalogue(), counts=_counts, target=cfg.review_target)
+                                 catalogue=await _catalogue(), counts=_counts, target=cfg.review_target)
 
     @router.post("/api/review/frames/{saved_frame_id}/boxes",
                  dependencies=[Depends(require_csrf)])
     async def frame_add_box(saved_frame_id: int, body: AddedBoxIn, user=Depends(reviewer)):
         return await _frame_call(add_box, saved_frame_id=saved_frame_id, user=user, body=body,
-                                 catalogue=_catalogue())
+                                 catalogue=await _catalogue())
 
     @router.patch("/api/review/frames/{saved_frame_id}/boxes/{box_id}",
                   dependencies=[Depends(require_csrf)])
     async def frame_update_box(saved_frame_id: int, box_id: int, body: AddedBoxIn,
                                user=Depends(reviewer)):
         return await _frame_call(update_box, saved_frame_id=saved_frame_id, box_id=box_id,
-                                 user=user, body=body, catalogue=_catalogue())
+                                 user=user, body=body, catalogue=await _catalogue())
 
     @router.delete("/api/review/frames/{saved_frame_id}/boxes/{box_id}",
                    dependencies=[Depends(require_csrf)])
@@ -268,7 +268,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                  dependencies=[Depends(require_csrf)])
     async def frame_complete(saved_frame_id: int, user=Depends(reviewer)):
         return await _frame_call(complete_frame, saved_frame_id=saved_frame_id, user=user,
-                                 catalogue=_catalogue())
+                                 catalogue=await _catalogue())
 
     @router.post("/api/review/frames/{saved_frame_id}/release",
                  dependencies=[Depends(require_csrf)])
@@ -325,7 +325,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         try:
             async with _db().connection() as conn:
                 summary = await progress_summary(
-                    conn, pool_obj=pool_obj, catalogue=_catalogue(), session_id=user.session_id,
+                    conn, pool_obj=pool_obj, catalogue=await _catalogue(), session_id=user.session_id,
                     target=cfg.review_target)
         except psycopg.errors.QueryCanceled:
             # Unlike the refresh above, this is progress_summary's own
@@ -348,7 +348,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                                 who=who, lane=lane, date_from=date_from, date_to=date_to)
         async with _db().connection() as conn:
             try:
-                return JSONResponse(await browse(conn, catalogue=_catalogue(), user=user,
+                return JSONResponse(await browse(conn, catalogue=await _catalogue(), user=user,
                                                  filters=filters, page=page))
             except ReviewError as e:
                 return _fail(e)
@@ -361,7 +361,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     @router.get("/api/review/disputes")
     async def disputes(user=Depends(admin_only)):
         async with _db().connection() as conn:
-            return JSONResponse({"disputes": await list_disputes(conn, catalogue=_catalogue())})
+            return JSONResponse({"disputes": await list_disputes(conn, catalogue=await _catalogue())})
 
     @router.post("/api/review/disputes/{event_id}/adjudicate",
                  dependencies=[Depends(require_csrf)])
@@ -379,7 +379,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                 if current is None or current.status != "disputed":
                     raise Conflict("this box is not disputed")
                 return JSONResponse(await submit_verdict(
-                    conn, user=user, body=verdict, catalogue=_catalogue(), spot_rate=0.0,
+                    conn, user=user, body=verdict, catalogue=await _catalogue(), spot_rate=0.0,
                     rng=rng, adjudication=True))
             except ReviewError as e:
                 return _fail(e)

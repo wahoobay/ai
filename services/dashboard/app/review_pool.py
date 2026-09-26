@@ -266,7 +266,7 @@ class ReviewPool:
 
     def species_order(self) -> list[str]:
         """Every catalogue species still below target, thinnest first."""
-        below = [n for n in self.catalogue_store.get().names() if self.count(n) < self.s.target]
+        below = [n for n in self.catalogue_store.current().names() if self.count(n) < self.s.target]
         return sorted(below, key=lambda n: (self.count(n), n))
 
     # ---- the run ------------------------------------------------------------
@@ -437,7 +437,7 @@ class ReviewPool:
             route, event_id), lock_event=event_id))
 
     async def _fill_check(self, conn, window, stats: dict, t0: float) -> None:
-        catalogue = self.catalogue_store.get()
+        catalogue = await self.catalogue_store.aget()
         open_counts = {name: n for name, n in await self._rows(conn, """
             SELECT route_species, count(*) FROM review_items
              WHERE lane = 'check' AND pass = 1 AND status IN ('open', 'claimed')

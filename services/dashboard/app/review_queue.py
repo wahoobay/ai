@@ -14,6 +14,7 @@ into status codes. Invariants:
 """
 from __future__ import annotations
 
+import asyncio
 import random
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -266,7 +267,7 @@ async def build_payload(conn, item: dict, *, catalogue, counts, target: int,
     ev = await event_with_frame(conn, item["event_id"])
     if ev is None or ev["saved_frame_id"] is None:
         raise FrameMissing("this box's frame was not saved")
-    width, height = safe_frame_size(ev["image_path"])
+    width, height = await asyncio.to_thread(safe_frame_size, ev["image_path"])
     others = await fetch_all(conn, """
         SELECT id AS event_id, bbox FROM detection_events
          WHERE source_name = %s AND ts = %s AND frame_id = %s AND id <> %s
@@ -537,7 +538,7 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
             raise NotFound("no such detection")
         if ev["saved_frame_id"] is None:
             raise Invalid("this detection's frame was not saved")
-        width, height = safe_frame_size(ev["image_path"])
+        width, height = await asyncio.to_thread(safe_frame_size, ev["image_path"])
 
         item = None
         if body.review_item_id is not None and not adjudication:

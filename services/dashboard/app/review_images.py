@@ -9,6 +9,7 @@ always agree."""
 from __future__ import annotations
 
 import io
+import os
 from functools import lru_cache
 
 from PIL import Image
@@ -18,13 +19,19 @@ ZOOM_MAX_SCALE = 3.0
 ZOOM_MAX_EDGE = 960
 
 
-@lru_cache(maxsize=4096)
 def frame_size(path: str) -> tuple[int, int]:
     """(width, height), read from the file header. Raises OSError for a
     missing, zero-byte or corrupt file -- FileNotFoundError for a plain
     missing one, PIL's UnidentifiedImageError (an OSError subclass) for a
     zero-byte or corrupt one -- or ValueError for a header PIL parses but
-    cannot size sensibly."""
+    cannot size sensibly. Cached per (path, modification time), so a frame
+    deleted or replaced by hand is noticed (follow-up C5, phase-1 triage
+    146): a deleted one fails the stat here with FileNotFoundError."""
+    return _frame_size_at(path, os.stat(path).st_mtime_ns)
+
+
+@lru_cache(maxsize=4096)
+def _frame_size_at(path: str, mtime_ns: int) -> tuple[int, int]:
     with Image.open(path) as im:
         return im.size
 
