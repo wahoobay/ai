@@ -85,10 +85,18 @@ RV.views.frame = (() => {
 
   // Re-opening (not a plain GET) refreshes this volunteer's claims on the
   // frame each time an answer reloads it, so they don't lapse while
-  // someone works through a busy frame (spec amendment 2026-09-25).
+  // someone works through a busy frame (spec amendment 2026-09-25). Fix
+  // round 1, Important 1: this now claims, so a reload that finishes after
+  // the volunteer has already left this frame (F, a lane button, Browse,
+  // "Change my answer") must not re-claim its boxes with nothing left to
+  // release them -- checked both before sending the POST and after it
+  // lands, in case the leave happened while it was in flight.
   async function reload(keepSelection) {
-    const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/open`);
+    const id = state.saved_frame_id;
+    if (RV.openFrameId !== id) return;
+    const r = await RV.post(`/api/review/frames/${id}/open`);
     if (!r.ok) { RV.toast(r.data.error || "Couldn't refresh the frame."); return; }
+    if (RV.openFrameId !== id) { RV.post(`/api/review/frames/${id}/release`); return; }
     state = r.data;
     if (!keepSelection) selectFirst();
     render();
@@ -96,10 +104,18 @@ RV.views.frame = (() => {
 
   // F / "Single boxes": switch modes for good (remembered in this browser),
   // give this frame's boxes back without skipping them, and let the queue
-  // pick the next single box.
+  // pick the next single box. Fix round 1, Important 2: this sends a
+  // mutating request, so it needs the same busy guard as every other
+  // action here -- it is also the most direct way into Important 1.
   async function toSingle() {
-    RV.setMode("single");
-    await RV.releaseFrame();
+    if (busy) return;
+    busy = true;
+    try {
+      RV.setMode("single");
+      await RV.releaseFrame();
+    } finally {
+      busy = false;
+    }
     await RV.next();
   }
 
@@ -523,5 +539,8 @@ RV.views.frame = (() => {
     return false;
   });
 
-  return { enter };
+  // Fix round 1, Important 1(b): so the nav click handler (review-core.js)
+  // can refuse to leave the frame view while an answer is still in flight,
+  // rather than race a late reload() into re-claiming the frame it left.
+  return { enter, isBusy: () => busy };
 })();

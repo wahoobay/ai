@@ -323,11 +323,19 @@ RV.views.single = (() => {
     return Boolean(RV.views.frame && c && c.item.pass !== 2);
   }
 
-  function openFrame(eventId) {
+  // Fix round 1, Minor A: if the frame then fails to open, fall back to
+  // showing this same box rather than a bare error -- unless it's a
+  // reopened ("change my answer") box, which was never a live queue claim
+  // and has no payload of its own to fall back to. The mode is only
+  // remembered as "frame" once the frame has actually opened, so a failed
+  // attempt doesn't strand the volunteer in single mode with no box shown.
+  async function openFrame(eventId) {
     if (frameAllowed(current)) {
-      RV.setMode("frame");
-      RV.show("frame", { savedFrameId: current.box.saved_frame_id,
-        selectEventId: eventId || current.item.event_id });
+      const savedFrameId = current.box.saved_frame_id;
+      const arg = { savedFrameId, selectEventId: eventId || current.item.event_id };
+      if (!reopened) arg.payload = current;
+      await RV.show("frame", arg);
+      if (RV.openFrameId === savedFrameId) RV.setMode("frame");
     }
   }
 

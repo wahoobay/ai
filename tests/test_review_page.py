@@ -82,7 +82,8 @@ def test_mutating_handlers_share_the_busy_guard(name):
 # review-frame.js's own actions that send a request (Task 11): entering the
 # view claims the frame's boxes, and each answer/draw/complete action
 # mutates state, so the same re-entrancy guard applies to all of them.
-FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedBox", "complete")
+FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedBox", "complete",
+                            "toSingle")
 
 
 @pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
@@ -197,7 +198,13 @@ def test_the_mode_preference_survives_blocked_storage():
         body = _function_body(core, name)
         assert "localStorage" in body and "try" in body and "catch" in body, (
             f"RV.{name}() must guard every storage access")
-    assert 'return "frame"' in _function_body(core, "mode"), "whole frame is the fallback"
+    # Fix round 1, Minor B: a blocked write must still be remembered for
+    # this session, or F in the frame view can never reach single boxes
+    # (setMode("single") silently drops and mode() falls back to "frame").
+    assert re.search(r"RV\.modeValue\s*=\s*value", _function_body(core, "setMode")), (
+        "setMode() must keep an in-memory copy before the storage write can fail")
+    assert 'return RV.modeValue || "frame"' in _function_body(core, "mode"), (
+        "mode() must fall back to the in-memory value, not unconditionally to \"frame\"")
 
 
 def test_opening_a_frame_keeps_the_box_the_queue_just_served():
@@ -216,7 +223,11 @@ def test_a_frame_that_will_not_open_does_not_ask_the_queue_again():
 
 def test_reloading_a_frame_refreshes_the_claims():
     body = _function_body(_read("review-frame.js"), "reload")
-    assert "RV.post(`/api/review/frames/${state.saved_frame_id}/open`)" in body
+    # Fix round 1, Important 1(a): reload() now captures the frame id it
+    # started with (`const id = state.saved_frame_id;`) so it can tell a
+    # leave-while-in-flight apart from still being on the same frame; the
+    # claiming POST uses that captured id rather than re-reading state.
+    assert "RV.post(`/api/review/frames/${id}/open`)" in body
 
 
 def test_completing_a_frame_asks_for_the_next_one_outside_the_busy_guard():
@@ -237,7 +248,14 @@ def test_switching_lanes_releases_before_asking_the_queue():
     core = _read("review-core.js")
     marker = 'document.addEventListener("DOMContentLoaded"'
     block = _braces_from(core, core.index("{", core.index(marker)))
-    assert "await RV.releaseAll()" in block and "RV.next()" in block
+    # Fix round 1, Minor C: scanning the whole DOMContentLoaded block let the
+    # page-load `await RV.next();` satisfy this on its own, without ever
+    # looking at the click listener or the order within it.
+    click_marker = 'addEventListener("click"'
+    click_block = _braces_from(block, block.index("{", block.index(click_marker)))
+    assert "await RV.releaseAll()" in click_block and "RV.next()" in click_block
+    assert click_block.index("await RV.releaseAll()") < click_block.index("RV.next()"), (
+        "the lane button must release before it asks the queue again")
 
 
 def test_closing_the_tab_releases_the_frame_too():
@@ -245,3 +263,64 @@ def test_closing_the_tab_releases_the_frame_too():
     marker = 'window.addEventListener("pagehide"'
     block = _braces_from(core, core.index("{", core.index(marker)))
     assert "keepalive: true" in block and "RV.openFrameId" in block and "RV.held" in block
+    # Fix round 1, Minor D: carried item (c) is correct in the code but was
+    # unprotected -- dropping the header would 403 both releases silently.
+    assert "headers: RV.HEADERS" in block, "the release calls must send the CSRF header"
+
+
+# ---- fix round 1 (opus review of f614479..dc65ba2) ------------------------------
+
+# Important 1(a): reload() started POSTing /open (a claim, not a plain read) so
+# it can refresh this volunteer's claims mid-frame. But if the volunteer has
+# already left the frame by the time a late reload's request lands -- F, a
+# lane button, Browse, or "Change my answer" raced an in-flight answer -- that
+# late reload must not re-claim the frame's boxes with nothing left to
+# release them. It must check before sending the claiming POST, and again
+# after, in case the leave happened while the request was in flight.
+def test_reload_does_not_reclaim_a_frame_the_volunteer_already_left():
+    body = _function_body(_read("review-frame.js"), "reload")
+    pre, sep, post = body.partition("await RV.post")
+    assert sep, "reload() must still claim via RV.post"
+    assert re.search(r"if \(RV\.openFrameId !== id\) return;", pre), (
+        "reload() must skip the re-open once the volunteer has already left this frame")
+    assert re.search(r"if \(RV\.openFrameId !== id\)", post), (
+        "reload() must notice a leave that happened while its POST was in flight")
+    assert "/api/review/frames/${id}/release" in post, (
+        "a late reload must give back the claims it just re-acquired, not strand them")
+
+
+# Important 1(b): the fix above stops a late reload from re-claiming a frame
+# the volunteer already left, but the lane/Browse buttons must also not
+# start a leave while an answer is still in flight in the frame view --
+# otherwise /next claims a fresh box for a view that then refuses to render
+# it (frame.enter()'s own busy guard), and the served box is held but never
+# shown. review-frame.js exposes isBusy() so the nav handler can check it.
+def test_leaving_the_frame_view_waits_for_an_in_flight_action():
+    frame_src = _read("review-frame.js")
+    assert re.search(r"return\s*\{\s*enter\s*,\s*isBusy\b", frame_src), (
+        "review-frame.js must expose isBusy alongside enter")
+    core = _read("review-core.js")
+    marker = 'document.addEventListener("DOMContentLoaded"'
+    block = _braces_from(core, core.index("{", core.index(marker)))
+    click_marker = 'addEventListener("click"'
+    click_block = _braces_from(block, block.index("{", block.index(click_marker)))
+    assert re.search(
+        r'RV\.view === "frame" && RV\.views\.frame\.isBusy && RV\.views\.frame\.isBusy\(\)',
+        click_block), "the nav click handler must ignore a click while the frame view is busy"
+
+
+# Minor A (carried, fix round 1): pressing F in single view passed no
+# payload, so if the frame it tries to open then fails, the volunteer sees
+# a bare error and loses the box they were on (though it stays held). It
+# must fall back to showing that same box again -- unless it's a reopened
+# (read-only "change my answer") box, which was never a live queue claim
+# and has no payload of its own to fall back to. The mode should only be
+# remembered as "frame" once the frame has actually opened.
+def test_f_in_single_view_falls_back_to_the_held_box_if_the_frame_wont_open():
+    body = _function_body(_read("review-single.js"), "openFrame")
+    assert re.search(r"if \(frameAllowed\(current\)\)", body), "openFrame() must check frameAllowed"
+    assert re.search(r"if \(!reopened\)\s*arg\.payload\s*=\s*current;", body), (
+        "openFrame() must offer the current box as a fallback payload, unless it's reopened")
+    assert "RV.setMode(\"frame\")" in body, "F must still remember the frame preference"
+    assert body.index("RV.show(\"frame\"") < body.index("RV.setMode(\"frame\")"), (
+        "the mode must only be remembered once the frame has actually opened")

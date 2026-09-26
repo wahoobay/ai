@@ -386,21 +386,28 @@ RV.releaseAll = async function releaseAll() {
 // default.
 
 RV.MODE_KEY = "rv.mode";
+// Fix round 1, Minor B: kept in memory too, or a blocked write is silently
+// dropped and mode() falls back all the way to "frame" -- so choosing
+// "single boxes" in a private window or under strict settings could never
+// stick, and F in the frame view would just release and reopen a frame.
+RV.modeValue = null;
 
 RV.mode = function mode() {
   try {
-    if (window.localStorage.getItem(RV.MODE_KEY) === "single") return "single";
+    const stored = window.localStorage.getItem(RV.MODE_KEY);
+    if (stored === "single" || stored === "frame") return stored;
   } catch (err) {
-    /* storage blocked: fall through to the default */
+    /* storage blocked: fall through to the in-memory value */
   }
-  return "frame";
+  return RV.modeValue || "frame";
 };
 
 RV.setMode = function setMode(value) {
+  RV.modeValue = value;
   try {
     window.localStorage.setItem(RV.MODE_KEY, value);
   } catch (err) {
-    /* storage blocked: the default applies next time */
+    /* storage blocked: the in-memory value still applies this session */
   }
 };
 
@@ -468,6 +475,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const view = b.dataset.view || "single";
     b.hidden = !RV.views[view];
     b.addEventListener("click", async () => {
+      // Fix round 1, Important 1(b): ignore the click outright while the
+      // frame view has its own answer in flight, or /next could claim a
+      // fresh box for a view that then refuses to render it (frame.enter()
+      // is itself busy-guarded), and a late reload() would re-claim the
+      // frame this leaves behind.
+      if (RV.view === "frame" && RV.views.frame.isBusy && RV.views.frame.isBusy()) return;
       // Released -- and awaited -- before the queue is asked again, or
       // /next could hand back a box from the frame just left as "held".
       await RV.releaseAll();
