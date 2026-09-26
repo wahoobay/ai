@@ -161,3 +161,23 @@
 #rv-pager button { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--rv-line); background: var(--bg);
   color: var(--ink); cursor: pointer; }
 #rv-pager button:disabled { opacity: .4; cursor: default; }
+
+/* The whole-frame instructions: a call-out under the frame. The swatches copy
+   the frame boxes' colours and line styles (.rv-fb-*) on a dark underwater
+   fill, so they read the same in every palette. */
+.rv-callout {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+  margin-top: 10px; padding: 10px 14px; border-radius: 8px;
+  background: var(--rv-note-bg); border: 1px solid var(--rv-line);
+  border-left: 4px solid var(--accent); color: var(--ink); font-size: 14px;
+}
+.rv-legend-item { display: inline-flex; align-items: center; gap: 7px; }
+.rv-swatch {
+  width: 22px; height: 14px; border: 2px solid; border-radius: 2px; background: #22343c;
+}
+.rv-swatch-pending { border-color: #ffc400; border-style: dashed; }
+.rv-swatch-done { border-color: #34c759; }
+.rv-swatch-added { border-color: #3ad1ff; border-style: dashed; }
+.rv-swatch-locked { border-color: #8aa3b5; border-style: dotted; }
+.rv-legend-keys { color: var(--muted); }
+.rv-legend-keys kbd { color: var(--ink); }

@@ -15,7 +15,8 @@ THEMED_PAGES = ["review.html", "login.html", "register.html", "forgot_password.h
                 "reset_password.html"]
 # (text, background) token pairs that carry text somewhere on these pages
 PAIRS = [("ink", "bg"), ("ink", "panel"), ("ink", "note-bg"), ("ink", "input-bg"),
-         ("muted", "bg"), ("muted", "panel"), ("accent", "panel"), ("accent", "bg"),
+         ("muted", "bg"), ("muted", "panel"), ("muted", "note-bg"), ("accent", "panel"),
+         ("accent", "bg"),
          ("on-accent", "accent"), ("on-accent", "accent-hover"), ("on-good", "good"),
          ("good", "panel"), ("warn", "panel"), ("bad-ink", "panel"),
          ("banner-ink", "banner-bg"), ("error-ink", "error-bg"), ("done-ink", "done-bg")]

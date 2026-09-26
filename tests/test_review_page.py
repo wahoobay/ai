@@ -587,3 +587,22 @@ def test_review_colours_are_theme_variables():
     for literal in ("#173049", "#5a2a14", "#ffe2cf", "#ff9a9a", "#062a14"):
         assert css.count(literal) == 1, f"{literal} must only appear as a .rv-page default"
 
+
+
+# Demo walk-through 2026-09-26: the whole-frame instructions were a faint grey
+# caption. They are now a call-out under the frame with a legend whose swatches
+# use the same colours and line styles as the boxes drawn on the frame.
+def test_the_frame_instructions_are_a_callout_with_a_legend():
+    src = _read("review-frame.js")
+    body = _function_body(src, "legend")
+    assert 'class: "rv-callout"' in body and 'role: "note"' in body
+    assert "rv-swatch rv-swatch-${state}" in body
+    for state in ("pending", "done", "added", "locked"):
+        assert f'swatch("{state}", ' in body, f"the legend needs the {state} box style"
+    assert 'kbd("S")' in body and 'kbd("D")' in body
+    assert "legend()" in _function_body(src, "render")
+    css = _read("review.css")
+    for state, colour in (("pending", "#ffc400"), ("done", "#34c759"), ("added", "#3ad1ff"),
+                          ("locked", "#8aa3b5")):
+        rule = re.search(r"\.rv-swatch-" + state + r"\s*\{([^}]*)\}", css)
+        assert rule and colour in rule.group(1), f"the {state} swatch must match its frame box"

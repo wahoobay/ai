@@ -432,6 +432,21 @@ RV.views.frame = (() => {
     render();
   }
 
+  // The instructions under the frame: a call-out whose swatches use the same
+  // colours and line styles as the boxes drawn on the frame (review.css).
+  function legend() {
+    const swatch = (state, label) => RV.el("span", { class: "rv-legend-item" },
+      RV.el("span", { class: `rv-swatch rv-swatch-${state}`, "aria-hidden": "true" }), label);
+    return RV.el("div", { class: "rv-callout", role: "note" },
+      RV.el("strong", { text: "Click a box to answer it." }),
+      swatch("pending", "needs an answer"),
+      swatch("done", "answered"),
+      swatch("added", "drawn by a volunteer"),
+      swatch("locked", "another volunteer has it"),
+      RV.el("span", { class: "rv-legend-keys" },
+        kbd("S"), " next frame · ", kbd("D"), " draw a box · ", kbd("F"), " single boxes"));
+  }
+
   function render() {
     root().replaceChildren(
       RV.el("div", { class: "rv-frame-top" },
@@ -442,8 +457,7 @@ RV.views.frame = (() => {
         RV.el("button", { type: "button", class: drawing ? "on" : "", disabled: Boolean(state.complete), onclick: toggleDraw },
           drawing ? "Drawing: drag on the frame (Esc to cancel) " : "Draw a box ", kbd("D"))),
       RV.el("div", { class: "rv-layout rv-layout-frame" },
-        RV.el("div", {}, frameCanvas(), RV.el("p", { class: "rv-cap",
-          text: "Click a box to answer it. Yellow dashed: needs an answer. Green: answered. Blue: drawn by a volunteer. S: next frame." })),
+        RV.el("div", {}, frameCanvas(), legend()),
         RV.el("aside", { class: "rv-side", id: "rv-frame-panel" }, ...panelContent())));
   }
 
