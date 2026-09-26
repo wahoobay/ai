@@ -400,11 +400,13 @@ def legacy_verdict(body, *, catalogue) -> VerdictIn:
     """The dashboard's older correction form (POST /api/corrections;
     main.CorrectionIn) as a review verdict (follow-up spec A1), so it is
     saved under every rule submit_verdict enforces. That form has no
-    life-stage picker, so a species with one catalogue entry takes that
-    entry's stage, and a species with several is sent to the review page.
-    A box on "not a fish" is dropped, and "uncertain" becomes "not sure"
-    only where a species was chosen: the review rules refuse either
-    otherwise."""
+    life-stage picker, so it chooses a life stage the way the review page
+    does (follow-up F2): a stage-less entry among the species' catalogue
+    entries wins outright, then a species with exactly one entry takes
+    that entry's stage, and only a species whose several entries all
+    carry a stage is sent to the review page. A box on "not a fish" is
+    dropped, and "uncertain" becomes "not sure" only where a species was
+    chosen: the review rules refuse either otherwise."""
     common = {"event_id": body.event_id, "celebrity_id": body.celebrity_id,
               "notes": body.notes}
     if body.not_a_fish:
@@ -416,9 +418,13 @@ def legacy_verdict(body, *, catalogue) -> VerdictIn:
     if not catalogue.has_name(name):
         raise Invalid(f"{raw!r} is not in the species list")
     stages = catalogue.stages(name)
-    if len(stages) > 1:
+    if None in stages:
+        life_stage = None
+    elif len(stages) == 1:
+        life_stage = stages[0]
+    else:
         raise Invalid(f"choose a life stage for {name} on the review page")
-    fields = {**common, "life_stage": stages[0], "bbox": body.corrected_bbox,
+    fields = {**common, "life_stage": life_stage, "bbox": body.corrected_bbox,
               "not_sure": body.confidence == "uncertain"}
     if body.is_endorsement:
         return VerdictIn(outcome="accept", **fields)

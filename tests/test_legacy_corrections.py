@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from app.review_catalogue import CatalogueStore
+from app.review_catalogue import Catalogue, CatalogueEntry, CatalogueStore
 from app.review_queue import Invalid, legacy_verdict
 from review_fixtures import (
     CSRF,
@@ -77,8 +77,24 @@ def test_a_name_outside_the_species_list_is_refused(cat):
 
 
 def test_a_species_with_several_life_stages_is_sent_to_the_review_page(cat):
+    # Both of the fixture catalogue's Pomacanthus paru entries carry a
+    # stage (adult, juvenile) -- neither is stage-less -- so this still
+    # exercises the real refusal (follow-up F2).
     with pytest.raises(Invalid, match="choose a life stage for Pomacanthus paru on the review page"):
         legacy_verdict(_ns(corrected_name="Pomacanthus paru"), catalogue=cat)
+
+
+def test_a_stage_less_entry_among_several_needs_no_life_stage_choice():
+    # Follow-up F2: unlike Pomacanthus paru above, a species whose several
+    # catalogue entries include a stage-less one is resolved the way the
+    # review page resolves it -- life_stage None, no refusal -- rather
+    # than being sent to the review page for a choice that doesn't apply.
+    mixed = Catalogue(
+        [CatalogueEntry(name="Mixed stage fish", life_stage=None),
+         CatalogueEntry(name="Mixed stage fish", life_stage="adult")],
+        {}, {})
+    v = legacy_verdict(_ns(corrected_name="Mixed stage fish"), catalogue=mixed)
+    assert (v.outcome, v.label, v.life_stage) == ("species", "Mixed stage fish", None)
 
 
 # ---- over HTTP ----------------------------------------------------------------
