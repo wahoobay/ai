@@ -4,8 +4,10 @@ Pure functions only — no database, no FastAPI client. The DB-backed
 session and token stores are covered in tests/test_auth_db.py."""
 from __future__ import annotations
 
+import re
 import ssl
 import sys
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services" / "dashboard"))
@@ -141,6 +143,44 @@ def test_smtp_backend_sends_one_message(monkeypatch):
     assert isinstance(context, ssl.SSLContext)
     assert context.check_hostname is True
     assert context.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_smtp_messages_carry_a_date_and_a_message_id(monkeypatch):
+    # 2026-09-26: Gmail silently dropped the dashboard's confirmation
+    # emails. The relay (Resend) accepted them, but Gmail refuses
+    # messages without a valid Message-ID, and the mailer set only
+    # From/To/Subject. RFC 5322 requires Date and expects Message-ID.
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def starttls(self, context=None):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg):
+            sent.append(msg)
+
+    monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
+    m = Mailer(backend="smtp", smtp={"host": "h", "port": 587, "starttls": True},
+               from_addr="noreply@wahoobay.org", base_url="https://example.org")
+    m.send("a@example.org", "One", "Body")
+    m.send("a@example.org", "Two", "Body")
+    first, second = sent
+    for msg in sent:
+        assert parsedate_to_datetime(msg["Date"]).tzinfo is not None
+        assert re.fullmatch(r"<[^<>@\s]+@wahoobay\.org>", msg["Message-ID"])
+    assert first["Message-ID"] != second["Message-ID"]
 
 
 def test_smtp_failure_falls_back_to_manual_rather_than_raising(monkeypatch):

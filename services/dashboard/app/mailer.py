@@ -19,6 +19,7 @@ import logging
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +97,11 @@ class Mailer:
         msg["From"] = self.from_addr
         msg["To"] = to
         msg["Subject"] = subject
+        # Gmail refuses a message without a valid Message-ID, after the
+        # relay has already accepted it, so the loss never shows here
+        # (2026-09-26). RFC 5322 requires Date as well.
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain=self.from_addr.rpartition("@")[2] or None)
         msg.set_content(body)
         try:
             with smtplib.SMTP(self.smtp["host"], self.smtp["port"], timeout=10) as s:
