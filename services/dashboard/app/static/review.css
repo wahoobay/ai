@@ -1,20 +1,33 @@
 /* services/dashboard/app/static/review.css
    The review page (spec 2026-09-24 §9, layout B). Colours come from the
    dashboard's variables in style.css. */
+/* Review-page colours not covered by style.css's :root palette. Every
+   colour here or in :root can be swapped by a theme class on .rv-page
+   (e.g. .rv-light at the end); these defaults are the dark dashboard look.
+   Colours drawn over the camera frames (box outlines, handles) stay fixed. */
+.rv-page {
+  --rv-line: #1f3b4f;
+  --rv-on-accent: #062033;
+  --rv-on-good: #062a14;
+  --rv-note-bg: #173049;
+  --rv-banner-bg: #5a2a14;
+  --rv-banner-ink: #ffe2cf;
+  --rv-bad-ink: #ff9a9a;
+}
 .rv-page { min-height: 100vh; }
 .rv-top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel);
-  border-bottom: 1px solid #1f3b4f; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+  border-bottom: 1px solid var(--rv-line); flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
 .rv-brand { font-weight: 600; }
 .rv-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.rv-tabs button { padding: 5px 10px; border-radius: 6px; border: 1px solid #1f3b4f; background: var(--bg);
+.rv-tabs button { padding: 5px 10px; border-radius: 6px; border: 1px solid var(--rv-line); background: var(--bg);
   color: var(--muted); cursor: pointer; }
-.rv-tabs button.on { background: var(--accent); border-color: var(--accent); color: #062033; font-weight: 600; }
+.rv-tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--rv-on-accent); font-weight: 600; }
 .rv-spacer { flex: 1; }
 .rv-meta { color: var(--muted); font-size: 13px; }
 /* style.css gives every <main> the dashboard's two-column grid (3fr 2fr);
    the review page is one centred column instead. */
 .rv-main { display: block; max-width: 1600px; margin: 0 auto; padding: 12px 14px 96px; }
-.rv-banner { background: #5a2a14; color: #ffe2cf; padding: 8px 14px; }
+.rv-banner { background: var(--rv-banner-bg); color: var(--rv-banner-ink); padding: 8px 14px; }
 .rv-toast { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: var(--panel);
   border: 1px solid var(--accent); padding: 8px 14px; border-radius: 8px; z-index: 10; }
 .rv-empty { padding: 40px 0; text-align: center; }
@@ -39,14 +52,14 @@
 .rv-thumb img { width: 100%; display: block; }
 .rv-thumb-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .rv-progress { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.rv-bar { flex: 1; height: 7px; background: #1f3b4f; border-radius: 4px; overflow: hidden; display: flex; }
+.rv-bar { flex: 1; height: 7px; background: var(--rv-line); border-radius: 4px; overflow: hidden; display: flex; }
 .rv-bar i { display: block; height: 100%; background: var(--warn); }
 /* spec amendment 2026-09-25: other fish in the single-box preview open the frame.
    .rv-other sets pointer-events: none, so this must reset it or the click
    listener attached in review-single.js's frameThumb() never fires. */
 .rv-other-link { fill: rgba(0, 0, 0, 0.001); cursor: pointer; pointer-events: auto; }
 .rv-other-link:hover { stroke: #ffc400; stroke-width: 2px; }
-.rv-guess { display: flex; gap: 10px; align-items: center; padding: 8px; border: 1px solid #1f3b4f;
+.rv-guess { display: flex; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--rv-line);
   border-radius: 8px; flex-wrap: wrap; }
 .rv-guess img { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; }
 .rv-guess-text { flex: 1; min-width: 140px; }
@@ -54,17 +67,17 @@
 .rv-latin { font-style: italic; color: var(--muted); font-size: 12px; }
 .rv-credit { font-size: 10px; color: var(--muted); }
 .rv-side button, .rv-empty button, .rv-frame-top button { padding: 7px 10px; border-radius: 7px;
-  border: 1px solid #1f3b4f; background: var(--bg); color: var(--ink); cursor: pointer; }
+  border: 1px solid var(--rv-line); background: var(--bg); color: var(--ink); cursor: pointer; }
 .rv-side button:hover { border-color: var(--accent); }
-.rv-side button.rv-primary { background: var(--good); color: #062a14; border: none; font-weight: 700; }
+.rv-side button.rv-primary { background: var(--good); color: var(--rv-on-good); border: none; font-weight: 700; }
 .rv-side button:disabled { opacity: .5; cursor: default; }
-.rv-search { width: 100%; padding: 8px 10px; border-radius: 7px; border: 1px solid #1f3b4f;
+.rv-search { width: 100%; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--rv-line);
   background: var(--bg); color: var(--ink); }
 .rv-results { list-style: none; margin: 4px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
 .rv-result { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
-.rv-result.active, .rv-result:hover { background: #1f3b4f; }
+.rv-result.active, .rv-result:hover { background: var(--rv-line); }
 .rv-result img, .rv-nophoto { width: 40px; height: 30px; object-fit: cover; border-radius: 3px;
-  background: #1f3b4f; flex: none; }
+  background: var(--rv-line); flex: none; }
 .rv-result-text { display: flex; flex-direction: column; }
 .rv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .rv-side button.rv-chip { border-radius: 999px; border-style: dashed; font-size: 12px; }
@@ -75,16 +88,16 @@
 .rv-side button.rv-link, .rv-frame-top button.rv-link { background: none; border: none; color: var(--accent);
   padding: 2px 4px; }
 .rv-check { display: inline-flex; gap: 4px; align-items: center; }
-.rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid #1f3b4f; border-radius: 6px; }
-.rv-note { background: #173049; border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
+.rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--rv-line); border-radius: 6px; }
+.rv-note { background: var(--rv-note-bg); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
   margin: 0; font-size: 13px; }
 .rv-celeb { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .rv-page kbd { font-family: ui-monospace, monospace; font-size: 10px; padding: 0 4px;
   border: 1px solid currentColor; border-radius: 3px; opacity: .75; }
 .rv-recent { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 8px; align-items: center;
-  padding: 8px 14px; background: var(--panel); border-top: 1px solid #1f3b4f; overflow-x: auto; }
+  padding: 8px 14px; background: var(--panel); border-top: 1px solid var(--rv-line); overflow-x: auto; }
 .rv-recent-item { display: flex; flex-direction: column; align-items: center; gap: 2px; background: none;
-  border: 1px solid #1f3b4f; border-radius: 6px; padding: 3px; color: var(--ink); font-size: 10px;
+  border: 1px solid var(--rv-line); border-radius: 6px; padding: 3px; color: var(--ink); font-size: 10px;
   cursor: pointer; flex: none; }
 .rv-recent-item img { width: 64px; height: 40px; object-fit: cover; border-radius: 3px; }
 
@@ -111,40 +124,40 @@
 /* ---- browse and admin (Task 12) ---- */
 .rv-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
 @media (max-width: 900px) { .rv-kpis { grid-template-columns: repeat(2, 1fr); } }
-.rv-kpi { border: 1px solid #1f3b4f; border-radius: 8px; padding: 8px 10px; background: var(--panel); }
+.rv-kpi { border: 1px solid var(--rv-line); border-radius: 8px; padding: 8px 10px; background: var(--panel); }
 .rv-kpi b { display: block; font-size: 20px; }
 .rv-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; font-size: 13px; }
-.rv-filter select, .rv-filter input { background: var(--bg); color: var(--ink); border: 1px solid #1f3b4f;
+.rv-filter select, .rv-filter input { background: var(--bg); color: var(--ink); border: 1px solid var(--rv-line);
   border-radius: 6px; padding: 4px 6px; }
 .rv-search.rv-search-small { width: 200px; }
 .rv-browse-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 14px; }
 @media (max-width: 900px) { .rv-browse-body { grid-template-columns: 1fr; } }
 .rv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-.rv-cell { display: flex; flex-direction: column; padding: 0; border: 1px solid #1f3b4f; border-radius: 6px;
+.rv-cell { display: flex; flex-direction: column; padding: 0; border: 1px solid var(--rv-line); border-radius: 6px;
   overflow: hidden; background: var(--panel); color: var(--ink); cursor: pointer; text-align: left; }
 .rv-cell img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: #000; }
 .rv-cell-label { display: flex; justify-content: space-between; gap: 4px; padding: 4px 6px; font-size: 11px; }
 .rv-badge { font-size: 10px; padding: 0 5px; border-radius: 999px; white-space: nowrap; }
 .rv-b-ok { background: rgba(122, 239, 161, .18); color: var(--good); }
 .rv-b-two { background: rgba(122, 239, 161, .3); color: var(--good); }
-.rv-b-disp { background: rgba(255, 90, 90, .2); color: #ff9a9a; }
+.rv-b-disp { background: rgba(255, 90, 90, .2); color: var(--rv-bad-ink); }
 .rv-b-cant { background: rgba(255, 180, 87, .2); color: var(--warn); }
-.rv-b-open { background: #1f3b4f; color: var(--muted); }
+.rv-b-open { background: var(--rv-line); color: var(--muted); }
 .rv-species { display: flex; flex-direction: column; gap: 2px; }
 .rv-sp { display: grid; grid-template-columns: 1fr 90px 64px; gap: 6px; align-items: center; padding: 4px 2px;
-  background: none; border: none; border-bottom: 1px solid #1f3b4f; color: var(--ink); font-size: 12px;
+  background: none; border: none; border-bottom: 1px solid var(--rv-line); color: var(--ink); font-size: 12px;
   text-align: left; cursor: pointer; }
 .rv-bar i.rv-bar-base { background: #8aa3b5; }
 .rv-bar i.rv-bar-ver { background: var(--good); }
 .rv-admin { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
 .rv-admin h3 { grid-column: 1 / -1; margin: 0; }
-.rv-panel { border: 1px solid #1f3b4f; border-radius: 8px; padding: 10px; background: var(--panel); }
+.rv-panel { border: 1px solid var(--rv-line); border-radius: 8px; padding: 10px; background: var(--panel); }
 .rv-panel h4 { margin: 0 0 8px; }
-.rv-panel button { padding: 5px 8px; border-radius: 6px; border: 1px solid #1f3b4f; background: var(--bg);
+.rv-panel button { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--rv-line); background: var(--bg);
   color: var(--ink); cursor: pointer; }
 .rv-dispute { display: flex; gap: 8px; margin-bottom: 8px; }
 .rv-dispute img { width: 120px; height: 90px; object-fit: cover; border-radius: 4px; }
 .rv-dispute button { display: block; margin-bottom: 4px; }
-#rv-pager button { padding: 4px 8px; border-radius: 6px; border: 1px solid #1f3b4f; background: var(--bg);
+#rv-pager button { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--rv-line); background: var(--bg);
   color: var(--ink); cursor: pointer; }
 #rv-pager button:disabled { opacity: .4; cursor: default; }

@@ -574,3 +574,15 @@ def test_every_time_is_shown_in_eastern():
         src = outside if name == "review-core.js" else _read(name)
         assert not re.search(r"toLocale(String|TimeString|DateString)\(", src), (
             f"{name} formats a time without RV.fmtTime")
+
+
+# Demo walk-through 2026-09-26: review-page colours outside style.css's :root
+# palette are variables on .rv-page (dark defaults), so a theme class can swap
+# them; only colours drawn over the camera frames stay fixed.
+def test_review_colours_are_theme_variables():
+    css = _read("review.css")
+    page = re.search(r"\.rv-page\s*\{([^}]*)\}", css).group(1)
+    assert "--rv-line: #1f3b4f" in page
+    assert css.count("#1f3b4f") == 1, "border colours must use var(--rv-line)"
+    for literal in ("#173049", "#5a2a14", "#ffe2cf", "#ff9a9a", "#062a14"):
+        assert css.count(literal) == 1, f"{literal} must only appear as a .rv-page default"
