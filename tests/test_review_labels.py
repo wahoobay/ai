@@ -132,3 +132,37 @@ async def test_load_verdicts_reads_the_pass_from_the_review_item(rdb, tmp_path):
         resolved = await resolve_all(conn)
     r = resolved[frame["event_ids"][0]]
     assert r.status == "agreed" and r.user_ids == (one, two)
+
+
+def test_the_box_is_the_latest_one_the_deciding_verdicts_drew():
+    r = resolve([V(1, t=0, bbox=(1, 1, 10, 10)),
+                 V(2, user=2, t=5, item_pass=2, bbox=(2, 2, 20, 20))])
+    assert r.status == "agreed" and r.bbox == (2, 2, 20, 20)
+
+
+def test_without_a_deciding_box_the_latest_box_anyone_drew_is_used():
+    r = resolve([V(1, user=1, t=0, bbox=(5, 5, 50, 50)), V(2, user=2, t=10)])
+    assert r.deciding == (2,) and r.bbox == (5, 5, 50, 50)
+
+
+def test_a_box_fix_outlives_a_later_change_of_label():
+    r = resolve([V(1, t=0, bbox=(5, 5, 50, 50)), V(2, t=10, no_animal=True)])
+    assert r.outcome == ("no_animal",) and r.bbox == (5, 5, 50, 50)
+
+
+def test_an_adjudication_box_wins():
+    r = resolve([V(1, t=0, bbox=(1, 1, 10, 10)),
+                 V(2, user=2, t=5, item_pass=2, unid=True, bbox=(2, 2, 20, 20)),
+                 V(3, user=9, t=9, adj=True, bbox=(3, 3, 30, 30))])
+    assert r.status == "adjudicated" and r.bbox == (3, 3, 30, 30)
+
+
+def test_an_adjudication_without_a_box_falls_back_to_the_latest_box_drawn():
+    r = resolve([V(1, t=0, bbox=(1, 1, 10, 10)),
+                 V(2, user=2, t=5, item_pass=2, unid=True, bbox=(2, 2, 20, 20)),
+                 V(3, user=9, t=9, adj=True)])
+    assert r.bbox == (2, 2, 20, 20)
+
+
+def test_with_no_box_drawn_the_models_box_applies():
+    assert resolve([V(1), V(2, user=2, t=5, item_pass=2)]).bbox is None

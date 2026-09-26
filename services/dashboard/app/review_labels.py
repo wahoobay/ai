@@ -14,6 +14,13 @@ Outcomes are compared as ("species", name), ("unidentifiable",) or
 ("no_animal",). Life stage and small box differences are not
 disagreements. The 53 verdicts recorded before accounts existed have no
 user_id and are ignored: anyone could write to that endpoint then.
+
+The box (phase 3 crops with it): the latest corrected box among the
+deciding verdicts -- the adjudication, or the first-pass and spot-check
+pair -- and failing that, the latest corrected box from anyone who
+answered the box. None means the model's own box. A box fix says where
+the animal is, not what it is, so it outlives a later answer that changes
+the label.
 """
 from __future__ import annotations
 

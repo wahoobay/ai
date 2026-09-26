@@ -439,3 +439,58 @@ async def test_pool_status_counts_items(rdb, tmp_path):
         s = await pool_status(conn, pool_obj=None)
     assert {"lane": "identify", "pass": 1, "status": "open", "count": 1} in s["items"]
     assert s["unscored"] == 2 and s["last_run"] is None
+
+
+async def test_browse_and_progress_run_under_their_own_statement_timeout(rdb, store,
+                                                                        monkeypatch):
+    """Phase-1 triage 210: these timeouts are the only bound on a reviewer
+    request's database time. Removing either _set_statement_timeout call,
+    or ignoring STATEMENT_TIMEOUT_MS, fails this test."""
+    monkeypatch.setattr(review_browse_module, "STATEMENT_TIMEOUT_MS", 100)
+    real = review_browse_module._set_statement_timeout
+
+    async def then_stall(conn):
+        await real(conn)
+        await conn.execute("SELECT pg_sleep(2)")     # a query that outlives the limit
+
+    monkeypatch.setattr(review_browse_module, "_set_statement_timeout", then_stall)
+    one = await make_user(rdb, "one")
+    async with rdb.connection() as conn:
+        with pytest.raises(psycopg.errors.QueryCanceled):
+            await browse(conn, catalogue=store.get(), user=as_user(one),
+                         filters=BrowseFilters(), page=0)
+        # transaction-local: the limit ends with the transaction
+        cur = await conn.execute("SHOW statement_timeout")
+        assert (await cur.fetchone())[0] != "100ms"
+    async with rdb.connection() as conn:
+        with pytest.raises(psycopg.errors.QueryCanceled):
+            await progress_summary(conn, pool_obj=None, catalogue=store.get(), session_id=None,
+                                   target=5)
+
+
+async def test_browse_points_each_box_at_the_frame_saved_at_its_own_time(rdb, tmp_path, store):
+    """Phase-1 triage 211: a wrong saved_frame_id sends a volunteer into the
+    wrong frame and claims its boxes. Assert the values, not the count."""
+    one = await make_user(rdb, "one")
+    box = [{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}]
+    f = await seed_frame(rdb, tmp_path, ts=T0, frame_id=7, boxes=box)
+    # frame_id restarts with every worker run: the same camera and frame_id
+    # an hour later is another frame
+    g = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=1), frame_id=7, boxes=box,
+                         color=(200, 60, 90))
+    # and f's frame saved a second time, under another reason: the lower id wins
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """INSERT INTO saved_frames (ts, frame_id, source_name, reason, image_path, num_fish,
+                                          coco_path)
+               VALUES (%s, 7, %s, 'interesting:new_species', %s, 1, %s)""",
+            (T0, f["source"], f["image_path"], f["image_path"] + ".coco.json"))
+    for frame in (f, g):
+        await add_verdict(rdb, frame["event_ids"][0], one, name="Seriola zonata")
+    async with rdb.connection() as conn:
+        result = await browse(conn, catalogue=store.get(), user=as_user(one),
+                              filters=BrowseFilters(), page=0)
+    by_event = {c["event_id"]: c["saved_frame_id"] for c in result["cells"]
+                if c["kind"] == "box"}
+    assert by_event == {f["event_ids"][0]: f["saved_frame_id"],
+                        g["event_ids"][0]: g["saved_frame_id"]}
