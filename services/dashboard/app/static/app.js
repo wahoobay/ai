@@ -194,7 +194,7 @@ function renderSpecies(payload) {
           isSightings
             ? `mean acc ${fmtPct(r.mean_acc)} · ${r.total_frames} frames total`
             : `mean ${fmtPct(r.mean_acc)}`
-        } · last ${new Date(r.last_seen).toLocaleTimeString()}</span>
+        } · last ${fmtET(r.last_seen, "time")}</span>
       </li>`
     )
     .join("");
@@ -227,7 +227,7 @@ function renderEventCard(r) {
   const thumb = hasImage
     ? `<img class="event-thumb" src="/api/detections/${r.id}/roi.jpg?size=160" alt="" loading="lazy" onclick="openRoiModal(${r.id})" title="click to enlarge" onerror="this.style.display='none'">`
     : `<div class="event-thumb event-thumb-empty" title="no saved frame on disk for this detection (worker saves frames selectively)">no frame</div>`;
-  const meta = `${new Date(r.ts).toLocaleTimeString()} · ${short(r.source_name)} · frame ${r.frame_id}`;
+  const meta = `${fmtET(r.ts, "time")} · ${short(r.source_name)} · frame ${r.frame_id}`;
   return `
     <li class="event-item" data-event-id="${r.id}">
       <div class="event-row">
@@ -649,7 +649,7 @@ function renderWaterQuality(latest, history) {
     return;
   }
 
-  const when = new Date(latest.ts).toLocaleString();
+  const when = fmtET(latest.ts);
   const src = latest.source || "live";
   meta.textContent = `${latest.deployment_uri} · ${when} · ${src}`;
 
@@ -941,12 +941,12 @@ function renderHourly(rows) {
     el.innerHTML = `<div class="empty" style="font-size:12px">collecting data…</div>`;
     return;
   }
-  // Bucket by local hour-of-day (0-23) so a kid sees a daily rhythm rather
+  // Bucket by Eastern hour-of-day (0-23) so a kid sees a daily rhythm rather
   // than a 24-hour rolling timeline (which is harder to read).
   const counts = new Array(24).fill(0);
   for (const r of rows) {
     if (!r.hour) continue;
-    const h = new Date(r.hour).getHours();
+    const h = etParts(r.hour).hour;
     counts[h] += r.sightings;
   }
   const max = Math.max(...counts, 1);
@@ -1108,10 +1108,10 @@ function _timeAxisTicks(minX, maxX, xS, yBaseline, hours) {
   while (t <= maxX) { out.push(t); t += stepMs; }
   return out.map(t => {
     const x = xS(t);
-    const d = new Date(t);
+    const p = etParts(t);
     const lbl = hours <= 48
-      ? `${d.getHours().toString().padStart(2,"0")}:00`
-      : `${d.getMonth()+1}/${d.getDate()}`;
+      ? `${String(p.hour).padStart(2, "0")}:00`
+      : `${p.month}/${p.day}`;
     return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${yBaseline}" y2="${yBaseline+3}" stroke="var(--muted)" stroke-width="0.5"/>
             <text x="${x.toFixed(1)}" y="${yBaseline+12}" font-size="9" fill="var(--muted)" text-anchor="middle">${lbl}</text>`;
   }).join("");
@@ -1588,7 +1588,7 @@ function _windBarbs(svg, samples, opts = {}) {
     // of the meteorological "from" direction. dir_deg is "from" — flip 180°.
     const headDeg = (s.dir_deg + 180) % 360;
     const color = bandColor(s.speed_mph);
-    const tip = `${new Date(s.x).toLocaleString()}\n${labels16(Math.floor(((s.dir_deg % 360 + 360) % 360 + 11.25) / 22.5) % 16)} (${s.dir_deg.toFixed(0)}°) · ${s.speed_mph.toFixed(1)} mph`;
+    const tip = `${fmtET(s.x)}\n${labels16(Math.floor(((s.dir_deg % 360 + 360) % 360 + 11.25) / 22.5) % 16)} (${s.dir_deg.toFixed(0)}°) · ${s.speed_mph.toFixed(1)} mph`;
     // Path of an arrow that points "up" (negative-y), with shaft length `len`:
     // - shaft: (0,0) to (0, -len)
     // - head:  short triangle at (0, -len)
@@ -1605,8 +1605,8 @@ function _windBarbs(svg, samples, opts = {}) {
 
   // X-axis ticks (time labels at start, mid, end)
   const fmtT = (ms) => {
-    const d = new Date(ms);
-    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+    const p = etParts(ms);
+    return `${p.month}/${p.day} ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
   };
   const tickXs = [xMin, xMin + xSpan / 2, xMax];
   const xTicks = tickXs.map(t => {
@@ -2019,7 +2019,7 @@ async function renderInsightsTab(hours) {
 
 function renderDataNotesTab() {
   const el = document.getElementById("dn-refresh-ts");
-  if (el) el.textContent = new Date().toLocaleString();
+  if (el) el.textContent = fmtET(new Date());
 }
 
 // ---------- Render: Fish Explorer ----------
@@ -2057,7 +2057,7 @@ function _renderSpeciesTable() {
     const name = speciesDisplayHtml(s.latin, s.common);
     const acc = s.mean_accuracy != null ? (s.mean_accuracy * 100).toFixed(0) + "%" : "—";
     const cams = (s.sources || []).map(_camLabel).join(", ") || "—";
-    const last = s.last_seen ? new Date(s.last_seen).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+    const last = s.last_seen ? fmtET(s.last_seen, "short") : "—";
     return `<tr data-species-id="${s.species_id}">
       <td>${name}</td>
       <td class="num">${s.sightings}</td>
@@ -2219,8 +2219,8 @@ async function openSpeciesModal(speciesId) {
   const accMean = data.mean_accuracy != null ? (data.mean_accuracy * 100).toFixed(1) + "%" : "—";
   const accPeak = data.peak_accuracy != null ? (data.peak_accuracy * 100).toFixed(1) + "%" : "—";
   const camLabels = (data.sources || []).map(_camLabel).join(", ") || "—";
-  const first = data.first_seen ? new Date(data.first_seen).toLocaleString() : "—";
-  const last = data.last_seen ? new Date(data.last_seen).toLocaleString() : "—";
+  const first = data.first_seen ? fmtET(data.first_seen) : "—";
+  const last = data.last_seen ? fmtET(data.last_seen) : "—";
   document.getElementById("sm-stats").innerHTML =
     `<strong>${data.sightings || 0}</strong> sightings · ` +
     `<strong>${data.total_frames || 0}</strong> frames · ` +
@@ -2281,7 +2281,7 @@ async function openSpeciesModal(speciesId) {
       frEl.innerHTML = `<div class="empty" style="font-size:12px;color:var(--muted)">no saved frames containing this species yet</div>`;
     } else {
       frEl.innerHTML = frames.map(f => {
-        const when = f.ts ? new Date(f.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+        const when = f.ts ? fmtET(f.ts, "short") : "";
         const cam = _camLabel(f.source_name);
         return `<div class="sm-frame"><div>📷 ${cam}</div><div style="margin-top:4px">${when}</div><div style="opacity:.6;margin-top:2px">${f.num_fish || 0} fish</div></div>`;
       }).join("");
@@ -2323,7 +2323,7 @@ function openRoiModal(eventId) {
   if (meta) {
     const parts = [];
     if (r?.best_accuracy != null) parts.push(`${fmtPct(r.best_accuracy)} confidence`);
-    if (r?.ts) parts.push(new Date(r.ts).toLocaleString());
+    if (r?.ts) parts.push(fmtET(r.ts));
     if (r?.source_name) parts.push(r.source_name);
     if (r?.frame_id != null) parts.push(`frame ${r.frame_id}`);
     meta.textContent = parts.join(" · ") || "—";
@@ -2761,7 +2761,7 @@ async function renderCelebritiesTab() {
       : `<span>${escHtml(c.species_common || "unknown species")}</span>`;
     const sightings = c.sightings || 0;
     const lastSeen = c.last_tagged_at
-      ? new Date(c.last_tagged_at).toLocaleDateString([], { month: "short", day: "numeric" })
+      ? fmtET(c.last_tagged_at, "day")
       : "—";
     const photo = c.photo_url
       ? `<img class="celeb-photo" src="${c.photo_url}" alt="${escAttr(c.nickname)}" loading="lazy" onerror="this.style.display='none'">`
@@ -2820,8 +2820,8 @@ async function openCelebrityModal(celebId) {
   const hero = d.photo_url
     ? `<img class="celeb-hero" src="${d.photo_url}" alt="${escAttr(d.nickname)}">`
     : `<div class="celeb-hero celeb-photo-empty">no tagged photo yet — once a reviewer tags a detection as ${escHtml(d.nickname)}, that detection's ROI shows up here.</div>`;
-  const firstSeen = d.first_seen || (d.first_tagged_at ? new Date(d.first_tagged_at).toLocaleDateString() : null);
-  const lastSeen  = d.last_seen  || (d.last_tagged_at  ? new Date(d.last_tagged_at).toLocaleDateString()  : null);
+  const firstSeen = d.first_seen || (d.first_tagged_at ? fmtET(d.first_tagged_at, "date") : null);
+  const lastSeen  = d.last_seen  || (d.last_tagged_at  ? fmtET(d.last_tagged_at, "date")  : null);
   const galleryHtml = (d.gallery || []).length
     ? `<div class="celeb-gallery">${d.gallery.map(g => `
         <a class="celeb-thumb" href="javascript:openRoiModal(${g.event_id})" title="${escAttr([g.tagged_at, g.reviewer].filter(Boolean).join(' · '))}">
