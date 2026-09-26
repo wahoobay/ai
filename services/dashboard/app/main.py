@@ -302,6 +302,7 @@ class DashboardCfg:
         self.review_identify_min_det_conf = float(_env("REVIEW_IDENTIFY_MIN_DET_CONF", "0.4"))
         self.review_target = int(_env("REVIEW_TARGET_PER_SPECIES", "200"))
         self.review_claim_s = int(_env("REVIEW_CLAIM_S", "600"))
+        self.review_skip_ttl_days = int(_env("REVIEW_SKIP_TTL_DAYS", "30"))
         self.review_spotcheck_rate = float(_env("REVIEW_SPOTCHECK_RATE", "0.10"))
         self.review_spotcheck_serve_rate = float(_env("REVIEW_SPOTCHECK_SERVE_RATE", "0.10"))
         self.review_assets_dir = Path(_env("REVIEW_ASSETS_DIR", str(repo_root / "assets")))

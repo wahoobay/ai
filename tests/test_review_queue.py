@@ -13,6 +13,8 @@ from app.review_catalogue import CatalogueStore
 from app.review_queue import (
     _VERDICT_IDENTITY_COLUMNS,
     _VERDICT_NON_IDENTITY_COLUMNS,
+    EVENT_LOCK_SQL,
+    SKIP_TTL_DAYS,
     Conflict,
     Forbidden,
     FrameMissing,
@@ -37,6 +39,7 @@ from review_fixtures import (
     catalogue_paths,
     make_user,
     seed_frame,
+    wait_until_blocked,
 )
 
 pytestmark = pytest.mark.anyio
@@ -175,7 +178,7 @@ async def test_the_held_refresh_does_not_resurrect_a_claim_that_moved_on_under_i
     async with rdb.connection() as locker, locker.transaction():
         await locker.execute("SELECT id FROM review_items WHERE id = %s FOR UPDATE", (item,))
         task = asyncio.create_task(_next(rdb, one))
-        await asyncio.sleep(0.3)   # let A's held-item UPDATE reach and block on our lock
+        await wait_until_blocked(rdb)   # A's held-item UPDATE is now waiting on our lock
         await locker.execute(
             """UPDATE review_items SET status = 'done', claimed_by = NULL,
                       claimed_until = NULL WHERE id = %s""", (item,))
@@ -247,6 +250,77 @@ async def test_a_skipped_box_is_not_offered_to_you_again(rdb, tmp_path):
         await skip_item(conn, user_id=one, item_id=item)
     assert await _next(rdb, one) is None
     assert (await _next(rdb, two))["id"] == item
+
+
+async def _age_skips(rdb, days):
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE review_skips SET created_at = now() - make_interval(days => %s)", (days,))
+
+
+async def test_a_skip_stops_hiding_the_box_once_it_is_older_than_the_ttl(rdb, tmp_path):
+    assert SKIP_TTL_DAYS == 30
+    [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
+    me = await make_user(rdb, "me")
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=me, item_id=item)
+    await _age_skips(rdb, 29)
+    assert await _next(rdb, me) is None
+    await _age_skips(rdb, 31)
+    assert (await _next(rdb, me))["id"] == item
+
+
+async def test_the_skip_ttl_is_a_setting(rdb, tmp_path):
+    [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
+    me = await make_user(rdb, "me")
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=me, item_id=item)
+    await _age_skips(rdb, 3)
+    async with rdb.connection() as conn:
+        got = await next_item(conn, user_id=me, lane="check", species_order=[],
+                              spot_serve_rate=0.0, claim_s=600, rng=random.Random(1),
+                              skip_ttl_days=2)
+    assert got["id"] == item
+
+
+async def test_skipping_again_restarts_the_clock(rdb, tmp_path):
+    [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
+    me = await make_user(rdb, "me")
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=me, item_id=item)
+    await _age_skips(rdb, 40)
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=me, item_id=item)
+    assert await _next(rdb, me) is None
+    age = await _row(rdb, "SELECT now() - created_at FROM review_skips WHERE item_id = %s", item)
+    assert age[0] < timedelta(minutes=1)
+
+
+async def test_an_expired_skip_no_longer_hides_a_spot_check(rdb, tmp_path):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
+                                                "species": "Seriola zonata"}])
+    first, me = await make_user(rdb, "first"), await make_user(rdb, "me")
+    spot = await add_item(rdb, f, pass_=2, exclude_user_id=first)
+    async with rdb.connection() as conn:
+        await skip_item(conn, user_id=me, item_id=spot)
+    assert await _next(rdb, me, rate=1.0) is None
+    await _age_skips(rdb, 31)
+    assert (await _next(rdb, me, rate=1.0))["id"] == spot
+
+
+async def test_a_retired_box_says_why_rather_than_already_answered(rdb, tmp_path, cat):
+    [(f, item)] = await _boxes(rdb, tmp_path, n=1)
+    me = await make_user(rdb, "me")
+    for reason, words in (("frame_missing", "its frame is missing"),
+                          ("outside_window", "outside the review window")):
+        async with rdb.connection() as conn:
+            await conn.execute(
+                """UPDATE review_items SET status = 'retired', retired_reason = %s,
+                          claimed_by = %s WHERE id = %s""", (reason, me, item))
+        with pytest.raises(Conflict) as e:
+            await _verdict(rdb, cat, as_user(me), event_id=f["event_ids"][0],
+                           review_item_id=item, outcome="unidentifiable")
+        assert words in e.value.message and "already answered" not in e.value.message
 
 
 async def test_releasing_puts_the_box_back(rdb, tmp_path):

@@ -6,9 +6,11 @@ the dashboard's review modules at import time, because conftest imports
 this file before those modules exist (Task 1 lands before Task 4)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -266,3 +268,29 @@ async def add_verdict(db, event_id, user_id, *, name=None, not_a_fish=False,
             (event_id, name, name, not_a_fish, unidentifiable, item_id, user_id, session_id,
              is_adjudication, confidence, label_source, bbox, reviewer, notes, created_at))
         return (await cur.fetchone())[0]
+
+
+async def wait_until_blocked(db, *, timeout_s: float = 5.0) -> None:
+    """Return once some session in this database is waiting on a lock, read
+    from pg_blocking_pids -- instead of sleeping and hoping the other task
+    got there. Fails the test after timeout_s.
+
+    Each poll ends its own implicit transaction with a rollback: a pooled
+    connection defaults to autocommit=False, and left open across polls
+    the backend-status view this reads back stays frozen at the first
+    poll's snapshot -- it would never see the other session go on to
+    block, no matter how long this waited."""
+    deadline = time.monotonic() + timeout_s
+    async with db.connection() as conn:
+        while True:
+            cur = await conn.execute(
+                """SELECT count(*) FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND cardinality(pg_blocking_pids(pid)) > 0""")
+            found = (await cur.fetchone())[0]
+            await conn.rollback()
+            if found:
+                return
+            if time.monotonic() > deadline:
+                raise AssertionError("no session became blocked")
+            await asyncio.sleep(0.02)

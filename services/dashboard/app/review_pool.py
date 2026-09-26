@@ -53,6 +53,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .review_labels import resolve_all
+from .review_queue import EVENT_LOCK_SQL
 
 log = logging.getLogger("wahoobay.dashboard.review_pool")
 
@@ -91,10 +92,17 @@ _TOO_CLOSE_SQL = """
        AND (%s::text IS NULL OR route_species = %s)
      LIMIT 1
 """
+# Conditional on the box having no verdict (follow-up C4, final review Minor
+# 10). _insert takes the event's verdict lock first, so this statement sees
+# any verdict already committed, and a verdict still to come waits for it and
+# then closes the new item itself. The casts are needed because INSERT ...
+# SELECT, unlike VALUES, does not type bare parameters from the target columns.
 _INSERT_ITEM_SQL = """
     INSERT INTO review_items (event_id, pass, lane, saved_frame_id, source_name, ts, bbox,
                               predicted, predicted_p, route_species)
-    VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s, %s)
+    SELECT %s::bigint, 1, %s::text, %s::bigint, %s::text, %s::timestamptz, %s::integer[],
+           %s::text, %s::real, %s::text
+     WHERE NOT EXISTS (SELECT 1 FROM detection_corrections WHERE event_id = %s::bigint)
     ON CONFLICT (event_id, pass) DO NOTHING
     RETURNING id
 """
@@ -389,7 +397,7 @@ class ReviewPool:
                         self.s.statement_timeout_ms)
             return None
 
-    async def _rows(self, conn, sql: str, params) -> list:
+    async def _rows(self, conn, sql: str, params, *, lock_event: int | None = None) -> list:
         """One bounded read against a small, already-indexed table --
         review_items or detection_corrections by id, never a scan of the
         big tables. Runs under the same transaction-local timeout as
@@ -397,10 +405,16 @@ class ReviewPool:
         empty result: that would silently zero an open-item count, let
         `_too_close` fail open, or turn a single-row count into an
         IndexError instead of the timeout it actually was. It propagates
-        to run_once."""
+        to run_once.
+
+        `lock_event`, when given, takes the event's verdict lock first
+        (follow-up C4): _insert uses this so its conditional INSERT sees
+        any verdict already committed, and waits for one still in flight."""
         async with conn.transaction():
             await conn.execute("SELECT set_config('statement_timeout', %s, true)",
                                (str(self.s.statement_timeout_ms),))
+            if lock_event is not None:
+                await conn.execute(EVENT_LOCK_SQL, (lock_event,))
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
                 return await cur.fetchall()
@@ -420,7 +434,7 @@ class ReviewPool:
                       predicted, predicted_p, route) -> bool:
         return bool(await self._rows(conn, _INSERT_ITEM_SQL, (
             event_id, lane, saved_frame_id, source, ts, list(bbox), predicted, predicted_p,
-            route)))
+            route, event_id), lock_event=event_id))
 
     async def _fill_check(self, conn, window, stats: dict, t0: float) -> None:
         catalogue = self.catalogue_store.get()

@@ -34,6 +34,30 @@ LANES = ("check", "identify")
 # columns, so a new column cannot be left out of the comparison unnoticed.
 DUPLICATE_WINDOW_S = 10
 
+# Follow-up spec A2: a skip hides a box from that volunteer for this many
+# days (REVIEW_SKIP_TTL_DAYS), then it can be served to them again.
+SKIP_TTL_DAYS = 30
+
+# Every verdict on an event takes this lock first, and so does the pool
+# before it queues the event (follow-up C4). Namespaced and
+# transaction-scoped; hashtextextended, not the two-int4 form, because
+# event ids will pass 2^31 within a year.
+EVENT_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended('review-event:' || %s::text, 0))"
+
+# Follow-up C3: a verdict on a retired item says why it was retired.
+RETIRED_MESSAGES = {
+    "frame_missing": "this box was retired: its frame is missing on disk",
+    "outside_window": "this box was retired: it is outside the review window",
+}
+
+
+def not_skipped(alias: str) -> str:
+    """SQL: volunteer %(uid)s has not skipped item `alias` within the last
+    %(skip_days)s days (follow-up A2). An older skip no longer counts."""
+    return f"""NOT EXISTS (SELECT 1 FROM review_skips s
+                        WHERE s.item_id = {alias}.id AND s.user_id = %(uid)s
+                          AND s.created_at > now() - make_interval(days => %(skip_days)s))"""
+
 
 class ReviewError(Exception):
     status = 400
@@ -115,21 +139,19 @@ _PASS1_SQL = f"""
      WHERE id = (
         SELECT ri.id FROM review_items ri
          WHERE ri.status = 'open' AND ri.pass = 1 AND ri.lane = %(lane)s
-           AND NOT EXISTS (SELECT 1 FROM review_skips s
-                            WHERE s.item_id = ri.id AND s.user_id = %(uid)s)
+           AND {not_skipped("ri")}
          ORDER BY COALESCE(array_position(%(order)s::text[], ri.route_species), 1000000),
                   random()
          LIMIT 1
          FOR UPDATE SKIP LOCKED)
     RETURNING *
 """
-_SPOT_ELIGIBLE = """
+_SPOT_ELIGIBLE = f"""
     ri.status = 'open' AND ri.pass = 2
     AND ri.exclude_user_id IS DISTINCT FROM %(uid)s
     AND NOT EXISTS (SELECT 1 FROM detection_corrections c
                      WHERE c.event_id = ri.event_id AND c.user_id = %(uid)s)
-    AND NOT EXISTS (SELECT 1 FROM review_skips s
-                     WHERE s.item_id = ri.id AND s.user_id = %(uid)s)
+    AND {not_skipped("ri")}
 """
 _SPOT_SQL = f"""
     UPDATE review_items SET {_CLAIM}
@@ -149,10 +171,12 @@ _STALE_SPOT_SQL = f"""
 
 
 async def next_item(conn, *, user_id: int, lane: str, species_order: list[str],
-                    spot_serve_rate: float, claim_s: int, rng: random.Random) -> dict | None:
+                    spot_serve_rate: float, claim_s: int, rng: random.Random,
+                    skip_ttl_days: int = SKIP_TTL_DAYS) -> dict | None:
     if lane not in LANES:
         raise Invalid("unknown lane")
-    params = {"uid": user_id, "lane": lane, "order": list(species_order), "claim_s": claim_s}
+    params = {"uid": user_id, "lane": lane, "order": list(species_order), "claim_s": claim_s,
+              "skip_days": skip_ttl_days}
     async with conn.transaction():
         async with conn.cursor() as cur:
             # claimed_by is deliberately kept, not nulled: a volunteer may
@@ -472,12 +496,9 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
         # event -- in particular the no-item path below, whose guards are
         # plain SELECTs that would otherwise race between two volunteers,
         # or between a double-submitted request and itself. Released
-        # automatically at commit or rollback. hashtextextended, not the
-        # two-int4 form, because event ids will pass 2^31 within a year.
+        # automatically at commit or rollback.
         async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended('review-event:' || %s::text, 0))",
-                (body.event_id,))
+            await cur.execute(EVENT_LOCK_SQL, (body.event_id,))
 
         ev = await event_with_frame(conn, body.event_id)
         if ev is None:
@@ -492,7 +513,10 @@ async def submit_verdict(conn, *, user, body: VerdictIn, catalogue, spot_rate: f
                                    (body.review_item_id,))
             if item is None or item["event_id"] != body.event_id:
                 raise NotFound("no such review item")
-            if item["status"] in ("done", "retired"):
+            if item["status"] == "retired":
+                raise Conflict(RETIRED_MESSAGES.get(item["retired_reason"],
+                                                    "this box was retired from the queue"))
+            if item["status"] == "done":
                 raise Conflict("this box was already answered")
             # A volunteer may only answer a box that was served to them
             # (spec Sec 7/15/16): claimed_by = them, and status is either
@@ -612,8 +636,10 @@ async def skip_item(conn, *, user_id: int, item_id: int) -> None:
         if item is None:
             raise NotFound("no such review item")
         async with conn.cursor() as cur:
+            # Skipping again restarts the clock (follow-up A2).
             await cur.execute("""INSERT INTO review_skips (item_id, user_id) VALUES (%s, %s)
-                                 ON CONFLICT DO NOTHING""", (item_id, user_id))
+                                 ON CONFLICT (item_id, user_id)
+                                 DO UPDATE SET created_at = now()""", (item_id, user_id))
             # Clear the claimant whenever it's this user's, 'claimed' or
             # already swept to 'open': giving a box up must mean it was
             # never served to you again, not just while the claim looked

@@ -118,7 +118,8 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                     item = await next_item(
                         conn, user_id=user.id, lane=lane, species_order=order,
                         spot_serve_rate=cfg.review_spotcheck_serve_rate,
-                        claim_s=cfg.review_claim_s, rng=rng)
+                        claim_s=cfg.review_claim_s, rng=rng,
+                        skip_ttl_days=cfg.review_skip_ttl_days)
                     if item is None:
                         return JSONResponse(empty)
                     try:
@@ -227,7 +228,8 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                 # so a missing or unreadable frame leaves no claims behind.
                 await frame_record(conn, saved_frame_id)
                 await open_frame(conn, saved_frame_id=saved_frame_id, user_id=user.id,
-                                 claim_s=cfg.review_claim_s)
+                                 claim_s=cfg.review_claim_s,
+                                 skip_ttl_days=cfg.review_skip_ttl_days)
                 return JSONResponse(await frame_state(
                     conn, saved_frame_id=saved_frame_id, user=user, catalogue=_catalogue(),
                     counts=_counts, target=cfg.review_target))

@@ -342,6 +342,38 @@ async def test_open_frame_does_not_reclaim_a_box_the_volunteer_skipped(rdb, tmp_
     assert status == "open" and claimed_by is None
 
 
+async def test_open_frame_reclaims_a_box_whose_skip_has_expired(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    item = await add_item(rdb, f, predicted="Seriola zonata")
+    me = await make_user(rdb, "me")
+    async with rdb.connection() as conn:
+        await skip_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+        await open_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me, claim_s=600)
+        cur = await conn.execute("SELECT status FROM review_items WHERE id = %s", (item,))
+        assert (await cur.fetchone())[0] == "open"
+        await conn.execute("UPDATE review_skips SET created_at = now() - interval '31 days'")
+        await open_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me, claim_s=600)
+        cur = await conn.execute("SELECT status, claimed_by FROM review_items WHERE id = %s",
+                                 (item,))
+        assert await cur.fetchone() == ("claimed", me)
+
+
+async def test_next_frame_again_restarts_the_skip_clock(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    item = await add_item(rdb, f, predicted="Seriola zonata")
+    me = await make_user(rdb, "me")
+    async with rdb.connection() as conn:
+        await skip_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+        await conn.execute("UPDATE review_skips SET created_at = now() - interval '40 days'")
+        await skip_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+        cur = await conn.execute(
+            "SELECT now() - created_at < interval '1 minute' FROM review_skips WHERE item_id = %s",
+            (item,))
+        assert (await cur.fetchone())[0] is True
+
+
 async def test_open_frame_leaves_someone_elses_live_claim_locked(rdb, tmp_path, cat):
     """The review's coverage gap: opening the frame must not touch a box
     someone else is actively holding -- it stays theirs, shown locked."""

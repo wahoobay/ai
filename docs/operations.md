@@ -563,6 +563,10 @@ that browser. Spot-checks always appear as blind single boxes, and
 way (another tab, closing the page) releases its claims without skipping
 them (`POST /api/review/frames/{id}/release`).
 
+**Skips expire.** A box a volunteer skipped (S, or "Next frame") is hidden from them for
+`REVIEW_SKIP_TTL_DAYS` days (default 30), then it can be served to them again; skipping it
+again restarts the clock.
+
 ### The pool task
 
 A background task in the dashboard keeps `review_items` topped up, every

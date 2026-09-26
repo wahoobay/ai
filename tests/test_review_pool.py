@@ -1,6 +1,7 @@
 """The review pool (spec §6) and the image helpers it relies on."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import os
@@ -13,6 +14,7 @@ from app import review_pool
 from app.review_catalogue import CatalogueStore
 from app.review_images import frame_size, render_zoom, zoom_region, zoom_scale
 from app.review_pool import TIMEOUT_BACKOFF_S, PoolSettings, ReviewPool
+from app.review_queue import EVENT_LOCK_SQL
 from PIL import Image
 from psycopg.types.json import Jsonb
 from review_fixtures import (
@@ -23,6 +25,7 @@ from review_fixtures import (
     jpeg,
     make_user,
     seed_frame,
+    wait_until_blocked,
 )
 
 
@@ -82,6 +85,53 @@ async def _items(rdb, lane=None):
                  FROM review_items WHERE (%s::text IS NULL OR lane = %s) ORDER BY event_id""",
             (lane, lane))
         return await cur.fetchall()
+
+
+async def _insert_args(rdb, tmp_path):
+    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 90, 90],
+                                                "species": "Seriola zonata"}])
+    return f, {"event_id": f["event_ids"][0], "lane": "check",
+               "saved_frame_id": f["saved_frame_id"], "source": f["source"], "ts": f["ts"],
+               "bbox": [10, 10, 90, 90], "predicted": "Seriola zonata", "predicted_p": 0.6,
+               "route": "Seriola zonata"}
+
+
+@pytestmark_db
+async def test_the_pool_never_queues_a_box_answered_after_its_free_check(rdb, review_assets,
+                                                                         tmp_path):
+    pool = _pool(rdb, review_assets)
+    f, args = await _insert_args(rdb, tmp_path)
+    await add_verdict(rdb, f["event_ids"][0], await make_user(rdb, "one"), name="Seriola zonata")
+    async with rdb.connection() as conn:
+        assert await pool._insert(conn, **args) is False
+    assert not await _items(rdb)
+
+
+@pytestmark_db
+async def test_the_pool_waits_for_a_verdict_in_flight_on_the_same_box(rdb, review_assets,
+                                                                      tmp_path):
+    """Real concurrency: a verdict holds the event's lock and has inserted
+    its row but not committed. The pool's insert must wait for it and then
+    see the row, not queue the box in between."""
+    pool = _pool(rdb, review_assets)
+    _f, args = await _insert_args(rdb, tmp_path)
+    uid = await make_user(rdb, "one")
+
+    async def insert():
+        async with rdb.connection() as conn:
+            return await pool._insert(conn, **args)
+
+    async with rdb.connection() as holder:
+        async with holder.transaction():
+            await holder.execute(EVENT_LOCK_SQL, (args["event_id"],))
+            await holder.execute(
+                """INSERT INTO detection_corrections (event_id, corrected_name, user_id)
+                   VALUES (%s, 'Seriola zonata', %s)""", (args["event_id"], uid))
+            task = asyncio.create_task(insert())
+            await wait_until_blocked(rdb)
+        # the verdict commits here
+    assert await task is False
+    assert not await _items(rdb)
 
 
 @pytestmark_db
