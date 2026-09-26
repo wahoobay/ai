@@ -95,9 +95,15 @@ RV.views.single = (() => {
   function frameThumb(c) {
     const svg = RV.svg("svg", { class: "rv-thumb-svg", viewBox: `0 0 ${c.frame.width} ${c.frame.height}`,
       preserveAspectRatio: "none" });
+    // Clicking another fish opens the whole frame with that box selected
+    // (spec amendment 2026-09-25) -- never on a spot-check, where the frame
+    // view would show the other boxes' answers.
+    const clickable = frameAllowed(c);
     for (const o of c.other_boxes) {
-      svg.append(RV.svg("rect", { x: o.bbox[0], y: o.bbox[1], width: o.bbox[2] - o.bbox[0],
-        height: o.bbox[3] - o.bbox[1], class: "rv-other" }));
+      const rect = RV.svg("rect", { x: o.bbox[0], y: o.bbox[1], width: o.bbox[2] - o.bbox[0],
+        height: o.bbox[3] - o.bbox[1], class: clickable ? "rv-other rv-other-link" : "rv-other" });
+      if (clickable) rect.addEventListener("click", () => openFrame(o.event_id));
+      svg.append(rect);
     }
     const b = c.box.model_bbox;
     svg.append(RV.svg("rect", { x: b[0], y: b[1], width: b[2] - b[0], height: b[3] - b[1], class: "rv-box" }));
@@ -105,17 +111,6 @@ RV.views.single = (() => {
       RV.el("img", { src: `${c.frame.url}?size=640`, alt: "The whole frame" }));
     wrap.append(svg);
     return wrap;
-  }
-
-  function progressBar(c) {
-    if (!c.counts_toward) return null;
-    const t = c.counts_toward;
-    const fill = Math.min(100, Math.round((100 * t.count) / t.target));
-    return RV.el("div", { class: "rv-progress" },
-      RV.el("span", { class: "rv-label", text: "Counts toward" }),
-      RV.el("span", { text: t.common || t.name }),
-      RV.el("span", { class: "rv-bar", "aria-hidden": "true" }, RV.el("i", { style: `width:${fill}%` })),
-      RV.el("span", { class: "rv-muted", text: `${t.count} / ${t.target}` }));
   }
 
   // The life-stage check (ask first, rather than round-trip the server's
@@ -215,7 +210,7 @@ RV.views.single = (() => {
       side.append(RV.el("p", { class: "rv-note", text: "Second opinion: answer from the picture alone." }));
     }
     side.append(frameThumb(c));
-    for (const part of [progressBar(c), guessCard(c)]) if (part) side.append(part);
+    for (const part of [RV.progressBar(c.counts_toward), guessCard(c)]) if (part) side.append(part);
     const pickerSlot = RV.el("div", { class: "rv-picker" });
     side.append(RV.el("div", { class: "rv-label", text: c.model ? "Or pick the species" : "Pick the species" }),
       pickerSlot);

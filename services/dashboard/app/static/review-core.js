@@ -93,6 +93,18 @@ RV.toast = function toast(message) {
 
 RV.pct = (p) => (p === null || p === undefined ? "" : `${Math.round(p * 100)}%`);
 
+// "Counts toward <species>" with its progress bar, shared by the single-box
+// and whole-frame views (spec amendment 2026-09-25).
+RV.progressBar = function progressBar(t) {
+  if (!t) return null;
+  const fill = Math.min(100, Math.round((100 * t.count) / t.target));
+  return RV.el("div", { class: "rv-progress" },
+    RV.el("span", { class: "rv-label", text: "Counts toward" }),
+    RV.el("span", { text: t.common || t.name }),
+    RV.el("span", { class: "rv-bar", "aria-hidden": "true" }, RV.el("i", { style: `width:${fill}%` })),
+    RV.el("span", { class: "rv-muted", text: `${t.count} / ${t.target}` }));
+};
+
 // ---- the species catalogue ------------------------------------------------
 
 RV.loadCatalogue = async function loadCatalogue() {

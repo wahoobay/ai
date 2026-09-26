@@ -543,6 +543,18 @@ dashboard process. Existing accounts are unaffected either way.
 Volunteers with the reviewer or admin role label boxes at `/review`. The
 design is `docs/superpowers/specs/2026-09-24-reviewer-annotation-dataset-design.md`.
 
+The page opens in **whole-frame mode** (spec amendment
+`docs/superpowers/specs/2026-09-25-review-frame-first-design.md`). The queue
+still picks a box (the volunteer's lane, thinnest species first), and the
+page opens that box's frame with it selected. Volunteers click any box to
+answer it; **S / "Next frame"** skips the boxes they didn't answer, for them
+only, and frees them for everyone else; "Mark frame complete" stays
+optional. **F** switches to single boxes, and the choice is remembered in
+that browser. Spot-checks always appear as blind single boxes, and
+"change your answer" opens the single-box view. Leaving a frame any other
+way (another tab, closing the page) releases its claims without skipping
+them (`POST /api/review/frames/{id}/release`).
+
 ### The pool task
 
 A background task in the dashboard keeps `review_items` topped up, every

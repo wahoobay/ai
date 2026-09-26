@@ -332,8 +332,12 @@ RV.views.frame = (() => {
     if (b.state === "answered") {
       out.push(RV.el("p", { text: `Answered: ${answerText(b.outcome, b.label, b.common)}${b.mine ? " (by you)" : ""}.` }));
       if (b.mine) {
-        out.push(RV.el("button", { type: "button", onclick: () => RV.show("single", { reopenEventId: b.event_id }) },
-          "Change my answer"));
+        out.push(RV.el("button", { type: "button", onclick: () => {
+          // Controller ruling 2 (Task 4): the one way out of a frame with no
+          // guard on it -- pin it like every other request-sending action.
+          if (busy || !state || RV.openFrameId !== state.saved_frame_id) return;
+          RV.show("single", { reopenEventId: b.event_id });
+        } }, "Change my answer"));
       }
       return out;
     }
@@ -345,6 +349,8 @@ RV.views.frame = (() => {
       out.push(RV.el("p", { text: "Another volunteer is answering this box right now." }));
       return out;
     }
+    const progress = RV.progressBar(b.counts_toward);
+    if (progress) out.push(progress);
     if (b.model) {
       out.push(RV.el("div", { class: "rv-guess" },
         RV.el("div", { class: "rv-guess-text" },
@@ -431,12 +437,13 @@ RV.views.frame = (() => {
       RV.el("div", { class: "rv-frame-top" },
         RV.el("button", { type: "button", class: "rv-link", onclick: toSingle },
           "Single boxes ", kbd("F")),
+        RV.el("button", { type: "button", onclick: nextFrame }, "Next frame ", kbd("S")),
         RV.el("span", { class: "rv-muted", text: `${state.source_name} · ${new Date(state.ts).toLocaleString()}` }),
         RV.el("button", { type: "button", class: drawing ? "on" : "", disabled: Boolean(state.complete), onclick: toggleDraw },
           drawing ? "Drawing: drag on the frame (Esc to cancel) " : "Draw a box ", kbd("D"))),
       RV.el("div", { class: "rv-layout rv-layout-frame" },
         RV.el("div", {}, frameCanvas(), RV.el("p", { class: "rv-cap",
-          text: "Click a box to answer it. Yellow dashed: needs an answer. Green: answered. Blue: drawn by a volunteer." })),
+          text: "Click a box to answer it. Yellow dashed: needs an answer. Green: answered. Blue: drawn by a volunteer. S: next frame." })),
         RV.el("aside", { class: "rv-side", id: "rv-frame-panel" }, ...panelContent())));
   }
 
@@ -511,6 +518,30 @@ RV.views.frame = (() => {
     }
   }
 
+  // "Next frame" (spec amendment 2026-09-25, flow step 3): every box here
+  // this volunteer hasn't answered is skipped for them -- the queue won't
+  // bring them back -- and freed for everyone else at once.
+  async function nextFrame() {
+    // Controller ruling 1 (Task 4): the same stale-frame leave guard as
+    // answerModel/saveAddedBox/removeAddedBox/complete/toSingle above --
+    // without it, pressing S during a lane switch could re-claim a frame
+    // already released, recreating the claim leak fix round 2 closed.
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
+    if (busy) return;
+    busy = true;
+    let left = false;
+    try {
+      const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/skip`);
+      if (!r.ok) { RV.toast(r.data.error || "Couldn't leave this frame."); return; }
+      RV.openFrameId = null;     // the skip already released this frame's boxes
+      left = true;
+    } finally {
+      busy = false;
+    }
+    // Outside the busy guard: RV.next() re-enters this view.
+    if (left) await RV.next();
+  }
+
   async function complete() {
     // Fix round 2, Important 1: see answerModel's comment above.
     if (!state || RV.openFrameId !== state.saved_frame_id) return;
@@ -536,6 +567,7 @@ RV.views.frame = (() => {
     const k = key.length === 1 ? key.toLowerCase() : key;
     if (k === "f") { toSingle(); return true; }
     if (k === "d") { toggleDraw(); return true; }
+    if (k === "s") { nextFrame(); return true; }
     if (k === "Escape") {
       if (drawing) { drawing = false; render(); } else if (selected && selected.original) {
         selected.bbox = selected.original.slice();

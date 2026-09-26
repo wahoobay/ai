@@ -39,6 +39,11 @@
 .rv-progress { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .rv-bar { flex: 1; height: 7px; background: #1f3b4f; border-radius: 4px; overflow: hidden; display: flex; }
 .rv-bar i { display: block; height: 100%; background: var(--warn); }
+/* spec amendment 2026-09-25: other fish in the single-box preview open the frame.
+   .rv-other sets pointer-events: none, so this must reset it or the click
+   listener attached in review-single.js's frameThumb() never fires. */
+.rv-other-link { fill: rgba(0, 0, 0, 0.001); cursor: pointer; pointer-events: auto; }
+.rv-other-link:hover { stroke: #ffc400; stroke-width: 2px; }
 .rv-guess { display: flex; gap: 10px; align-items: center; padding: 8px; border: 1px solid #1f3b4f;
   border-radius: 8px; flex-wrap: wrap; }
 .rv-guess img { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; }

@@ -83,7 +83,7 @@ def test_mutating_handlers_share_the_busy_guard(name):
 # view claims the frame's boxes, and each answer/draw/complete action
 # mutates state, so the same re-entrancy guard applies to all of them.
 FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedBox", "complete",
-                            "toSingle")
+                            "toSingle", "nextFrame")
 
 
 @pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
@@ -211,7 +211,11 @@ def test_the_mode_preference_survives_blocked_storage():
     mode_body = _function_body(core, "mode")
     assert re.search(r"if \(RV\.modeValue\) return RV\.modeValue;", mode_body), (
         "mode() must prefer the in-memory value over a stored one")
-    assert mode_body.index("RV.modeValue") < mode_body.index("localStorage"), (
+    # Anchored on the literal `if (RV.modeValue)` check, not the first
+    # mention of "RV.modeValue" anywhere in the function -- the preceding
+    # comment also says "RV.modeValue", which would satisfy `.index()`
+    # regardless of where the real check sits relative to the storage read.
+    assert mode_body.index("if (RV.modeValue)") < mode_body.index("localStorage"), (
         "the in-memory check must run before the storage read, not after it")
     assert 'return "frame"' in mode_body, "whole frame is still the ultimate fallback"
 
@@ -360,7 +364,8 @@ def test_f_in_single_view_falls_back_to_the_held_box_if_the_frame_wont_open():
 # come before the busy check so the existing busy-guard tests still match
 # (FRAME_MUTATING_HANDLERS parametrizes over the same function names).
 FRAME_LEFT_GUARD = r"if \(!state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;"
-FRAME_LEAVE_AWARE_ACTIONS = ("answerModel", "saveAddedBox", "removeAddedBox", "complete", "toSingle")
+FRAME_LEAVE_AWARE_ACTIONS = ("answerModel", "saveAddedBox", "removeAddedBox", "complete", "toSingle",
+                             "nextFrame")
 
 
 @pytest.mark.parametrize("name", FRAME_LEAVE_AWARE_ACTIONS)
@@ -373,3 +378,61 @@ def test_frame_actions_refuse_once_the_frame_has_been_left(name):
     assert busy_check, f"{name}() must still return early when busy is already true"
     assert left_guard.start() < busy_check.start(), (
         f"{name}()'s openFrameId guard must come before its busy check")
+
+
+# ---- Task 4: "Next frame", per-box progress, clickable preview boxes -------------
+
+# S / "Next frame" (spec amendment 2026-09-25, flow step 3): skip the boxes
+# this volunteer hasn't answered and ask the queue for the next one, outside
+# the busy guard so RV.next() can re-enter this view (same shape as
+# complete(), above). Controller ruling 1 (Task 3's fix rounds landed after
+# this brief was written): nextFrame() also needs the leave guard every
+# other request-sending frame action has, checked in
+# test_frame_actions_refuse_once_the_frame_has_been_left via
+# FRAME_LEAVE_AWARE_ACTIONS above.
+def test_next_frame_skips_and_asks_for_the_next_one_outside_the_busy_guard():
+    src = _read("review-frame.js")
+    body = _function_body(src, "nextFrame")
+    assert "/skip`" in body
+    fin = body.index("finally")
+    assert "RV.next()" not in body[:fin]
+    tail = body[fin:]
+    assert "RV.next()" in tail[tail.index("}") + 1:]
+    assert re.search(r'k === "s"\) \{ nextFrame\(\)', src), "S must be Next frame"
+
+
+# The progress bar ("Counts toward <species>") moves into review-core.js so
+# both views render it the same way instead of each keeping its own copy.
+def test_the_progress_bar_is_shared_by_both_views():
+    assert "RV.progressBar = function progressBar" in _read("review-core.js")
+    single = _read("review-single.js")
+    assert "function progressBar" not in single and "RV.progressBar(" in single
+    assert "RV.progressBar(b.counts_toward)" in _read("review-frame.js")
+
+
+# The single-box view's frame preview shows the other fish in the frame;
+# clicking one now opens the whole frame with that box selected -- except on
+# a spot-check, where the frame view would leak the other boxes' answers
+# into a supposedly blind second opinion (frameAllowed(c) is the same gate
+# the "Whole frame" button and the F key already use).
+def test_preview_boxes_open_the_frame_except_on_a_spot_check():
+    body = _function_body(_read("review-single.js"), "frameThumb")
+    assert "const clickable = frameAllowed(c)" in body
+    assert "openFrame(o.event_id)" in body
+
+
+# Controller ruling 2: "Change my answer" (in review-frame.js's modelPanel)
+# is the one way out of a frame with no re-entrancy guard on it -- it calls
+# RV.show("single", ...) directly from an onclick, bypassing every other
+# frame action's busy/left checks. Pinned here rather than folded into
+# FRAME_LEAVE_AWARE_ACTIONS because it is not a named top-level function:
+# it is an inline handler inside modelPanel().
+def test_change_my_answer_refuses_once_the_frame_has_been_left():
+    body = _function_body(_read("review-frame.js"), "modelPanel")
+    at = body.index('RV.show("single", { reopenEventId: b.event_id })')
+    onclick_start = body.rindex("onclick:", 0, at)
+    onclick_body = body[onclick_start:body.index("}", at) + 1]
+    assert re.search(r"if \(busy \|\| !state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;",
+                      onclick_body), (
+        "\"Change my answer\" must refuse once this frame has been left (busy, or "
+        "RV.openFrameId no longer names it)")
