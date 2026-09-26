@@ -175,6 +175,7 @@ class ReviewPool:
         self.baseline_path = Path(baseline_path)
         self.rng = rng or random.Random()
         self._lock = asyncio.Lock()
+        self._runs = 0              # which lane goes first alternates per run
         self._baseline: dict[str, int] = {}
         self._baseline_stamp: object = None
         self._baseline_catalogue: object = None
@@ -301,8 +302,16 @@ class ReviewPool:
                                 "SELECT set_config('statement_timeout', %s, true)",
                                 (str(self.s.statement_timeout_ms),))
                             stats["retired"] = await retire_outside_window(conn, *window)
-                        await self._fill_check(conn, window, stats, t0)
-                        await self._fill_identify(conn, window, stats, t0)
+                        # The lanes share one probe budget, so they take turns going
+                        # first: the check lane alone can spend it all, which left
+                        # "Identify new fish" empty for as long as the check lane
+                        # had species left to probe (demo walk-through 2026-09-25).
+                        fills = [self._fill_check, self._fill_identify]
+                        if self._runs % 2:
+                            fills.reverse()
+                        self._runs += 1
+                        for fill in fills:
+                            await fill(conn, window, stats, t0)
             except asyncio.CancelledError:
                 raise
             except psycopg.errors.QueryCanceled:

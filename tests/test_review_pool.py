@@ -423,3 +423,20 @@ async def test_the_baseline_cache_follows_the_catalogue_not_just_the_manifest_mt
     await pool.refresh_progress()
     assert pool.baseline("Pomatomus saltatrix2") == 1
     assert pool.baseline("Pomatomus saltatrix") == 0
+
+
+@pytestmark_db
+async def test_the_identify_lane_gets_the_budget_first_every_other_run(rdb, review_assets,
+                                                                      tmp_path):
+    """Demo walk-through 2026-09-25: the check lane always ran first and could
+    spend the whole probe budget, so "Identify new fish" stayed empty for as
+    long as the check lane had species left to probe. The lanes now take
+    turns going first."""
+    await seed_frame(rdb, tmp_path, ts=T0, boxes=[{"bbox": [100, 100, 400, 300]}])  # unguessed
+    pool = _pool(rdb, review_assets, identify_open=5, max_probes=2)
+    first = await pool.run_once()
+    second = await pool.run_once()
+    assert first["errors"] == second["errors"] == 0
+    assert first["identify_added"] == 0          # the check lane went first and spent it all
+    assert second["identify_added"] == 1         # the identify lane's turn to go first
+    assert len(await _items(rdb, "identify")) == 1
