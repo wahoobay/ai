@@ -558,3 +558,19 @@ def test_the_review_page_is_one_centred_column():
     assert re.search(r"display:\s*block", rule), ".rv-main must drop the dashboard's main grid"
     assert re.search(r"margin:\s*0 auto", rule), ".rv-main must be centred"
     assert re.search(r"max-width:\s*\d+px", rule), ".rv-main needs a width cap to centre"
+
+
+# Demo walk-through 2026-09-26: times were formatted in the viewer's own zone
+# (a frame at 10:40:56 EDT showed as 7:40:56 AM on a Pacific-time laptop).
+# Every time on the review page goes through RV.fmtTime, which always uses
+# US Eastern (Wahoo Bay's time; the browser applies daylight saving).
+def test_every_time_is_shown_in_eastern():
+    core = _read("review-core.js")
+    body = _function_body(core, "fmtTime")
+    assert 'timeZone: RV.TIME_ZONE' in body
+    assert 'RV.TIME_ZONE = "America/New_York"' in core
+    outside = core.replace(body, "")
+    for name in ("review-core.js", "review-single.js", "review-frame.js", "review-browse.js"):
+        src = outside if name == "review-core.js" else _read(name)
+        assert not re.search(r"toLocale(String|TimeString|DateString)\(", src), (
+            f"{name} formats a time without RV.fmtTime")

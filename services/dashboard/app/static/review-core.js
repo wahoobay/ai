@@ -93,6 +93,16 @@ RV.toast = function toast(message) {
 
 RV.pct = (p) => (p === null || p === undefined ? "" : `${Math.round(p * 100)}%`);
 
+// Every time on this page is shown in Wahoo Bay's own time, US Eastern, with
+// daylight saving applied from the browser's time-zone data and marked
+// EDT/EST -- whatever zone the viewer's computer is set to.
+RV.TIME_ZONE = "America/New_York";
+RV.fmtTime = function fmtTime(iso, timeOnly) {
+  const d = new Date(iso);
+  const opts = { timeZone: RV.TIME_ZONE, timeZoneName: "short" };
+  return timeOnly ? d.toLocaleTimeString("en-US", opts) : d.toLocaleString("en-US", opts);
+};
+
 // "Counts toward <species>" with its progress bar, shared by the single-box
 // and whole-frame views (spec amendment 2026-09-25).
 RV.progressBar = function progressBar(t) {

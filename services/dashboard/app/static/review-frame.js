@@ -438,7 +438,7 @@ RV.views.frame = (() => {
         RV.el("button", { type: "button", class: "rv-link", onclick: toSingle },
           "Single boxes ", kbd("F")),
         RV.el("button", { type: "button", onclick: nextFrame }, "Next frame ", kbd("S")),
-        RV.el("span", { class: "rv-muted", text: `${state.source_name} · ${new Date(state.ts).toLocaleString()}` }),
+        RV.el("span", { class: "rv-muted", text: `${state.source_name} · ${RV.fmtTime(state.ts)}` }),
         RV.el("button", { type: "button", class: drawing ? "on" : "", disabled: Boolean(state.complete), onclick: toggleDraw },
           drawing ? "Drawing: drag on the frame (Esc to cancel) " : "Draw a box ", kbd("D"))),
       RV.el("div", { class: "rv-layout rv-layout-frame" },

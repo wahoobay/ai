@@ -104,7 +104,7 @@ RV.views.browse = (() => {
     if (c.status !== "disputed" && c.outcome === "no_animal") badge = ["no animal", "cant"];
     const name = c.label ? (c.common || c.label) : c.status === "in_queue" ? "" : "—";
     const who = c.reviewers.length ? ` · ${c.reviewers.join(", ")}` : "";
-    return RV.el("button", { type: "button", class: "rv-cell", title: `${c.camera} · ${new Date(c.ts).toLocaleString()}${who}`,
+    return RV.el("button", { type: "button", class: "rv-cell", title: `${c.camera} · ${RV.fmtTime(c.ts)}${who}`,
       onclick: () => open(c) },
     RV.el("img", { src: c.zoom_url, alt: "", loading: "lazy" }),
     RV.el("span", { class: "rv-cell-label" }, RV.el("span", { text: name }),
@@ -272,11 +272,11 @@ RV.views.browse = (() => {
     const run = s.last_run || {};
     const lines = [
       run.finished_at
-        ? `Last top-up ${new Date(run.finished_at).toLocaleString()}: ${run.check_added} + ${run.identify_added} boxes added, `
+        ? `Last top-up ${RV.fmtTime(run.finished_at)}: ${run.check_added} + ${run.identify_added} boxes added, `
           + `${run.probes} probes, ${run.duration_s}s, ${run.timeouts} timeouts, ${run.errors} errors`
         : "No top-up has finished yet.",
       `Boxes without hints: ${s.unscored}. Last hint written: ${s.last_hinted_at
-        ? new Date(s.last_hinted_at).toLocaleString() : "never (the scorer arrives in phase 2)"}.`,
+        ? RV.fmtTime(s.last_hinted_at) : "never (the scorer arrives in phase 2)"}.`,
       ...s.items.map((i) => `${i.lane} · pass ${i.pass} · ${i.status}: ${i.count}`),
     ];
     panel.append(RV.el("ul", {}, lines.map((t) => RV.el("li", { text: t }))));

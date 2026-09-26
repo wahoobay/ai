@@ -83,7 +83,7 @@ RV.views.single = (() => {
   }
 
   function renderEmpty(pool) {
-    const when = pool && pool.finished_at ? new Date(pool.finished_at).toLocaleTimeString() : null;
+    const when = pool && pool.finished_at ? RV.fmtTime(pool.finished_at, true) : null;
     root().replaceChildren(RV.el("div", { class: "rv-empty" },
       RV.el("p", { text: "No boxes are ready in this lane right now." }),
       RV.el("p", { class: "rv-muted", text: when
