@@ -1466,12 +1466,17 @@ def build_app() -> FastAPI:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     # Per-celebrity aggregate: total tagged corrections,
                     # most recent tagged event_id, first + last tag time.
-                    await cur.execute("""
+                    # The photo is a public thumbnail (no user dependency
+                    # here), so it never picks an event whose spot-check is
+                    # pending (follow-up D3, fix round 1 T4a).
+                    await cur.execute(f"""
                         SELECT celebrity_id,
                                COUNT(DISTINCT event_id)::int  AS sightings,
                                MAX(created_at) AS last_tagged_at,
                                MIN(created_at) AS first_tagged_at,
-                               (ARRAY_AGG(event_id ORDER BY created_at DESC))[1] AS recent_event_id
+                               (ARRAY_AGG(event_id ORDER BY created_at DESC)
+                                FILTER (WHERE {hide_pending_spot_checks("detection_corrections")})
+                               )[1] AS recent_event_id
                           FROM detection_corrections
                          WHERE celebrity_id IS NOT NULL
                          GROUP BY celebrity_id

@@ -219,6 +219,10 @@ async def test_the_celebrity_gallery_counts_each_event_once_and_hides_a_pending_
         cur = await conn.execute("SELECT min(id) FROM detection_corrections")
         first = (await cur.fetchone())[0]
     await add_item(rdb, frame, pass_=2, exclude_user_id=alice, first_correction_id=first)
+    [listed] = rclient.get("/api/celebrities").json()["celebrities"]
+    # the only tagged event is now behind a pending spot-check, so the
+    # public directory's photo thumbnail has nothing to point at
+    assert listed["photo_event_id"] is None
     assert rclient.get(f"/api/celebrities/{bobby['id']}").json()["gallery"] == []
     await make_user(rdb, "boss", role="admin")
     login(rclient, "boss")
