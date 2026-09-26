@@ -489,3 +489,58 @@ def test_opening_a_frame_records_it_as_the_open_frame():
         assert statement in success, f"enter()'s success path must run `{statement}`"
     assert "RV.openFrameId = id" not in body[:at], (
         "enter() must not record the frame as open before it has actually opened")
+
+
+# I1 (F1, as ruled): a navigation made while RV.next() is in flight must win.
+# Every view switch takes a new RV.navToken, so a /next that comes back after
+# the volunteer moved on (Browse, another lane, a reopened box) neither
+# switches the view nor keeps its box.
+def test_every_view_switch_supersedes_a_pending_next():
+    body = _function_body(_read("review-core.js"), "show")
+    assert re.search(r"if \(!RV\.views\[view\]\) return;\s*RV\.navToken \+= 1;", body), (
+        "RV.show() must take a new navToken right after its view-exists check")
+
+
+# ...and only one /next is out at a time. Each call waits for the one before it
+# to hand over its turn, which a superseded call does only once its release has
+# landed: otherwise the server's held path hands the same box to both calls (the
+# same lane, or a spot-check from any lane) and the stale release takes it away
+# from the call that shows it. The turn is handed on in a finally before any
+# RV.show(), because a view's enter() may call RV.next() itself.
+def test_a_superseded_next_gives_its_box_back_and_shows_nothing():
+    core = _read("review-core.js")
+    assert re.search(r"^RV\.navToken = 0;$", core, re.M), "RV.navToken must start at 0"
+    assert re.search(r"^RV\.nextTurn = Promise\.resolve\(\);$", core, re.M), (
+        "RV.nextTurn must start settled")
+    body = _function_body(core, "next")
+    get = body.index("RV.get(")
+    first_show = body.index("RV.show(")
+    take = body.index("const token = ++RV.navToken;")
+    turn = body.index("const turn = RV.nextTurn;")
+    chain = body.index("RV.nextTurn = new Promise(")
+    wait = body.index("await turn;")
+    assert take < turn < chain < wait < get, (
+        "RV.next() must take its token and queue behind the previous call before it asks")
+    assert re.search(r"if \(token !== RV\.navToken\) return;", body[wait:get]), (
+        "a call superseded while it waited its turn must not ask the queue at all")
+    at = body.index("if (token !== RV.navToken) {", get)
+    block = _braces_from(body, body.index("{", at))
+    assert "await RV.post(`/api/review/items/${r.data.item.id}/release`)" in block, (
+        "a call superseded while its GET was out must give back -- and await -- the box it got")
+    assert "return;" in block and at < first_show, "...and return before RV.show()"
+    fin = body.index("} finally {")
+    handoff = body.index("handOff();", fin)
+    assert get < fin and handoff < first_show, (
+        "the turn must be handed on in a finally, before any RV.show()")
+
+
+# H2: RV.show() counts every call as a navigation, so a reopen the single view
+# would refuse (its busy flag is set while submit()/skip() await their trailing
+# RV.next()) must not reach RV.show() at all -- or it supersedes that RV.next()
+# and leaves the page on "Loading the next box…" with nothing held.
+def test_a_recent_box_is_not_reopened_while_an_answer_is_in_flight():
+    body = _function_body(_read("review-single.js"), "renderRecent")
+    at = body.index('RV.show("single", { reopenEventId: r.event_id })')
+    onclick = body[body.rindex("onclick:", 0, at):at]
+    assert re.search(r"if \(busy\) return;", onclick), (
+        "a recent-strip click must be ignored while the single view is busy")

@@ -344,7 +344,14 @@ RV.views.single = (() => {
       RV.el("span", { class: "rv-muted", text: "Your recent boxes:" }),
       ...items.map((r) => RV.el("button", {
         type: "button", class: "rv-recent-item", title: "Change this answer",
-        onclick: () => RV.show("single", { reopenEventId: r.event_id }),
+        // Final review I1/H2: ignored while an answer or skip is in flight.
+        // reopen() would refuse anyway, but RV.show() counts every call as a
+        // navigation: it would supersede that action's trailing RV.next()
+        // and leave nothing on screen and nothing held.
+        onclick: () => {
+          if (busy) return;
+          RV.show("single", { reopenEventId: r.event_id });
+        },
       }, RV.el("img", { src: r.zoom_url, alt: "", loading: "lazy" }), RV.el("span", { text: word(r) }))),
       RV.el("span", { class: "rv-muted", text: "click one to change your answer" }));
   }

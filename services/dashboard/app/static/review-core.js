@@ -434,9 +434,39 @@ RV.setMode = function setMode(value) {
 // twice. A spot-check (item.pass 2; its item.lane is null) always goes to
 // the blind single-box view; any other box opens its whole frame with the
 // box selected, unless the volunteer chose single boxes.
+//
+// Final review I1: the latest navigation wins. Every view switch (RV.show)
+// and every call here takes a new RV.navToken, so a /next that comes back
+// after the volunteer has moved on -- Browse, another lane, a reopened box --
+// neither switches the view nor keeps its box: it gives the box back. And
+// only one /next is out at a time: each call waits for the one before it to
+// hand over its turn, which a superseded call does only once its release has
+// landed. Otherwise the server's held path could hand the same box to both
+// calls (the same lane, or a spot-check from any lane) and the stale release
+// would take it away from the call that shows it.
+
+RV.navToken = 0;
+RV.nextTurn = Promise.resolve();
 
 RV.next = async function next() {
-  const r = await RV.get(`/api/review/next?lane=${encodeURIComponent(RV.lane)}`);
+  const token = ++RV.navToken;
+  const turn = RV.nextTurn;
+  let handOff;
+  RV.nextTurn = new Promise((resolve) => { handOff = resolve; });
+  let r;
+  try {
+    await turn;
+    if (token !== RV.navToken) return;       // superseded before it asked
+    r = await RV.get(`/api/review/next?lane=${encodeURIComponent(RV.lane)}`);
+    if (token !== RV.navToken) {             // superseded while it asked
+      if (r.ok && r.data.item) await RV.post(`/api/review/items/${r.data.item.id}/release`);
+      return;
+    }
+  } finally {
+    // Before any view switch: a view's enter() may itself call this again,
+    // and must find its turn already free.
+    handOff();
+  }
   if (!r.ok || !r.data.item) {
     RV.held = null;
     await RV.show("single", { result: r });
@@ -454,6 +484,7 @@ RV.next = async function next() {
 
 RV.show = async function show(view, arg) {
   if (!RV.views[view]) return;
+  RV.navToken += 1;      // supersedes any RV.next() still waiting on /next
   if (view !== "frame") RV.releaseFrame();
   for (const id of ["single", "frame", "browse"]) {
     const section = document.getElementById("rv-" + id);
