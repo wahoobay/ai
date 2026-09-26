@@ -4,15 +4,16 @@ checklist in Task 12."""
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from js_source import NODE, STATIC, needs_node, run_node
+from js_source import braces_from as _braces_from
+from js_source import function_body as _function_body
+from js_source import read as _read
 from review_fixtures import login, make_user
 
-STATIC = Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "static"
-NODE = shutil.which("node") or "/raid/scratch/dzimmerman2021/miniconda3/envs/node/bin/node"
 SCRIPTS = ["review-core.js", "review-single.js", "review-frame.js", "review-browse.js"]
 
 
@@ -36,29 +37,33 @@ def test_scripts_never_write_markup_from_data():
 # the ev.repeat check is removed from the source, which is what a
 # regression test needs to do.
 
-def _braces_from(text: str, open_index: int) -> str:
-    """The `{...}` block starting at `open_index` (which must point at an
-    opening brace), found by counting braces. Good enough for the specific
-    functions and listener this module inspects: none of them hide a
-    brace inside a string or template literal, so a naive counter finds
-    the true matching close."""
-    assert text[open_index] == "{", "open_index must point at '{'"
-    depth = 0
-    for j in range(open_index, len(text)):
-        if text[j] == "{":
-            depth += 1
-        elif text[j] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[open_index:j + 1]
-    raise AssertionError("unbalanced braces")
+# The busy-guard pattern: an early return while busy (braced or not), busy =
+# true, and busy = false inside the function's finally block.
+BUSY_RETURN = re.compile(r"\bbusy\b\s*\)\s*(?:\{\s*)?return\b")
 
 
-def _function_body(text: str, name: str) -> str:
-    pattern = r"(?:async\s+)?function\s+" + re.escape(name) + r"\s*\([^)]*\)\s*\{"
-    m = re.search(pattern, text)
-    assert m, f"no function named {name!r} found"
-    return _braces_from(text, m.end() - 1)
+def _assert_busy_guarded(body: str, name: str) -> None:
+    """The busy-guard pattern: an early return while busy (braced or not),
+    busy = true, and busy = false inside the function's finally block."""
+    assert BUSY_RETURN.search(body), f"{name}() must return early when busy is already true"
+    assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
+    m = re.search(r"\bfinally\s*\{", body)
+    assert m, f"{name}() must reset busy in a finally block"
+    assert re.search(r"\bbusy\s*=\s*false\b", _braces_from(body, m.end() - 1)), (
+        f"{name}() must reset busy inside its finally block")
+
+
+def test_the_busy_guard_check_accepts_braces_and_wants_the_reset_in_finally():
+    good = "async function f() { if (busy) { return; } busy = true; try { x(); } finally { busy = false; } }"
+    _assert_busy_guarded(_function_body(good, "f"), "f")
+    bad = "async function f() { if (busy) return; busy = true; try { x(); } finally { y(); } busy = false; }"
+    with pytest.raises(AssertionError):
+        _assert_busy_guarded(_function_body(bad, "f"), "f")
+
+
+def test_preview_boxes_take_clicks_though_the_overlay_does_not():
+    rule = re.search(r"\.rv-other-link\s*\{([^}]*)\}", _read("review.css")).group(1)
+    assert re.search(r"pointer-events:\s*auto", rule)
 
 
 # submit(), skip() and reopen() are review-single.js's three mutating
@@ -72,11 +77,7 @@ MUTATING_HANDLERS = ("submit", "skip", "reopen")
 @pytest.mark.parametrize("name", MUTATING_HANDLERS)
 def test_mutating_handlers_share_the_busy_guard(name):
     body = _function_body((STATIC / "review-single.js").read_text(), name)
-    assert re.search(r"\bbusy\b\s*\)\s*return", body), (
-        f"{name}() must return early when busy is already true")
-    assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
-    assert "finally" in body and re.search(r"busy\s*=\s*false", body), (
-        f"{name}() must reset busy in a finally block")
+    _assert_busy_guarded(body, name)
 
 
 # review-frame.js's own actions that send a request (Task 11): entering the
@@ -89,11 +90,7 @@ FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedB
 @pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
 def test_frame_mutating_handlers_share_the_busy_guard(name):
     body = _function_body((STATIC / "review-frame.js").read_text(), name)
-    assert re.search(r"\bbusy\b\s*\)\s*return", body), (
-        f"{name}() must return early when busy is already true")
-    assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
-    assert "finally" in body and re.search(r"busy\s*=\s*false", body), (
-        f"{name}() must reset busy in a finally block")
+    _assert_busy_guarded(body, name)
 
 
 # review-browse.js's own mutating admin actions (Task 12): settling a
@@ -107,11 +104,7 @@ BROWSE_MUTATING_HANDLERS = ("adjudicate", "save")
 @pytest.mark.parametrize("name", BROWSE_MUTATING_HANDLERS)
 def test_browse_mutating_handlers_share_the_busy_guard(name):
     body = _function_body((STATIC / "review-browse.js").read_text(), name)
-    assert re.search(r"\bbusy\b\s*\)\s*return", body), (
-        f"{name}() must return early when busy is already true")
-    assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
-    assert "finally" in body and re.search(r"busy\s*=\s*false", body), (
-        f"{name}() must reset busy in a finally block")
+    _assert_busy_guarded(body, name)
 
 
 # Fix round 1, Important finding: review-single.js's and review-frame.js's
@@ -173,10 +166,6 @@ async def test_the_page_carries_the_role_and_loads_the_scripts(rdb, rclient):
 
 
 # ---- spec amendment 2026-09-25: frame-first review -----------------------------
-
-def _read(name: str) -> str:
-    return (STATIC / name).read_text()
-
 
 def test_the_queue_is_asked_in_one_place_and_spot_checks_stay_single():
     for name in ("review-single.js", "review-frame.js", "review-browse.js"):
@@ -606,3 +595,120 @@ def test_the_frame_instructions_are_a_callout_with_a_legend():
                           ("locked", "#8aa3b5")):
         rule = re.search(r"\.rv-swatch-" + state + r"\s*\{([^}]*)\}", css)
         assert rule and colour in rule.group(1), f"the {state} swatch must match its frame box"
+
+
+# ---- Task 6: navigation waits its turn and gives way, and a stalled request
+# times out (B1, B3, B4) -----------------------------------------------------
+
+@needs_node
+def test_next_gives_way_once_the_volunteer_has_moved_on(tmp_path):
+    out = run_node([_read("review-core.js")], """
+      let asked = 0;
+      globalThis.fetch = async () => { asked += 1;
+        return { status: 200, ok: true, json: async () => ({ item: null, pool: null }) }; };
+      RV.views.single = { enter: async () => {} };
+      const started = RV.navToken;
+      RV.navToken += 1;                    // Browse was clicked meanwhile
+      await RV.next(started);
+      const stale = { asked, moved: RV.navToken - started };
+      await RV.next();                     // a fresh navigation still asks
+      return { stale, asked };
+    """, tmp_path)
+    assert out == {"stale": {"asked": 0, "moved": 1}, "asked": 1}
+
+
+@needs_node
+def test_a_request_that_never_answers_times_out_and_frees_the_queue(tmp_path):
+    out = run_node([_read("review-core.js")], """
+      RV.API_TIMEOUT_MS = 50;
+      const shown = [];
+      let hang = true, asked = 0;
+      globalThis.fetch = (url, opts) => {
+        asked += 1;
+        if (hang) {
+          hang = false;
+          return new Promise((_, reject) =>
+            opts.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+        }
+        return Promise.resolve({ status: 200, ok: true,
+          json: async () => ({ item: null, pool: null }) });
+      };
+      RV.views.single = { enter: async (arg) => { shown.push(arg.result.data.error || null); } };
+      await RV.next();                     // its /next never answers
+      const banner = document.getElementById("rv-banner").textContent;
+      await RV.next();                     // and the next one still runs
+      return { shown, banner, asked };
+    """, tmp_path)
+    assert out["shown"] == ["the server took too long; try again", None]
+    assert "took too long" in out["banner"]
+    assert out["asked"] == 2
+
+
+def test_rv_api_clears_its_timer_whatever_happens():
+    body = _function_body(_read("review-core.js"), "api")
+    assert "new AbortController()" in body
+    assert "setTimeout(() => controller.abort(), RV.API_TIMEOUT_MS)" in body
+    m = re.search(r"\bfinally\s*\{", body)
+    assert m and "clearTimeout(timer)" in _braces_from(body, m.end() - 1)
+    assert 'RV.TIMED_OUT = "the server took too long; try again"' in _read("review-core.js")
+
+
+@needs_node
+def test_a_frame_opens_only_after_a_superseded_next_has_given_its_box_back(tmp_path):
+    out = run_node([_read("review-core.js"), _read("review-frame.js")], """
+      const posted = [];
+      globalThis.fetch = async (url) => { posted.push(url);
+        return { status: 404, ok: false, json: async () => ({ error: "gone" }) }; };
+      RV.views.single = { enter: async () => {} };
+      let handOff;
+      RV.nextTurn = new Promise((resolve) => { handOff = resolve; });   // a /next still out
+      const opening = RV.views.frame.enter({ savedFrameId: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      const before = posted.slice();
+      handOff();
+      await opening;
+      return { before, after: posted };
+    """, tmp_path)
+    assert out == {"before": [], "after": ["/api/review/frames/5/open"]}
+
+
+@needs_node
+def test_a_frame_the_volunteer_navigated_away_from_while_waiting_is_never_claimed(tmp_path):
+    out = run_node([_read("review-core.js"), _read("review-frame.js")], """
+      const posted = [];
+      globalThis.fetch = async (url) => { posted.push(url);
+        return { status: 404, ok: false, json: async () => ({}) }; };
+      let handOff;
+      RV.nextTurn = new Promise((resolve) => { handOff = resolve; });
+      const opening = RV.views.frame.enter({ savedFrameId: 5 });
+      RV.navToken += 1;                     // a lane click meanwhile
+      handOff();
+      await opening;
+      return posted;
+    """, tmp_path)
+    assert out == []
+
+
+@pytest.mark.parametrize("name", ["submit", "skip"])
+def test_an_answer_or_skip_asks_for_the_next_box_only_if_nobody_moved_on(name):
+    body = _function_body(_read("review-single.js"), name)
+    assert "const nav = RV.navToken;" in body
+    assert body.index("const nav = RV.navToken;") < body.index("await ")
+    calls = re.findall(r"loadNext\(([^)]*)\)", body)
+    assert calls and all(c == "nav" for c in calls)
+
+
+def test_load_next_passes_the_token_on_and_leaves_the_screen_alone_if_stale():
+    body = _function_body(_read("review-single.js"), "loadNext")
+    guard = "if (startToken !== undefined && startToken !== RV.navToken) return;"
+    assert guard in body and body.index(guard) < body.index("message(")
+    assert "await RV.next(startToken);" in body
+
+
+def test_the_landing_call_gives_way_to_a_click_made_while_the_page_loads():
+    core = _read("review-core.js")
+    at = core.index('document.addEventListener("DOMContentLoaded"')
+    handler = _braces_from(core, core.index("{", core.index("=>", at)))
+    assert "const landing = RV.navToken;" in handler
+    assert handler.index("const landing = RV.navToken;") < handler.index("RV.loadCatalogue()")
+    assert "await RV.next(landing);" in handler

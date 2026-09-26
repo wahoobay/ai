@@ -54,10 +54,13 @@ RV.views.single = (() => {
 
   // Everything that moves on goes through the shared router, which asks
   // the queue once and picks the view (spec amendment 2026-09-25).
-  async function loadNext() {
+  async function loadNext(startToken) {
+    // Follow-up B1: nothing to do -- and nothing to overwrite on screen -- if
+    // the volunteer moved on since the action that asked for this started.
+    if (startToken !== undefined && startToken !== RV.navToken) return;
     reopened = false;
     message("Loading the next box…");
-    await RV.next();
+    await RV.next(startToken);
   }
 
   async function reopen(eventId) {
@@ -256,6 +259,7 @@ RV.views.single = (() => {
   async function submit(outcome, extra) {
     if (!current || busy) return;
     busy = true;
+    const nav = RV.navToken;   // follow-up B1
     try {
       const body = { event_id: current.item.event_id, review_item_id: reopened ? null : current.item.id,
         outcome, ...extra };
@@ -274,7 +278,7 @@ RV.views.single = (() => {
           || (r.status === 403 && r.data.error === "this box was not served to you")) {
         RV.toast(r.data.error || "That box isn't available any more. Here's the next one.");
         RV.held = null;
-        await loadNext();
+        await loadNext(nav);
         return;
       }
       if (!r.ok) {
@@ -285,7 +289,7 @@ RV.views.single = (() => {
       }
       RV.held = null;
       await RV.refreshMine();
-      await loadNext();
+      await loadNext(nav);
     } finally {
       busy = false;
     }
@@ -299,12 +303,13 @@ RV.views.single = (() => {
     // race a concurrent submit() on the same box.
     if (!current || busy) return;
     busy = true;
+    const nav = RV.navToken;   // follow-up B1
     try {
       if (!reopened && current.item.id) {
         await RV.post(`/api/review/items/${current.item.id}/skip`);
         RV.held = null;
       }
-      await loadNext();
+      await loadNext(nav);
     } finally {
       busy = false;
     }

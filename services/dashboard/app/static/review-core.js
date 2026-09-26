@@ -48,28 +48,51 @@ RV.svg = function svg(tag, attrs) {
 
 // ---- server calls -----------------------------------------------------------
 
+// Follow-up B3: a request that never settles would otherwise hold RV.next()'s
+// queue -- and with it every lane click -- until the page is reloaded.
+RV.API_TIMEOUT_MS = 20000;
+RV.TIMED_OUT = "the server took too long; try again";
+
 RV.api = async function api(method, url, body) {
-  const options = { method, credentials: "same-origin", headers: RV.HEADERS };
+  const controller = new AbortController();
+  const options = { method, credentials: "same-origin", headers: RV.HEADERS,
+    signal: controller.signal };
   if (body !== undefined) options.body = JSON.stringify(body);
-  let response;
+  const timer = setTimeout(() => controller.abort(), RV.API_TIMEOUT_MS);
   try {
-    response = await fetch(url, options);
-  } catch (err) {
-    RV.banner("Can't reach the server. Check your connection; nothing was saved.");
-    return { ok: false, status: 0, data: { error: "network error" } };
+    let response;
+    try {
+      response = await fetch(url, options);
+    } catch (err) {
+      if (controller.signal.aborted) return RV.timedOut();
+      RV.banner("Can't reach the server. Check your connection; nothing was saved.");
+      return { ok: false, status: 0, data: { error: "network error" } };
+    }
+    if (response.status === 401) {
+      window.location.href = "/login?next=" + encodeURIComponent("/review");
+      return { ok: false, status: 401, data: { error: "signed out" } };
+    }
+    let data = {};
+    try {
+      data = await response.json();
+    } catch (err) {
+      if (controller.signal.aborted) return RV.timedOut();
+      data = {};
+    }
+    if (response.status === 503) {
+      RV.banner("The database is unavailable right now. Nothing was saved; try again in a minute.");
+    } else if (response.ok) {
+      RV.banner(null);
+    }
+    return { ok: response.ok, status: response.status, data: data || {} };
+  } finally {
+    clearTimeout(timer);
   }
-  if (response.status === 401) {
-    window.location.href = "/login?next=" + encodeURIComponent("/review");
-    return { ok: false, status: 401, data: { error: "signed out" } };
-  }
-  let data = {};
-  try { data = await response.json(); } catch (err) { data = {}; }
-  if (response.status === 503) {
-    RV.banner("The database is unavailable right now. Nothing was saved; try again in a minute.");
-  } else if (response.ok) {
-    RV.banner(null);
-  }
-  return { ok: response.ok, status: response.status, data: data || {} };
+};
+
+RV.timedOut = function timedOut() {
+  RV.banner("The server took too long to answer, so your last action may not have been saved. Try again.");
+  return { ok: false, status: 0, data: { error: RV.TIMED_OUT } };
 };
 RV.get = (url) => RV.api("GET", url);
 RV.post = (url, body) => RV.api("POST", url, body || {});
@@ -453,12 +476,17 @@ RV.setMode = function setMode(value) {
 // hand over its turn, which a superseded call does only once its release has
 // landed. Otherwise the server's held path could hand the same box to both
 // calls (the same lane, or a spot-check from any lane) and the stale release
-// would take it away from the call that shows it.
+// would take it away from the call that shows it. A call made on behalf of
+// an older action passes that action's token and gives way (follow-up B1).
 
 RV.navToken = 0;
 RV.nextTurn = Promise.resolve();
 
-RV.next = async function next() {
+RV.next = async function next(startToken) {
+  // Follow-up B1: an answer, skip or page load that started before the
+  // volunteer moved on (Browse, a lane, the recent strip) passes the token it
+  // started with. If they have navigated since, their newer choice stands.
+  if (startToken !== undefined && startToken !== RV.navToken) return;
   const token = ++RV.navToken;
   const turn = RV.nextTurn;
   let handOff;
@@ -539,6 +567,7 @@ window.addEventListener("pageshow", (ev) => {
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
+  const landing = RV.navToken;   // follow-up B1: a click made while loading wins
   for (const b of document.querySelectorAll("#rv-nav button")) {
     const view = b.dataset.view || "single";
     b.hidden = !RV.views[view];
@@ -569,5 +598,5 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   await RV.refreshMine();
-  await RV.next();
+  await RV.next(landing);
 });

@@ -47,6 +47,7 @@ RV.views.frame = (() => {
     if (!id) { await RV.next(); return; }
     if (busy) return;
     busy = true;
+    const nav = RV.navToken;
     try {
       // Keep the claim on a box held from this same frame (the one the
       // queue just served, or the single box the volunteer was on); a box
@@ -54,6 +55,13 @@ RV.views.frame = (() => {
       // 2026-09-25).
       RV.releaseHeld(id);
       if (RV.openFrameId && RV.openFrameId !== id) RV.releaseFrame();
+      // Follow-up B4: a /next the volunteer superseded may still be out, and
+      // gives its box back only once it lands. Wait for that before claiming
+      // this frame, or the late release could take back a box the frame has
+      // just claimed and cost an answer redone. Then give up if they have
+      // navigated again meanwhile.
+      await RV.nextTurn;
+      if (nav !== RV.navToken) return;
       const r = await RV.post(`/api/review/frames/${id}/open`);
       if (!r.ok) {
         RV.toast(r.data.error || "Couldn't open that frame.");
