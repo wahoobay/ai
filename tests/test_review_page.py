@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from js_source import NODE, STATIC, needs_node, run_node
+from js_source import NODE, STATIC, function_source, needs_node, run_node
 from js_source import braces_from as _braces_from
 from js_source import function_body as _function_body
 from js_source import read as _read
@@ -84,7 +84,7 @@ def test_mutating_handlers_share_the_busy_guard(name):
 # view claims the frame's boxes, and each answer/draw/complete action
 # mutates state, so the same re-entrancy guard applies to all of them.
 FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedBox", "complete",
-                            "toSingle", "nextFrame")
+                            "toSingle", "nextFrame", "reopenFrame")
 
 
 @pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
@@ -354,7 +354,7 @@ def test_f_in_single_view_falls_back_to_the_held_box_if_the_frame_wont_open():
 # (FRAME_MUTATING_HANDLERS parametrizes over the same function names).
 FRAME_LEFT_GUARD = r"if \(!state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;"
 FRAME_LEAVE_AWARE_ACTIONS = ("answerModel", "saveAddedBox", "removeAddedBox", "complete", "toSingle",
-                             "nextFrame")
+                             "nextFrame", "reopenFrame")
 
 
 @pytest.mark.parametrize("name", FRAME_LEAVE_AWARE_ACTIONS)
@@ -712,3 +712,88 @@ def test_the_landing_call_gives_way_to_a_click_made_while_the_page_loads():
     assert "const landing = RV.navToken;" in handler
     assert handler.index("const landing = RV.navToken;") < handler.index("RV.loadCatalogue()")
     assert "await RV.next(landing);" in handler
+
+
+# ---- Task 7: preview clicks keep the mode, Browse waits, reopening shows your
+# answer, admins reopen a completed frame (A3, B2, B5, B6) --------------------
+
+
+def test_a_preview_click_keeps_single_box_mode():
+    body = _function_body(_read("review-single.js"), "openFrame")
+    assert 'if (!eventId && RV.openFrameId === savedFrameId) RV.setMode("frame");' in body
+
+
+def test_browse_cells_wait_for_a_view_that_is_still_saving():
+    body = _function_body(_read("review-browse.js"), "open")
+    guard = ('for (const v of ["single", "frame"]) '
+             "if (RV.views[v] && RV.views[v].isBusy && RV.views[v].isBusy()) return;")
+    assert guard in body and body.index(guard) < body.index("RV.show(")
+    assert "isBusy: () => busy" in _read("review-single.js")
+
+
+@needs_node
+def test_reopening_reads_back_what_you_answered(tmp_path):
+    src = _read("review-single.js")
+    assert "mineText(c.mine)" in _function_body(src, "render")
+    out = run_node([
+        "RV = { entry: (n) => (n === 'Acanthurus coeruleus' ? { common: 'Blue Tang' } : null) };",
+        function_source(src, "mineText")], """
+      return [
+        mineText({ outcome: "species", label: "Acanthurus coeruleus", life_stage: null,
+                   not_sure: true, bbox: [1, 2, 30, 40] }),
+        mineText({ outcome: "species", label: "Pomacanthus paru", life_stage: "juvenile",
+                   not_sure: false, bbox: null }),
+        mineText({ outcome: "no_animal" }),
+        mineText({ outcome: "unidentifiable" })];
+    """, tmp_path)
+    assert out == ["Blue Tang, not sure; the box shows where you put it",
+                   "Pomacanthus paru (juvenile)", "no animal here", "can't identify"]
+
+
+def test_admins_can_edit_and_reopen_a_completed_frame():
+    src = _read("review-frame.js")
+    assert ('if (!selected || (state.complete && RV.role !== "admin")) return false;'
+            in _function_body(src, "editableSelection"))
+    assert '(state.complete && RV.role !== "admin")' in _function_body(src, "addedPanel")
+    assert ('if (state.complete && RV.role !== "admin") return;'
+            in _function_body(src, "toggleDraw"))
+    panel = _function_body(src, "panelContent")
+    assert '"Reopen frame for edits"' in panel and 'RV.role === "admin"' in panel
+    reopen = _function_body(src, "reopenFrame")
+    assert "RV.del(`/api/review/frames/${state.saved_frame_id}/complete`)" in reopen
+    assert "await reload(true)" in reopen
+
+
+# ---- Task 7, ruling T6a: every entry point into RV.show("single", { reopenEventId })
+# must refuse while the single view is still saving, the way renderRecent's click
+# already does -- otherwise RV.show has already bumped the token before reopen()
+# refuses, and the trailing loadNext(nav) from the answer/skip in flight gives way
+# too, stranding the just-answered box on screen with nothing held.
+
+
+@pytest.mark.parametrize("single_busy, expected", [
+    (True, {"entered": False, "moved": 0}),
+    (False, {"entered": True, "moved": 1}),
+])
+@needs_node
+def test_browse_open_refuses_a_reopen_while_the_single_view_is_busy(single_busy, expected, tmp_path):
+    out = run_node([
+        _read("review-core.js"),
+        f'RV.views.single = {{ isBusy: () => {"true" if single_busy else "false"}, '
+        "enter: async () => { globalThis.entered = true; } };",
+        function_source(_read("review-browse.js"), "open")], """
+      globalThis.entered = false;
+      const before = RV.navToken;
+      open({ kind: "box", mine: true, event_id: 99 });
+      await new Promise((r) => setTimeout(r, 10));
+      return { entered: globalThis.entered, moved: RV.navToken - before };
+    """, tmp_path)
+    assert out == expected
+
+
+def test_change_my_answer_also_refuses_while_the_single_view_is_busy():
+    body = _function_body(_read("review-frame.js"), "modelPanel")
+    at = body.index('RV.show("single", { reopenEventId: b.event_id })')
+    onclick_start = body.rindex("onclick:", 0, at)
+    between = body[onclick_start:at]
+    assert "RV.views.single.isBusy()" in between

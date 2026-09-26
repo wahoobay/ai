@@ -151,8 +151,9 @@ RV.views.frame = (() => {
     render();
   }
 
+  // Follow-up B6: admins can edit a completed frame (spec §8/§10); volunteers can't.
   function editableSelection() {
-    if (!selected || state.complete) return false;
+    if (!selected || (state.complete && RV.role !== "admin")) return false;
     if (selected.kind === "new") return true;
     if (selected.kind === "model") {
       const b = modelBox(selected.id);
@@ -344,6 +345,7 @@ RV.views.frame = (() => {
           // Controller ruling 2 (Task 4): the one way out of a frame with no
           // guard on it -- pin it like every other request-sending action.
           if (busy || !state || RV.openFrameId !== state.saved_frame_id) return;
+          if (RV.views.single && RV.views.single.isBusy && RV.views.single.isBusy()) return;   // Task 6 review: a reopen refused mid-save would strand the answered box
           RV.show("single", { reopenEventId: b.event_id });
         } }, "Change my answer"));
       }
@@ -380,7 +382,7 @@ RV.views.frame = (() => {
       out.push(RV.el("div", { class: "rv-thumb" }, RV.el("img", { src: a.zoom_url, alt: "The drawn box, zoomed" })),
         RV.el("p", { text: `Answer: ${answerText(a.outcome, a.label, a.common)}${a.not_sure ? " (not sure)" : ""}` }));
     }
-    if (state.complete || (a && !a.mine && RV.role !== "admin")) return out;
+    if ((state.complete && RV.role !== "admin") || (a && !a.mine && RV.role !== "admin")) return out;
     out.push(...pickerAndButtons(null,
       (entry) => saveAddedBox({ outcome: "species", label: entry.name, life_stage: entry.life_stage }),
       () => saveAddedBox({ outcome: "unidentifiable" }), null));
@@ -411,6 +413,9 @@ RV.views.frame = (() => {
   function panelContent() {
     const out = [];
     if (state.complete) out.push(RV.el("p", { class: "rv-note", text: `Marked complete by ${state.complete.by}.` }));
+    if (state.complete && RV.role === "admin") {
+      out.push(RV.el("button", { type: "button", onclick: reopenFrame }, "Reopen frame for edits"));
+    }
     if (!selected) {
       out.push(RV.el("p", { class: "rv-muted",
         text: "Click a box to answer it, or press D and drag to draw a box around an animal the model missed." }));
@@ -434,7 +439,7 @@ RV.views.frame = (() => {
   }
 
   function toggleDraw() {
-    if (state.complete) return;
+    if (state.complete && RV.role !== "admin") return;
     drawing = !drawing;
     if (drawing) selected = null;
     render();
@@ -462,7 +467,8 @@ RV.views.frame = (() => {
           "Single boxes ", kbd("F")),
         RV.el("button", { type: "button", onclick: nextFrame }, "Next frame ", kbd("S")),
         RV.el("span", { class: "rv-muted", text: `${state.source_name} · ${RV.fmtTime(state.ts)}` }),
-        RV.el("button", { type: "button", class: drawing ? "on" : "", disabled: Boolean(state.complete), onclick: toggleDraw },
+        RV.el("button", { type: "button", class: drawing ? "on" : "",
+          disabled: Boolean(state.complete) && RV.role !== "admin", onclick: toggleDraw },
           drawing ? "Drawing: drag on the frame (Esc to cancel) " : "Draw a box ", kbd("D"))),
       RV.el("div", { class: "rv-layout rv-layout-frame" },
         RV.el("div", {}, frameCanvas(), legend()),
@@ -590,6 +596,22 @@ RV.views.frame = (() => {
     // Outside the busy guard: RV.next() may re-enter this view, and
     // enter() refuses while busy.
     if (done) await RV.next();
+  }
+
+  // Follow-up B6: an admin takes the frame's completion back, so volunteers
+  // can change it and mark it complete again.
+  async function reopenFrame() {
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
+    if (busy) return;
+    busy = true;
+    try {
+      const r = await RV.del(`/api/review/frames/${state.saved_frame_id}/complete`);
+      if (!r.ok) { RV.toast(r.data.error || "Couldn't reopen the frame."); return; }
+      RV.toast("Frame reopened for edits.");
+      await reload(true);
+    } finally {
+      busy = false;
+    }
   }
 
   RV.onKey("frame", (key) => {

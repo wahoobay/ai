@@ -91,6 +91,7 @@
 .rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--rv-line); border-radius: 6px; }
 .rv-note { background: var(--rv-note-bg); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
   margin: 0; font-size: 13px; }
+.rv-mine { font-weight: 600; margin: 4px 0; }
 .rv-celeb { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .rv-page kbd { font-family: ui-monospace, monospace; font-size: 10px; padding: 0 4px;
   border: 1px solid currentColor; border-radius: 3px; opacity: .75; }

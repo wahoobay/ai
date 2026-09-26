@@ -112,6 +112,10 @@ RV.views.browse = (() => {
   }
 
   function open(c) {
+    // Follow-up B2: a single-box answer or skip, or a frame action, is still
+    // saving. Opening a box now would supersede its trailing next and leave
+    // "Loading the next box…" on screen.
+    for (const v of ["single", "frame"]) if (RV.views[v] && RV.views[v].isBusy && RV.views[v].isBusy()) return;
     if (c.kind === "box" && c.mine) { RV.show("single", { reopenEventId: c.event_id }); return; }
     if (c.saved_frame_id && RV.views.frame) { RV.show("frame", { savedFrameId: c.saved_frame_id }); return; }
     RV.toast("Only your own answers can be changed.");

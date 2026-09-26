@@ -198,6 +198,18 @@ RV.views.single = (() => {
     wrapLayout(work, "This box can't be changed any more.", side);
   }
 
+  // Follow-up B5: what the volunteer answered last time, from the payload's
+  // `mine`. The editor already starts from their box.
+  function mineText(m) {
+    if (m.outcome === "no_animal") return "no animal here";
+    if (m.outcome === "unidentifiable") return "can't identify";
+    const e = RV.entry(m.label, m.life_stage);
+    let text = (e && e.common) || (m.life_stage ? `${m.label} (${m.life_stage})` : m.label);
+    if (m.not_sure) text += ", not sure";
+    if (m.bbox) text += "; the box shows where you put it";
+    return text;
+  }
+
   function render() {
     const c = current;
     notSure = false;
@@ -208,6 +220,7 @@ RV.views.single = (() => {
     const side = RV.el("aside", { class: "rv-side" });
     if (reopened) {
       side.append(RV.el("p", { class: "rv-note", text: "Changing your answer: pick again and it replaces your last one." }));
+      if (c.mine) side.append(RV.el("p", { class: "rv-mine", text: `You answered: ${mineText(c.mine)}` }));
     }
     if (c.item.pass === 2) {
       side.append(RV.el("p", { class: "rv-note", text: "Second opinion: answer from the picture alone." }));
@@ -335,7 +348,9 @@ RV.views.single = (() => {
       const arg = { savedFrameId, selectEventId: eventId || current.item.event_id };
       if (!reopened) arg.payload = current;
       await RV.show("frame", arg);
-      if (RV.openFrameId === savedFrameId) RV.setMode("frame");
+      // Follow-up A3: only "Whole frame" / F switches the saved mode; a click
+      // on another fish in the preview is a one-off look at its frame.
+      if (!eventId && RV.openFrameId === savedFrameId) RV.setMode("frame");
     }
   }
 
@@ -378,5 +393,5 @@ RV.views.single = (() => {
     return false;
   });
 
-  return { enter, loadNext, renderRecent };
+  return { enter, loadNext, renderRecent, isBusy: () => busy };
 })();
