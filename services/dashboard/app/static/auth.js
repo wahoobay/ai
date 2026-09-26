@@ -149,3 +149,12 @@ document.addEventListener("DOMContentLoaded", () => {
   wireForgotForm();
   wireResetForm();
 });
+
+// Preview either auth-page theme on any auth page: ?theme=light or ?theme=dark.
+(() => {
+  const body = document.body;
+  if (!body.classList.contains("auth-page")) return;
+  const theme = new URLSearchParams(window.location.search).get("theme");
+  if (theme === "light") body.classList.add("auth-light");
+  else if (theme === "dark") body.classList.remove("auth-light");
+})();

@@ -1447,5 +1447,30 @@ li.empty { color: var(--muted); font-style: italic; }
   font-size: 13px;
   color: var(--auth-muted);
 }
+/* A lighter, softer auth theme: sea-mist page, white card, slate text,
+   ocean-blue accent (white-on-accent and accent-on-white both meet 4.5:1).
+   Drop the auth-light class from the four auth templates to go back to
+   the dark defaults above; ?theme=dark|light previews either (auth.js). */
+.auth-page.auth-light {
+  --auth-bg: #eef4f8;
+  --auth-header-bg: #f8fbfd;
+  --auth-line: #d6e3ec;
+  --auth-card-bg: #ffffff;
+  --auth-shadow: 0 10px 30px rgba(22, 60, 84, 0.10);
+  --auth-ink: #1d3442;
+  --auth-muted: #5d7788;
+  --auth-accent: #1a78ad;
+  --auth-accent-hover: #2489c2;
+  --auth-button-ink: #ffffff;
+  --auth-input-bg: #f9fbfc;
+  --auth-focus-ring: rgba(26, 120, 173, 0.20);
+  --auth-error-ink: #b42318;
+  --auth-error-bg: #fdeceb;
+  --auth-error-line: #f5c2bd;
+  --auth-done-ink: #1e7a4c;
+  --auth-done-bg: #e9f7ef;
+  --auth-done-line: #bfe5cf;
+}
+.auth-page.auth-light .auth-card { border-radius: 12px; }
 #identity-chip { display: flex; gap: 0.5rem; align-items: center; }
 .pending-banner { padding: 0.6rem 1rem; background: #fff4ce; color: #3b3100; }
