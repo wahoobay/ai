@@ -3,9 +3,11 @@
 
 The dashboard's older form wrote free-typed and classifier names (such as
 "Pomatomus saltarix") straight into detection_corrections. This maps each
-such row's corrected_name, and its corrected_species_id, to the accepted
-name the review tool uses (follow-up spec A1b). Rows it can't map are
-listed and left alone.
+such row's corrected_name to the accepted name the review tool uses
+(follow-up spec A1b). corrected_species_id is left alone: it can hold a
+classifier class id or a Fishial UUID, and is provenance, not a label, so
+this never reads it for comparison or writes it (follow-up ruling T3a).
+Rows it can't map are listed and left alone.
 
 A dry run by default: it prints what would change and changes nothing.
 --apply makes every change in one transaction. On production, run --apply
@@ -28,11 +30,13 @@ from psycopg.rows import dict_row
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "dashboard"))
 
 # Old-form rows: every review-tool species verdict records where its label
-# came from; the old form never did.
+# came from; the old form never did. An adjudication records no label
+# source either, but it isn't an old-form row -- excluded explicitly
+# (follow-up ruling T3b) rather than folded into "no label source".
 LEGACY_ROWS_SQL = """
-    SELECT id, corrected_name, corrected_species_id
+    SELECT id, corrected_name
       FROM detection_corrections
-     WHERE label_source IS NULL AND corrected_name IS NOT NULL
+     WHERE label_source IS NULL AND corrected_name IS NOT NULL AND NOT is_adjudication
      ORDER BY id
 """
 
@@ -55,16 +59,15 @@ def remap(conn, catalogue, *, apply: bool) -> Report:
         new = catalogue.accepted(r["corrected_name"])
         if not catalogue.has_name(new):
             report.unmapped.append((r["id"], r["corrected_name"]))
-        elif new == r["corrected_name"] and new == r["corrected_species_id"]:
+        elif new == r["corrected_name"]:
             report.unchanged += 1
         else:
             report.changes.append((r["id"], r["corrected_name"], new))
     if apply and report.changes:
         with conn.transaction(), conn.cursor() as cur:
             for row_id, _old, new in report.changes:
-                cur.execute("""UPDATE detection_corrections
-                                  SET corrected_name = %s, corrected_species_id = %s
-                                WHERE id = %s""", (new, new, row_id))
+                cur.execute("UPDATE detection_corrections SET corrected_name = %s WHERE id = %s",
+                            (new, row_id))
     return report
 
 
