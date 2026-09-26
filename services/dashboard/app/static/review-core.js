@@ -488,6 +488,15 @@ window.addEventListener("pagehide", () => {
   }
 });
 
+// Final review M1: pagehide also fires when the page goes into the
+// back/forward cache, so by the time Back restores it the releases above have
+// already given its claims back -- while RV.held and RV.openFrameId still name
+// them, and the first answer would be refused as "not served to you". Reload
+// instead, so the fresh page asks the queue again.
+window.addEventListener("pageshow", (ev) => {
+  if (ev.persisted) window.location.reload();
+});
+
 document.addEventListener("DOMContentLoaded", async () => {
   for (const b of document.querySelectorAll("#rv-nav button")) {
     const view = b.dataset.view || "single";

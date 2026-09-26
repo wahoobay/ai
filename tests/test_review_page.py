@@ -436,3 +436,56 @@ def test_change_my_answer_refuses_once_the_frame_has_been_left():
                       onclick_body), (
         "\"Change my answer\" must refuse once this frame has been left (busy, or "
         "RV.openFrameId no longer names it)")
+
+
+# ---- final review fix wave (final-findings.md) -----------------------------------
+
+# M1: pagehide also fires when the page goes into the back/forward cache, so
+# its keepalive releases have already given the claims back by the time Back
+# restores the page -- with RV.held and RV.openFrameId still naming them, and
+# the first answer then refused with "this box was not served to you". A page
+# restored from that cache must reload and ask the queue afresh.
+def test_a_page_restored_from_the_back_forward_cache_starts_afresh():
+    core = _read("review-core.js")
+    marker = 'window.addEventListener("pageshow"'
+    assert marker in core, "the page must listen for pageshow"
+    block = _braces_from(core, core.index("{", core.index(marker)))
+    assert re.search(r"if \(ev\.persisted\) window\.location\.reload\(\);", block), (
+        "a page restored from the back/forward cache must reload, not act on released claims")
+
+
+# M2: "answered" in frame_state means any verdict on the box, and the older
+# /api/corrections form writes verdicts without closing pool items, so a
+# completed frame can still hold one of this volunteer's claims. complete()
+# must release the frame, not just forget it, and await the release before the
+# finally (and so before RV.next()), or /next can hand that claim straight back
+# as "held" -- Review Focus 3, the same reason toSingle() awaits its release.
+def test_completing_a_frame_releases_it_rather_than_forgetting_it():
+    body = _function_body(_read("review-frame.js"), "complete")
+    assert "RV.openFrameId = null" not in body, "complete() must release the frame, not forget it"
+    fin = body.index("} finally {")
+    assert re.search(r"await RV\.releaseFrame\(\);", body[:fin]), (
+        "complete() must await RV.releaseFrame() inside the busy guard, before RV.next()")
+    # A second click on "Mark frame complete" is refused by the leave guard
+    # only because releaseFrame() nulls RV.openFrameId before its request.
+    release = _function_body(_read("review-core.js"), "releaseFrame")
+    assert release.index("RV.openFrameId = null") < release.index("RV.post("), (
+        "releaseFrame() must forget the frame before it sends the release")
+
+
+# M3: every frame action's leave guard compares RV.openFrameId with this
+# frame's id, so the one assignment in enter()'s success path is what keeps
+# the whole frame view working: lose it and every answer, draw, complete, S and
+# F silently does nothing. It must sit after the failure path's early return:
+# set before the request, a failed open would leave RV.openFrameId naming the
+# frame, and the fallback's next leave would release the served box it keeps.
+def test_opening_a_frame_records_it_as_the_open_frame():
+    body = _function_body(_read("review-frame.js"), "enter")
+    at = body.index("if (!r.ok)")
+    brace = body.index("{", at)
+    failure = _braces_from(body, brace)
+    success = body[brace + len(failure):body.index("finally")]
+    for statement in ("state = r.data;", "RV.held = null;", "RV.openFrameId = id;"):
+        assert statement in success, f"enter()'s success path must run `{statement}`"
+    assert "RV.openFrameId = id" not in body[:at], (
+        "enter() must not record the frame as open before it has actually opened")
