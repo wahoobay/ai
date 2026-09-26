@@ -1,18 +1,18 @@
 /* services/dashboard/app/static/review.css
    The review page (spec 2026-09-24 §9, layout B). Colours come from the
    dashboard's variables in style.css. */
-/* Review-page colours not covered by style.css's :root palette. Every
-   colour here or in :root can be swapped by a theme class on .rv-page
-   (e.g. .rv-light at the end); these defaults are the dark dashboard look.
-   Colours drawn over the camera frames (box outlines, handles) stay fixed. */
+/* Review-page colours beyond style.css's :root palette. They read the
+   palette tokens from theme.css (picked in the header); the fallbacks are the
+   dark dashboard look. Colours drawn over the camera frames (box outlines,
+   handles) stay fixed in every palette. */
 .rv-page {
-  --rv-line: #1f3b4f;
-  --rv-on-accent: #062033;
-  --rv-on-good: #062a14;
-  --rv-note-bg: #173049;
-  --rv-banner-bg: #5a2a14;
-  --rv-banner-ink: #ffe2cf;
-  --rv-bad-ink: #ff9a9a;
+  --rv-line: var(--line, #1f3b4f);
+  --rv-on-accent: var(--on-accent, #062033);
+  --rv-on-good: var(--on-good, #062a14);
+  --rv-note-bg: var(--note-bg, #173049);
+  --rv-banner-bg: var(--banner-bg, #5a2a14);
+  --rv-banner-ink: var(--banner-ink, #ffe2cf);
+  --rv-bad-ink: var(--bad-ink, #ff9a9a);
 }
 .rv-page { min-height: 100vh; }
 .rv-top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel);
@@ -161,24 +161,3 @@
 #rv-pager button { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--rv-line); background: var(--bg);
   color: var(--ink); cursor: pointer; }
 #rv-pager button:disabled { opacity: .4; cursor: default; }
-
-/* A lighter, softer review page (the auth pages' light palette): sea-mist
-   page, white panels, slate text, ocean-blue accent, darker green/amber so
-   they read on white. Drop rv-light from review.html's <body> to go back to
-   the dark defaults; ?theme=dark|light previews either (review-core.js). */
-.rv-page.rv-light {
-  --bg: #eef4f8;
-  --panel: #ffffff;
-  --ink: #1d3442;
-  --muted: #526b7c;
-  --accent: #1a78ad;
-  --good: #1e7a4c;
-  --warn: #a8570a;
-  --rv-line: #d6e3ec;
-  --rv-on-accent: #ffffff;
-  --rv-on-good: #ffffff;
-  --rv-note-bg: #e8f2f9;
-  --rv-banner-bg: #fff1e0;
-  --rv-banner-ink: #7a3e00;
-  --rv-bad-ink: #b42318;
-}

@@ -52,25 +52,3 @@ def test_each_page_has_the_dashboard_header(page):
                      html), f"{page} needs the dashboard's header bar"
     assert 'class="auth-card"' in html and 'class="auth-eyebrow"' in html
 
-
-# A lighter, softer theme (demo walk-through 2026-09-26), switched on by one
-# class so dropping it restores the dark look; ?theme=dark|light previews
-# either on any auth page.
-def test_the_light_theme_only_swaps_the_variables():
-    css = (APP / "static" / "style.css").read_text()
-    light = _rule(css, ".auth-page.auth-light")
-    for var in ("--auth-bg", "--auth-card-bg", "--auth-ink", "--auth-accent", "--auth-button-ink"):
-        assert f"{var}:" in light, f"the light theme must set {var}"
-    assert "var(--bg)" not in light and "var(--panel)" not in light
-
-
-@pytest.mark.parametrize("page", PAGES)
-def test_each_page_uses_the_light_theme(page):
-    html = (APP / "templates" / page).read_text()
-    assert '<body class="auth-page auth-light">' in html
-
-
-def test_either_theme_can_be_previewed():
-    js = (APP / "static" / "auth.js").read_text()
-    assert 'get("theme")' in js
-    assert 'classList.add("auth-light")' in js and 'classList.remove("auth-light")' in js

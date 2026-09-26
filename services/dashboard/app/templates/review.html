@@ -1,13 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-palette="blue" data-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Review — Wahoo Bay</title>
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/static/review.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/theme.css?v={{ asset_version }}">
+  <script src="/static/theme.js?v={{ asset_version }}"></script>
 </head>
-<body class="rv-page rv-light" data-role="{{ role }}" data-display-name="{{ display_name }}">
+<body class="rv-page" data-role="{{ role }}" data-display-name="{{ display_name }}">
   <header class="rv-top">
     <span class="rv-brand">Wahoo Bay · Review</span>
     <nav id="rv-nav" class="rv-tabs" aria-label="Review views">
@@ -18,6 +20,7 @@
     <span class="rv-spacer"></span>
     <span class="rv-meta">This session: <b id="rv-session-count">0</b> answered</span>
     <span id="identity-chip" class="rv-meta"></span>
+    <div id="theme-controls" class="theme-controls"></div>
   </header>
   <div id="rv-banner" class="rv-banner" role="alert" hidden></div>
   <div id="rv-toast" class="rv-toast" role="status" aria-live="polite" hidden></div>

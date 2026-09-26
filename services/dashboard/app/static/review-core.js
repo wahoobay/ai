@@ -538,13 +538,6 @@ window.addEventListener("pageshow", (ev) => {
   if (ev.persisted) window.location.reload();
 });
 
-// Preview either review-page theme: ?theme=light or ?theme=dark.
-(() => {
-  const theme = new URLSearchParams(window.location.search).get("theme");
-  if (theme === "light") document.body.classList.add("rv-light");
-  else if (theme === "dark") document.body.classList.remove("rv-light");
-})();
-
 document.addEventListener("DOMContentLoaded", async () => {
   for (const b of document.querySelectorAll("#rv-nav button")) {
     const view = b.dataset.view || "single";

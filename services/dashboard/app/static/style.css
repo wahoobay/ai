@@ -1333,28 +1333,28 @@ li.empty { color: var(--muted); font-style: italic; }
 }
 
 /* Auth pages (sign in, create account, forgot/reset password): the
-   dashboard's header bar over one centred panel. Every colour is a variable
-   set on .auth-page, so a theme (e.g. .auth-light below) only swaps values;
-   these defaults are the dashboard's own dark palette. */
+   dashboard's header bar over one centred panel. Every colour is an --auth-*
+   variable reading the palette tokens from theme.css (picked in the header);
+   the fallbacks are the dashboard's own dark palette. */
 .auth-page {
   --auth-bg: var(--bg);
-  --auth-header-bg: transparent;
-  --auth-line: #1f3b4f;
+  --auth-header-bg: var(--header-bg, transparent);
+  --auth-line: var(--line, #1f3b4f);
   --auth-card-bg: var(--panel);
-  --auth-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --auth-shadow: var(--shadow, 0 12px 32px rgba(0, 0, 0, 0.35));
   --auth-ink: var(--ink);
   --auth-muted: var(--muted);
   --auth-accent: var(--accent);
-  --auth-accent-hover: #7dd3ff;
-  --auth-button-ink: #0b1a24;
-  --auth-input-bg: rgba(0, 0, 0, 0.3);
-  --auth-focus-ring: rgba(79, 193, 255, 0.25);
-  --auth-error-ink: #f87171;
-  --auth-error-bg: rgba(239, 68, 68, 0.10);
-  --auth-error-line: #5c1f1f;
-  --auth-done-ink: var(--good);
-  --auth-done-bg: rgba(122, 239, 161, 0.08);
-  --auth-done-line: #1d4a2e;
+  --auth-accent-hover: var(--accent-hover, #7dd3ff);
+  --auth-button-ink: var(--on-accent, #0b1a24);
+  --auth-input-bg: var(--input-bg, rgba(0, 0, 0, 0.3));
+  --auth-focus-ring: var(--focus-ring, rgba(79, 193, 255, 0.25));
+  --auth-error-ink: var(--error-ink, #f87171);
+  --auth-error-bg: var(--error-bg, rgba(239, 68, 68, 0.10));
+  --auth-error-line: var(--error-line, #5c1f1f);
+  --auth-done-ink: var(--done-ink, var(--good));
+  --auth-done-bg: var(--done-bg, rgba(122, 239, 161, 0.08));
+  --auth-done-line: var(--done-line, #1d4a2e);
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -1447,30 +1447,5 @@ li.empty { color: var(--muted); font-style: italic; }
   font-size: 13px;
   color: var(--auth-muted);
 }
-/* A lighter, softer auth theme: sea-mist page, white card, slate text,
-   ocean-blue accent (white-on-accent and accent-on-white both meet 4.5:1).
-   Drop the auth-light class from the four auth templates to go back to
-   the dark defaults above; ?theme=dark|light previews either (auth.js). */
-.auth-page.auth-light {
-  --auth-bg: #eef4f8;
-  --auth-header-bg: #f8fbfd;
-  --auth-line: #d6e3ec;
-  --auth-card-bg: #ffffff;
-  --auth-shadow: 0 10px 30px rgba(22, 60, 84, 0.10);
-  --auth-ink: #1d3442;
-  --auth-muted: #5d7788;
-  --auth-accent: #1a78ad;
-  --auth-accent-hover: #2489c2;
-  --auth-button-ink: #ffffff;
-  --auth-input-bg: #f9fbfc;
-  --auth-focus-ring: rgba(26, 120, 173, 0.20);
-  --auth-error-ink: #b42318;
-  --auth-error-bg: #fdeceb;
-  --auth-error-line: #f5c2bd;
-  --auth-done-ink: #1e7a4c;
-  --auth-done-bg: #e9f7ef;
-  --auth-done-line: #bfe5cf;
-}
-.auth-page.auth-light .auth-card { border-radius: 12px; }
 #identity-chip { display: flex; gap: 0.5rem; align-items: center; }
 .pending-banner { padding: 0.6rem 1rem; background: #fff4ce; color: #3b3100; }

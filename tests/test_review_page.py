@@ -582,26 +582,8 @@ def test_every_time_is_shown_in_eastern():
 def test_review_colours_are_theme_variables():
     css = _read("review.css")
     page = re.search(r"\.rv-page\s*\{([^}]*)\}", css).group(1)
-    assert "--rv-line: #1f3b4f" in page
+    assert "--rv-line: var(--line, #1f3b4f)" in page
     assert css.count("#1f3b4f") == 1, "border colours must use var(--rv-line)"
     for literal in ("#173049", "#5a2a14", "#ffe2cf", "#ff9a9a", "#062a14"):
         assert css.count(literal) == 1, f"{literal} must only appear as a .rv-page default"
 
-
-# The review page takes the same light, soft theme as the auth pages, behind
-# one class (drop it to restore the dark look); ?theme=dark|light previews.
-def test_the_review_light_theme_only_swaps_the_variables():
-    css = _read("review.css")
-    m = re.search(r"\.rv-page\.rv-light\s*\{([^}]*)\}", css)
-    assert m, "review.css needs a .rv-page.rv-light block"
-    for var in ("--bg", "--panel", "--ink", "--muted", "--accent", "--good", "--warn",
-                "--rv-line", "--rv-on-accent", "--rv-on-good"):
-        assert f"{var}:" in m.group(1), f"the light theme must set {var}"
-
-
-def test_the_review_page_uses_the_light_theme_and_can_preview_either():
-    html = (STATIC.parent / "templates" / "review.html").read_text()
-    assert '<body class="rv-page rv-light"' in html
-    core = _read("review-core.js")
-    assert 'get("theme")' in core
-    assert 'classList.add("rv-light")' in core and 'classList.remove("rv-light")' in core

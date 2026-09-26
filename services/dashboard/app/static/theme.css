@@ -1,0 +1,251 @@
+/* services/dashboard/app/static/theme.css
+   Colour palettes for the review and sign-in pages: four palettes, each with
+   a light and a dark version, chosen in the header (theme.js) and remembered
+   in the browser. Each block sets the same tokens; review.css and the auth
+   rules in style.css read them. Every text/background pair meets WCAG AA
+   4.5:1 (tests/test_theme.py checks). The main dashboard doesn't load this. */
+
+:root[data-mode="light"] { color-scheme: light; }
+:root[data-mode="dark"] { color-scheme: dark; }
+
+/* Wahoo Blue, light */
+:root[data-palette="blue"][data-mode="light"] {
+  --bg: #eef5fa;
+  --panel: #ffffff;
+  --header-bg: #f8fbfd;
+  --ink: #1c3342;
+  --muted: #526b7c;
+  --accent: #0072b5;
+  --accent-hover: #005f96;
+  --on-accent: #ffffff;
+  --good: #1e7a4c;
+  --on-good: #ffffff;
+  --warn: #a8570a;
+  --line: #d4e3ee;
+  --note-bg: #e6f2fa;
+  --banner-bg: #fff1e0;
+  --banner-ink: #7a3e00;
+  --bad-ink: #b42318;
+  --shadow: 0 10px 30px rgba(22, 60, 84, 0.10);
+  --focus-ring: rgba(0, 135, 214, 0.25);
+  --error-ink: #b42318;
+  --error-bg: #fdeceb;
+  --error-line: #f5c2bd;
+  --done-ink: #1e7a4c;
+  --done-bg: #e9f7ef;
+  --done-line: #bfe5cf;
+  --input-bg: #f9fbfd;
+}
+
+/* Wahoo Blue, dark */
+:root[data-palette="blue"][data-mode="dark"] {
+  --bg: #0b1a24;
+  --panel: #11283a;
+  --header-bg: #0e2130;
+  --ink: #e8f1f8;
+  --muted: #8aa3b5;
+  --accent: #4fc1ff;
+  --accent-hover: #7dd3ff;
+  --on-accent: #062033;
+  --good: #7aefa1;
+  --on-good: #062a14;
+  --warn: #ffb457;
+  --line: #1f3b4f;
+  --note-bg: #173049;
+  --banner-bg: #5a2a14;
+  --banner-ink: #ffe2cf;
+  --bad-ink: #ff9a9a;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --focus-ring: rgba(79, 193, 255, 0.25);
+  --error-ink: #f87171;
+  --error-bg: #2a1a20;
+  --error-line: #5c1f1f;
+  --done-ink: #7aefa1;
+  --done-bg: #143228;
+  --done-line: #1d4a2e;
+  --input-bg: #0c1c29;
+}
+
+/* Wahoo Green, light */
+:root[data-palette="green"][data-mode="light"] {
+  --bg: #f1f7ea;
+  --panel: #ffffff;
+  --header-bg: #f8fbf3;
+  --ink: #1f2e17;
+  --muted: #56684b;
+  --accent: #3d7512;
+  --accent-hover: #325f0f;
+  --on-accent: #ffffff;
+  --good: #26733f;
+  --on-good: #ffffff;
+  --warn: #935500;
+  --line: #d9e8c9;
+  --note-bg: #eef6e3;
+  --banner-bg: #fff3dc;
+  --banner-ink: #6f4200;
+  --bad-ink: #b42318;
+  --shadow: 0 10px 30px rgba(40, 70, 20, 0.10);
+  --focus-ring: rgba(120, 190, 32, 0.35);
+  --error-ink: #b42318;
+  --error-bg: #fdeceb;
+  --error-line: #f5c2bd;
+  --done-ink: #26733f;
+  --done-bg: #eaf6e5;
+  --done-line: #c3e3b5;
+  --input-bg: #fbfdf8;
+}
+
+/* Wahoo Green, dark */
+:root[data-palette="green"][data-mode="dark"] {
+  --bg: #0f1a0c;
+  --panel: #172714;
+  --header-bg: #13210f;
+  --ink: #eaf5e0;
+  --muted: #9db38e;
+  --accent: #8fd14f;
+  --accent-hover: #a6de6f;
+  --on-accent: #13210a;
+  --good: #7ee0a0;
+  --on-good: #0b2414;
+  --warn: #ffbe5c;
+  --line: #2a4222;
+  --note-bg: #1f3519;
+  --banner-bg: #4a2e0f;
+  --banner-ink: #ffe6c4;
+  --bad-ink: #ff9a9a;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.40);
+  --focus-ring: rgba(143, 209, 79, 0.30);
+  --error-ink: #ff8a80;
+  --error-bg: #2d1714;
+  --error-line: #5c2420;
+  --done-ink: #8fe3a9;
+  --done-bg: #183020;
+  --done-line: #2b5236;
+  --input-bg: #0d170a;
+}
+
+/* Reef, light */
+:root[data-palette="reef"][data-mode="light"] {
+  --bg: #eaf7f7;
+  --panel: #ffffff;
+  --header-bg: #f5fbfb;
+  --ink: #10343a;
+  --muted: #4d6b70;
+  --accent: #007479;
+  --accent-hover: #005e62;
+  --on-accent: #ffffff;
+  --good: #1d7a5a;
+  --on-good: #ffffff;
+  --warn: #b8431f;
+  --line: #cfe8e8;
+  --note-bg: #e2f3f3;
+  --banner-bg: #ffeee8;
+  --banner-ink: #8a2d12;
+  --bad-ink: #b4232e;
+  --shadow: 0 10px 30px rgba(10, 70, 80, 0.10);
+  --focus-ring: rgba(0, 150, 155, 0.25);
+  --error-ink: #b4232e;
+  --error-bg: #fdecec;
+  --error-line: #f4c3c3;
+  --done-ink: #1d7a5a;
+  --done-bg: #e6f5ef;
+  --done-line: #bde3d3;
+  --input-bg: #f7fcfc;
+}
+
+/* Reef, dark */
+:root[data-palette="reef"][data-mode="dark"] {
+  --bg: #04232a;
+  --panel: #0a3139;
+  --header-bg: #062a31;
+  --ink: #e2f6f5;
+  --muted: #8ab5b8;
+  --accent: #3fd0c9;
+  --accent-hover: #6fe0da;
+  --on-accent: #042428;
+  --good: #7be3b0;
+  --on-good: #06281a;
+  --warn: #ff8f73;
+  --line: #164a52;
+  --note-bg: #0f3f47;
+  --banner-bg: #4d1f14;
+  --banner-ink: #ffd9cc;
+  --bad-ink: #ff9a9a;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.40);
+  --focus-ring: rgba(63, 208, 201, 0.28);
+  --error-ink: #ff8a80;
+  --error-bg: #2e1a1c;
+  --error-line: #5c2a2a;
+  --done-ink: #7be3b0;
+  --done-bg: #0e3a32;
+  --done-line: #1f5c4c;
+  --input-bg: #031d23;
+}
+
+/* Sandbar, light */
+:root[data-palette="sand"][data-mode="light"] {
+  --bg: #f6efe2;
+  --panel: #fffaf1;
+  --header-bg: #fbf5ea;
+  --ink: #3a2f22;
+  --muted: #6b5d4b;
+  --accent: #2a7369;
+  --accent-hover: #225e56;
+  --on-accent: #ffffff;
+  --good: #3d7a3a;
+  --on-good: #ffffff;
+  --warn: #9a4f0e;
+  --line: #e6d9c3;
+  --note-bg: #f1e8d8;
+  --banner-bg: #fff0dc;
+  --banner-ink: #6f3d00;
+  --bad-ink: #a8322a;
+  --shadow: 0 10px 30px rgba(90, 60, 20, 0.10);
+  --focus-ring: rgba(44, 122, 112, 0.25);
+  --error-ink: #a8322a;
+  --error-bg: #fbe9e4;
+  --error-line: #eec6bb;
+  --done-ink: #3d7a3a;
+  --done-bg: #edf4e4;
+  --done-line: #cfe0bd;
+  --input-bg: #fffdf8;
+}
+
+/* Sandbar, dark */
+:root[data-palette="sand"][data-mode="dark"] {
+  --bg: #1c1813;
+  --panel: #28221a;
+  --header-bg: #221d16;
+  --ink: #f3e9d8;
+  --muted: #b5a58c;
+  --accent: #e0bb7a;
+  --accent-hover: #ecca8f;
+  --on-accent: #2a1f10;
+  --good: #9fd49a;
+  --on-good: #172a14;
+  --warn: #f0a35e;
+  --line: #3d3426;
+  --note-bg: #332b20;
+  --banner-bg: #4d2e12;
+  --banner-ink: #ffe4c2;
+  --bad-ink: #ff9e8f;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --focus-ring: rgba(224, 187, 122, 0.28);
+  --error-ink: #ff9e8f;
+  --error-bg: #33201b;
+  --error-line: #5c342b;
+  --done-ink: #9fd49a;
+  --done-bg: #22301d;
+  --done-line: #3a5232;
+  --input-bg: #1a1611;
+}
+
+/* The palette picker and light/dark toggle in each page's header. */
+.theme-controls { display: flex; gap: 6px; align-items: center; }
+.theme-controls select, .theme-controls button {
+  font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px; cursor: pointer;
+  color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+}
+.theme-controls select:focus-visible, .theme-controls button:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring);
+}
