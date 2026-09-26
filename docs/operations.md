@@ -571,8 +571,11 @@ again restarts the clock.
 
 `POST /api/corrections` (the endorse / correct / not-a-fish buttons on the public
 dashboard) is saved through the review tool's rules. It is never spot-checked. It answers
-403 when another volunteer already answered the box, 409 while someone holds it, and 400
-for a name outside the species list or a detection whose frame was not saved (most live
+403 when another volunteer already answered the box; 409 while someone holds it, or "a
+second opinion is pending on this box" while a spot-check on it is waiting (for anyone
+with no answer of their own on it); and 400 for a name outside the species list,
+`choose a life stage for <name> on the review page` (a species whose catalogue entries
+all carry a stage, more than one), or a detection whose frame was not saved (most live
 detections).
 
 Rows the form wrote before this change can carry raw or misspelled names. To see what

@@ -580,14 +580,16 @@ RV.views.frame = (() => {
       const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/complete`);
       if (!r.ok) { RV.toast(r.data.error || "The frame isn't complete yet."); await reload(true); return; }
       RV.toast("Frame marked complete. Thank you!");
-      // Final review M2: release, don't just forget. "Answered" means any
-      // verdict on the box, and the older /api/corrections form writes one
-      // without closing the pool item, so this volunteer may still hold a
-      // claim here. Awaited, like toSingle()'s, so the queue call below
-      // can't have /next hand that claim straight back as "held" (Review
-      // Focus 3). releaseFrame() nulls RV.openFrameId before it sends
-      // anything, so a second click on "Mark frame complete" is still
-      // refused by the guard above.
+      // Final review M2: release, don't just forget. This is a no-op
+      // server-side once every box already has an answer -- true whether
+      // it came from this page or, since follow-up A1, the older
+      // /api/corrections form, which also closes the pool item it
+      // answers -- but it's still correct if any claim remains. Awaited,
+      // like toSingle()'s, so the queue call below can't have /next hand
+      // that claim straight back as "held" (Review Focus 3).
+      // releaseFrame() nulls RV.openFrameId before it sends anything, so
+      // a second click on "Mark frame complete" is still refused by the
+      // guard above.
       await RV.releaseFrame();
       done = true;
     } finally {

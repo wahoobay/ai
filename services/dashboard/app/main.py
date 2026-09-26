@@ -1464,8 +1464,9 @@ def build_app() -> FastAPI:
         if pool is not None:
             async with pool.connection() as conn:
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    # Per-celebrity aggregate: total tagged corrections,
-                    # most recent tagged event_id, first + last tag time.
+                    # Per-celebrity aggregate: count of distinct tagged
+                    # events, most recent tagged event_id, first + last
+                    # tag time.
                     # The photo is a public thumbnail (no user dependency
                     # here), so it never picks an event whose spot-check is
                     # pending (follow-up D3, fix round 1 T4a).
