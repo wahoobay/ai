@@ -34,11 +34,15 @@ def test_hidden_messages_stay_hidden():
 
 
 def test_inputs_buttons_and_links_are_styled_like_the_dashboard():
+    # Colours are variables on .auth-page whose defaults are the dashboard's
+    # own dark palette; a theme class only swaps the values.
     css = (APP / "static" / "style.css").read_text()
-    assert "var(--panel)" in _rule(css, ".auth-card")
-    assert "var(--accent)" in _rule(css, ".auth-card button")
-    assert "var(--accent)" in _rule(css, ".auth-card a")
-    assert "var(--accent)" in _rule(css, ".auth-card input:focus")
+    page = _rule(css, ".auth-page")
+    assert "--auth-card-bg: var(--panel)" in page and "--auth-accent: var(--accent)" in page
+    assert "var(--auth-card-bg)" in _rule(css, ".auth-card")
+    assert "var(--auth-accent)" in _rule(css, ".auth-card button")
+    assert "var(--auth-accent)" in _rule(css, ".auth-card a")
+    assert "var(--auth-accent)" in _rule(css, ".auth-card input:focus")
 
 
 @pytest.mark.parametrize("page", PAGES)
