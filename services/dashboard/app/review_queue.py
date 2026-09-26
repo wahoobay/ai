@@ -168,11 +168,17 @@ async def next_item(conn, *, user_id: int, lane: str, species_order: list[str],
                     WHERE id IN (SELECT id FROM review_items
                                   WHERE status = 'claimed' AND claimed_until < now()
                                   FOR UPDATE SKIP LOCKED)""")
+        # Handing back a box the volunteer already holds refreshes its
+        # claim like a fresh one (final review Minor 5): a reload late in
+        # the claim window would otherwise leave them only seconds.
         held = await fetch_one(conn, """
-            SELECT * FROM review_items
-             WHERE status = 'claimed' AND claimed_by = %(uid)s
-               AND (lane = %(lane)s OR pass = 2)
-             ORDER BY id LIMIT 1""", params)
+            UPDATE review_items
+               SET claimed_until = now() + make_interval(secs => %(claim_s)s)
+             WHERE id = (SELECT id FROM review_items
+                          WHERE status = 'claimed' AND claimed_by = %(uid)s
+                            AND (lane = %(lane)s OR pass = 2)
+                          ORDER BY id LIMIT 1)
+            RETURNING *""", params)
         if held:
             return held
         want_spot = (rng.random() < spot_serve_rate

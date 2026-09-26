@@ -139,6 +139,22 @@ async def test_asking_again_returns_the_box_you_already_hold(rdb, tmp_path):
     assert (await _next(rdb, one, seed=99))["id"] == first["id"]
 
 
+async def test_asking_again_refreshes_the_claim_on_the_box_you_hold(rdb, tmp_path):
+    """Final review Minor 5: a reload at minute 9 used to leave one minute
+    on the claim."""
+    [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one = await make_user(rdb, "one")
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """UPDATE review_items SET status = 'claimed', claimed_by = %s,
+                      claimed_until = now() + interval '30 seconds' WHERE id = %s""", (one, item))
+    got = await _next(rdb, one)
+    assert got["id"] == item
+    left = (await _row(rdb, "SELECT claimed_until - now() FROM review_items WHERE id = %s",
+                       item))[0]
+    assert left > timedelta(minutes=5)
+
+
 async def test_a_lapsed_claim_goes_back_to_the_pool(rdb, tmp_path):
     [(_f, item)] = await _boxes(rdb, tmp_path, n=1)
     one, two = await make_user(rdb, "one"), await make_user(rdb, "two")

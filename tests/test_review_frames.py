@@ -15,10 +15,20 @@ from app.review_frames import (
     complete_frame,
     frame_state,
     open_frame,
+    release_frame,
     remove_box,
+    skip_frame,
     update_box,
 )
-from app.review_queue import Conflict, Forbidden, Invalid, VerdictIn, skip_item, submit_verdict
+from app.review_queue import (
+    Conflict,
+    Forbidden,
+    Invalid,
+    VerdictIn,
+    next_item,
+    skip_item,
+    submit_verdict,
+)
 from PIL import Image
 from review_fixtures import (
     CSRF,
@@ -413,3 +423,115 @@ async def test_frame_mode_verdicts_accept_a_hint_despite_no_item_id(rdb, tmp_pat
             await submit_verdict(conn, user=as_user(other), body=VerdictIn(
                 event_id=f["event_ids"][1], outcome="species", label="Seriola zonata",
                 label_source="hint"), catalogue=cat, spot_rate=0.0, rng=random.Random(0))
+
+
+# ---- spec amendment 2026-09-25: frame-first review ---------------------------
+
+async def test_opening_keeps_and_refreshes_the_box_you_were_served(rdb, tmp_path, cat):
+    """The page opens the frame of the box the queue just served without
+    releasing it first, so nobody can take it in between; opening must
+    also push that claim's expiry out like any fresh claim."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:2])
+    me = await make_user(rdb, "me")
+    soon = datetime.now(UTC) + timedelta(seconds=30)
+    served = await add_item(rdb, f, 0, status="claimed", claimed_by=me, claimed_until=soon)
+    other_box = await add_item(rdb, f, 1)
+    async with rdb.connection() as conn:
+        await open_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me, claim_s=600)
+        cur = await conn.execute(
+            "SELECT id, status, claimed_by, claimed_until FROM review_items WHERE id = ANY(%s)",
+            ([served, other_box],))
+        rows = {r[0]: r[1:] for r in await cur.fetchall()}
+    assert rows[served][:2] == ("claimed", me)
+    assert rows[served][2] > soon + timedelta(minutes=5)
+    assert rows[other_box][:2] == ("claimed", me)
+
+
+async def test_releasing_a_frame_gives_back_only_your_own_first_pass_claims(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES)
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    live = datetime.now(UTC) + timedelta(minutes=5)
+    mine = await add_item(rdb, f, 0, status="claimed", claimed_by=me, claimed_until=live)
+    theirs = await add_item(rdb, f, 1, status="claimed", claimed_by=other, claimed_until=live)
+    done = await add_item(rdb, f, 2, status="done", claimed_by=me)
+    first = await add_verdict(rdb, f["event_ids"][3], other, name="Seriola zonata")
+    spot = await add_item(rdb, f, 3, pass_=2, exclude_user_id=other, first_correction_id=first,
+                          status="claimed", claimed_by=me, claimed_until=live)
+    async with rdb.connection() as conn:
+        await release_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+    assert await _status(rdb, mine) == ("open", None)
+    assert await _status(rdb, theirs) == ("claimed", other)
+    assert await _status(rdb, done) == ("done", me)
+    assert await _status(rdb, spot) == ("claimed", me)       # pass 2 is never touched
+
+
+async def test_releasing_a_frame_also_clears_a_claim_the_sweep_already_reopened(rdb, tmp_path,
+                                                                                cat):
+    """The lapsed-claim sweep keeps claimed_by (review_queue.next_item);
+    giving the frame up must clear it, as release_item does."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    me = await make_user(rdb, "me")
+    item = await add_item(rdb, f, 0, status="open", claimed_by=me)
+    async with rdb.connection() as conn:
+        await release_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+    assert await _status(rdb, item) == ("open", None)
+
+
+async def test_next_frame_skips_the_unanswered_boxes_for_you_only(rdb, tmp_path, cat):
+    """Spec amendment 2026-09-25, flow step 3: skipped for this volunteer
+    (the queue won't bring them back), free for everyone else at once."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:3])
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    third = await make_user(rdb, "third")
+    live = datetime.now(UTC) + timedelta(minutes=5)
+    kw = {"predicted": "Seriola zonata", "route": "Seriola zonata"}
+    mine = await add_item(rdb, f, 0, status="claimed", claimed_by=me, claimed_until=live, **kw)
+    free = await add_item(rdb, f, 1, **kw)
+    theirs = await add_item(rdb, f, 2, status="claimed", claimed_by=other, claimed_until=live,
+                            **kw)
+    async with rdb.connection() as conn:
+        await skip_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+        cur = await conn.execute("SELECT item_id FROM review_skips WHERE user_id = %s", (me,))
+        skipped = {r[0] for r in await cur.fetchall()}
+    assert skipped == {mine, free, theirs}
+    assert await _status(rdb, mine) == ("open", None)
+    assert await _status(rdb, theirs) == ("claimed", other)
+    async with rdb.connection() as conn:
+        again = await next_item(conn, user_id=me, lane="check", species_order=[],
+                                spot_serve_rate=0.0, claim_s=600, rng=random.Random(0))
+        got = await next_item(conn, user_id=third, lane="check", species_order=[],
+                              spot_serve_rate=0.0, claim_s=600, rng=random.Random(0))
+    assert again is None
+    assert got["id"] in {mine, free}
+
+
+async def test_next_frame_leaves_spot_checks_alone(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    first = await add_verdict(rdb, f["event_ids"][0], other, name="Seriola zonata")
+    spot = await add_item(rdb, f, 0, pass_=2, exclude_user_id=other, first_correction_id=first)
+    async with rdb.connection() as conn:
+        await skip_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=me)
+        cur = await conn.execute("SELECT count(*) FROM review_skips WHERE item_id = %s", (spot,))
+        n = (await cur.fetchone())[0]
+    assert n == 0
+    assert await _status(rdb, spot) == ("open", None)
+
+
+async def test_release_and_skip_over_http(rdb, rclient, tmp_path):
+    me = await make_user(rdb, "rev")
+    login(rclient, "rev")
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    sf = f["saved_frame_id"]
+    item = await add_item(rdb, f, 0, predicted="Seriola zonata", route="Seriola zonata")
+    for action in ("release", "skip"):
+        assert rclient.post(f"/api/review/frames/{sf}/{action}").status_code == 403   # no CSRF
+    rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF)
+    assert await _status(rdb, item) == ("claimed", me)
+    assert rclient.post(f"/api/review/frames/{sf}/release", headers=CSRF).json() == {"ok": True}
+    assert await _status(rdb, item) == ("open", None)
+    rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF)
+    assert rclient.post(f"/api/review/frames/{sf}/skip", headers=CSRF).json() == {"ok": True}
+    assert await _status(rdb, item) == ("open", None)
+    reopened = rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF).json()
+    assert reopened["boxes"][0]["review_item_id"] is None      # skipped: not claimed again

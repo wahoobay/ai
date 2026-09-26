@@ -35,7 +35,9 @@ from .review_frames import (
     frame_record,
     frame_state,
     open_frame,
+    release_frame,
     remove_box,
+    skip_frame,
     uncomplete_frame,
     update_box,
 )
@@ -264,6 +266,20 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def frame_complete(saved_frame_id: int, user=Depends(reviewer)):
         return await _frame_call(complete_frame, saved_frame_id=saved_frame_id, user=user,
                                  catalogue=_catalogue())
+
+    @router.post("/api/review/frames/{saved_frame_id}/release",
+                 dependencies=[Depends(require_csrf)])
+    async def frame_release(saved_frame_id: int, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            await release_frame(conn, saved_frame_id=saved_frame_id, user_id=user.id)
+        return JSONResponse({"ok": True})
+
+    @router.post("/api/review/frames/{saved_frame_id}/skip",
+                 dependencies=[Depends(require_csrf)])
+    async def frame_skip(saved_frame_id: int, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            await skip_frame(conn, saved_frame_id=saved_frame_id, user_id=user.id)
+        return JSONResponse({"ok": True})
 
     @router.delete("/api/review/frames/{saved_frame_id}/complete",
                    dependencies=[Depends(require_csrf)])

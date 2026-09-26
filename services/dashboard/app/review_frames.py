@@ -81,6 +81,12 @@ async def refuse_during_second_opinion(conn, *, saved_frame_id: int, user_id: in
 
 
 async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int) -> None:
+    """Claim the frame's open (or lapsed) first-pass boxes for this
+    volunteer, and refresh the claims they already hold here -- including
+    the box the queue just served them, which the page no longer releases
+    before opening its frame (spec amendment 2026-09-25). Boxes the
+    volunteer skipped stay unclaimed; someone else's live claim is left
+    alone."""
     async with conn.transaction(), conn.cursor() as cur:
         await refuse_during_second_opinion(conn, saved_frame_id=saved_frame_id, user_id=user_id)
         await cur.execute("""
@@ -88,10 +94,46 @@ async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int) -
                SET status = 'claimed', claimed_by = %(uid)s,
                    claimed_until = now() + make_interval(secs => %(claim_s)s)
              WHERE saved_frame_id = %(sf)s AND pass = 1
-               AND (status = 'open' OR (status = 'claimed' AND claimed_until < now()))
+               AND (status = 'open'
+                    OR (status = 'claimed' AND claimed_until < now())
+                    OR (status = 'claimed' AND claimed_by = %(uid)s))
                AND NOT EXISTS (SELECT 1 FROM review_skips s
                                 WHERE s.item_id = review_items.id AND s.user_id = %(uid)s)""",
                           {"uid": user_id, "claim_s": claim_s, "sf": saved_frame_id})
+
+
+async def release_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
+    """Give back every first-pass box this volunteer holds in the frame,
+    skipping none: leaving the frame view any way but "Next frame" (spec
+    amendment 2026-09-25, flow step 5). Mirrors review_queue.release_item,
+    including a claim the sweep has already moved back to 'open' (the
+    sweep keeps claimed_by). Other volunteers' claims, answered boxes and
+    spot-checks are untouched."""
+    async with conn.transaction(), conn.cursor() as cur:
+        await cur.execute("""
+            UPDATE review_items SET status = 'open', claimed_by = NULL, claimed_until = NULL
+             WHERE saved_frame_id = %s AND pass = 1 AND claimed_by = %s
+               AND status IN ('claimed', 'open')""", (saved_frame_id, user_id))
+
+
+async def skip_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
+    """"Next frame" (spec amendment 2026-09-25, flow step 3): every
+    first-pass box in the frame still waiting for an answer is skipped for
+    this volunteer, so neither the queue nor open_frame hands it back to
+    them, and their own claims among those boxes are released at once.
+    A box someone else holds is skipped for this volunteer too but stays
+    the holder's. Spot-checks are never touched."""
+    params = {"uid": user_id, "sf": saved_frame_id}
+    async with conn.transaction(), conn.cursor() as cur:
+        await cur.execute("""
+            INSERT INTO review_skips (item_id, user_id)
+            SELECT id, %(uid)s FROM review_items
+             WHERE saved_frame_id = %(sf)s AND pass = 1 AND status IN ('open', 'claimed')
+            ON CONFLICT DO NOTHING""", params)
+        await cur.execute("""
+            UPDATE review_items SET status = 'open', claimed_by = NULL, claimed_until = NULL
+             WHERE saved_frame_id = %(sf)s AND pass = 1 AND claimed_by = %(uid)s
+               AND status IN ('claimed', 'open')""", params)
 
 
 async def frame_state(conn, *, saved_frame_id: int, user, catalogue) -> dict:
