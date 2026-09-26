@@ -246,6 +246,14 @@ that refresh — and while it queues, **every other query on that view
 queues behind it**. The public species endpoints stall for the length
 of the refresh.
 
+**Changing a foreign key that points at `detection_events`** (adding
+is fine; dropping or swapping one is not) needs a brief `ACCESS EXCLUSIVE`
+lock on `detection_events`, and the dashboard's matview refresher keeps
+that table busy almost continuously. With the dashboard running, the
+statement just hits its `lock_timeout` (the review-tool migration did,
+2026-09-26). Stop the dashboard, apply the migration, then start it
+again: a few seconds of downtime.
+
 Instead, apply only the statements you added, as one guarded
 transaction:
 
@@ -827,14 +835,39 @@ background.
 
 ## Backups
 
-Postgres has not been configured with point-in-time recovery yet. For
-a manual snapshot:
+`scripts/dev/backup_db.sh` runs nightly at 02:30 from the user's
+crontab (`crontab -l`) and appends one line per run to
+`logs/app/backup.log` (`… ok dump=… labels=N -> …` or `FAILED …`). It
+keeps what can't be re-derived from the cameras:
 
-```bash
-mkdir -p backups
-PGPASSWORD=wahoobay pg_dump -h 127.0.0.1 -U wahoobay wahoobay \
-  > backups/wahoobay_$(date +%Y%m%dT%H%M%SZ).sql
-```
+- `wahoobay-<stamp>.dump`: `pg_dump --format=custom` of the whole schema
+  and every table's data **except** the camera-derived bulk
+  (`detection_events`, `saved_frames`, `frame_stats`; matview data is
+  never dumped). That covers accounts, every verdict, the review tables,
+  alerts, and the sensor and weather history, about 10 MB a night.
+- `labels-<stamp>.csv.gz`: every row of `detection_corrections` joined
+  with its detection (camera, timestamp, frame, model box and guess) and
+  its saved frame's path. It is self-contained, so volunteers' work stays
+  usable even if `detection_events` itself were lost.
+
+Files are mode 0600 (they hold emails and password hashes). They're
+written to `/raid/scratch/dzimmerman2021/backups/wahoobay-db/` and
+copied to `/mnt/beegfs/home/dzimmerman2021/backups/wahoobay-db/` on the
+DGX's other disk array. Files older than 30 days are pruned from both.
+Both copies are on this machine; an off-machine copy waits for the cloud
+move. Run it by hand at any time: `scripts/dev/backup_db.sh`.
+
+To restore:
+
+- **One table from last night** (someone deleted verdicts, say): restore
+  the dump into a scratch database and copy the rows you need back.
+  ```bash
+  createdb wahoobay_restore
+  pg_restore --no-owner -d wahoobay_restore <dump>    # FKs to detection_events will fail; the rows load
+  ```
+  Then `DROP DATABASE wahoobay_restore;` when done.
+- **The labels alone**: the CSV loads anywhere
+  (`\copy … FROM PROGRAM 'zcat labels-….csv.gz' WITH (FORMAT csv, HEADER)`).
 
 `frames/` and `logs/` are append-only and easy to `rsync` somewhere
 durable.
