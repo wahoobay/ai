@@ -16,7 +16,8 @@ const RV = {
   byKey: new Map(),
   views: {},
   keyHandlers: {},
-  heldItemId: null,
+  held: null,          // the single box being answered: {itemId, savedFrameId}
+  openFrameId: null,   // the frame whose boxes this volunteer holds, if any
   mine: { session_count: 0, recent: [] },
   HEADERS: { "Content-Type": "application/json", "X-Requested-With": "wahoobay" },
 };
@@ -355,14 +356,80 @@ document.addEventListener("keydown", (ev) => {
   if (handler && handler(ev.key, ev) === true) ev.preventDefault();
 });
 
-RV.releaseHeld = function releaseHeld() {
-  if (!RV.heldItemId) return;
-  RV.post(`/api/review/items/${RV.heldItemId}/release`);
-  RV.heldItemId = null;
+// ---- claims: the single box held, and the frame held --------------------------
+// Spec amendment 2026-09-25. A box the queue served is recorded with its
+// frame, so opening that same frame keeps the claim instead of releasing it
+// and re-claiming it a moment later -- a gap in which someone else could
+// take it. Leaving a frame any way but "Next frame" gives its boxes back
+// without skipping them.
+
+RV.releaseHeld = function releaseHeld(keepFrameId) {
+  const held = RV.held;
+  if (!held || (keepFrameId && held.savedFrameId === keepFrameId)) return undefined;
+  RV.held = null;
+  return RV.post(`/api/review/items/${held.itemId}/release`);
+};
+
+RV.releaseFrame = function releaseFrame() {
+  const id = RV.openFrameId;
+  RV.openFrameId = null;
+  return id ? RV.post(`/api/review/frames/${id}/release`) : undefined;
+};
+
+RV.releaseAll = async function releaseAll() {
+  await Promise.all([RV.releaseHeld(), RV.releaseFrame()]);
+};
+
+// ---- the mode: whole frame (the default) or single boxes ------------------------
+// Remembered in this browser. Storage can be blocked (private windows,
+// strict settings), so every access is guarded and any failure means the
+// default.
+
+RV.MODE_KEY = "rv.mode";
+
+RV.mode = function mode() {
+  try {
+    if (window.localStorage.getItem(RV.MODE_KEY) === "single") return "single";
+  } catch (err) {
+    /* storage blocked: fall through to the default */
+  }
+  return "frame";
+};
+
+RV.setMode = function setMode(value) {
+  try {
+    window.localStorage.setItem(RV.MODE_KEY, value);
+  } catch (err) {
+    /* storage blocked: the default applies next time */
+  }
+};
+
+// ---- the next piece of work ------------------------------------------------------
+// The one place /api/review/next is called, so a box is never claimed
+// twice. A spot-check (item.pass 2; its item.lane is null) always goes to
+// the blind single-box view; any other box opens its whole frame with the
+// box selected, unless the volunteer chose single boxes.
+
+RV.next = async function next() {
+  const r = await RV.get(`/api/review/next?lane=${encodeURIComponent(RV.lane)}`);
+  if (!r.ok || !r.data.item) {
+    RV.held = null;
+    await RV.show("single", { result: r });
+    return;
+  }
+  const payload = r.data;
+  RV.held = { itemId: payload.item.id, savedFrameId: payload.box.saved_frame_id };
+  if (payload.item.pass !== 2 && RV.views.frame && RV.mode() === "frame") {
+    await RV.show("frame", { savedFrameId: payload.box.saved_frame_id,
+      selectEventId: payload.item.event_id, payload });
+  } else {
+    await RV.show("single", { payload });
+  }
 };
 
 RV.show = async function show(view, arg) {
   if (!RV.views[view]) return;
+  if (view !== "frame") RV.releaseFrame();
   for (const id of ["single", "frame", "browse"]) {
     const section = document.getElementById("rv-" + id);
     if (section) section.hidden = id !== view;
@@ -370,7 +437,7 @@ RV.show = async function show(view, arg) {
   RV.view = view;
   for (const b of document.querySelectorAll("#rv-nav button")) {
     const on = b.dataset.view ? b.dataset.view === view
-      : view === "single" && b.dataset.lane === RV.lane;
+      : view !== "browse" && b.dataset.lane === RV.lane;
     b.classList.toggle("on", on);
     b.setAttribute("aria-pressed", on ? "true" : "false");
   }
@@ -387,20 +454,29 @@ RV.refreshMine = async function refreshMine() {
 };
 
 window.addEventListener("pagehide", () => {
-  if (!RV.heldItemId) return;
-  fetch(`/api/review/items/${RV.heldItemId}/release`, {
-    method: "POST", keepalive: true, credentials: "same-origin", headers: RV.HEADERS, body: "{}",
-  });
+  const urls = [];
+  if (RV.held) urls.push(`/api/review/items/${RV.held.itemId}/release`);
+  if (RV.openFrameId) urls.push(`/api/review/frames/${RV.openFrameId}/release`);
+  for (const url of urls) {
+    fetch(url, { method: "POST", keepalive: true, credentials: "same-origin",
+      headers: RV.HEADERS, body: "{}" });
+  }
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
   for (const b of document.querySelectorAll("#rv-nav button")) {
     const view = b.dataset.view || "single";
     b.hidden = !RV.views[view];
-    b.addEventListener("click", () => {
-      RV.releaseHeld();
-      if (b.dataset.lane) RV.lane = b.dataset.lane;
-      RV.show(view);
+    b.addEventListener("click", async () => {
+      // Released -- and awaited -- before the queue is asked again, or
+      // /next could hand back a box from the frame just left as "held".
+      await RV.releaseAll();
+      if (b.dataset.lane) {
+        RV.lane = b.dataset.lane;
+        await RV.next();
+      } else {
+        await RV.show(view);
+      }
     });
   }
   if (!(await RV.loadCatalogue())) {
@@ -408,5 +484,5 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   await RV.refreshMine();
-  RV.show("single");
+  await RV.next();
 });

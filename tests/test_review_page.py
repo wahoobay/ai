@@ -169,3 +169,79 @@ async def test_the_page_carries_the_role_and_loads_the_scripts(rdb, rclient):
     assert "/static/review.css?v=" in html
     for name in SCRIPTS:
         assert f"/static/{name}?v=" in html
+
+
+# ---- spec amendment 2026-09-25: frame-first review -----------------------------
+
+def _read(name: str) -> str:
+    return (STATIC / name).read_text()
+
+
+def test_the_queue_is_asked_in_one_place_and_spot_checks_stay_single():
+    for name in ("review-single.js", "review-frame.js", "review-browse.js"):
+        assert "/api/review/next" not in _read(name), (
+            f"{name} must go through RV.next(), not call /api/review/next itself")
+    body = _function_body(_read("review-core.js"), "next")
+    assert re.search(r"\.item\.pass\s*!==\s*2", body), "RV.next() must send pass 2 to single view"
+    assert 'RV.mode() === "frame"' in body, "RV.next() must honour the chosen mode"
+
+
+def test_held_item_id_is_gone():
+    for name in SCRIPTS:
+        assert "heldItemId" not in _read(name), f"{name} still uses RV.heldItemId"
+
+
+def test_the_mode_preference_survives_blocked_storage():
+    core = _read("review-core.js")
+    for name in ("mode", "setMode"):
+        body = _function_body(core, name)
+        assert "localStorage" in body and "try" in body and "catch" in body, (
+            f"RV.{name}() must guard every storage access")
+    assert 'return "frame"' in _function_body(core, "mode"), "whole frame is the fallback"
+
+
+def test_opening_a_frame_keeps_the_box_the_queue_just_served():
+    assert re.search(r"RV\.releaseHeld\(\s*id\s*\)", _function_body(_read("review-frame.js"),
+                                                                      "enter"))
+    assert "held.savedFrameId === keepFrameId" in _function_body(_read("review-core.js"),
+                                                                   "releaseHeld")
+
+
+def test_a_frame_that_will_not_open_does_not_ask_the_queue_again():
+    body = _function_body(_read("review-frame.js"), "enter")
+    at = body.index("if (!r.ok)")
+    failure = _braces_from(body, body.index("{", at))
+    assert "RV.next(" not in failure and "arg.payload" in failure
+
+
+def test_reloading_a_frame_refreshes_the_claims():
+    body = _function_body(_read("review-frame.js"), "reload")
+    assert "RV.post(`/api/review/frames/${state.saved_frame_id}/open`)" in body
+
+
+def test_completing_a_frame_asks_for_the_next_one_outside_the_busy_guard():
+    body = _function_body(_read("review-frame.js"), "complete")
+    fin = body.index("finally")
+    assert "RV.next()" not in body[:fin]
+    tail = body[fin:]
+    assert "RV.next()" in tail[tail.index("}") + 1:], (
+        "complete() must call RV.next() after busy is reset, or enter() refuses it")
+
+
+def test_leaving_the_frame_view_releases_its_boxes():
+    body = _function_body(_read("review-core.js"), "show")
+    assert re.search(r'if \(view !== "frame"\) RV\.releaseFrame\(\)', body)
+
+
+def test_switching_lanes_releases_before_asking_the_queue():
+    core = _read("review-core.js")
+    marker = 'document.addEventListener("DOMContentLoaded"'
+    block = _braces_from(core, core.index("{", core.index(marker)))
+    assert "await RV.releaseAll()" in block and "RV.next()" in block
+
+
+def test_closing_the_tab_releases_the_frame_too():
+    core = _read("review-core.js")
+    marker = 'window.addEventListener("pagehide"'
+    block = _braces_from(core, core.index("{", core.index(marker)))
+    assert "keepalive: true" in block and "RV.openFrameId" in block and "RV.held" in block

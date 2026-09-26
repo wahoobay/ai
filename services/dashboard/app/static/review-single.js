@@ -30,23 +30,34 @@ RV.views.single = (() => {
   const kbd = (key) => RV.el("kbd", { text: key });
 
   async function enter(arg) {
-    if (arg.reopenEventId) return reopen(arg.reopenEventId);
-    return loadNext();
+    if (arg.reopenEventId) { await reopen(arg.reopenEventId); return; }
+    if (arg.payload) { showPayload(arg.payload); return; }
+    if (arg.result) { showResult(arg.result); return; }
+    await loadNext();
   }
 
   function message(text) {
     root().replaceChildren(RV.el("p", { class: "rv-empty", text }));
   }
 
+  function showPayload(payload) {
+    reopened = false;
+    current = payload;
+    render();
+  }
+
+  function showResult(r) {
+    current = null;
+    if (!r.ok) { message(r.data.error || "Couldn't load a box."); return; }
+    renderEmpty(r.data.pool);
+  }
+
+  // Everything that moves on goes through the shared router, which asks
+  // the queue once and picks the view (spec amendment 2026-09-25).
   async function loadNext() {
     reopened = false;
     message("Loading the next box…");
-    const r = await RV.get(`/api/review/next?lane=${encodeURIComponent(RV.lane)}`);
-    if (!r.ok) { current = null; message(r.data.error || "Couldn't load a box."); return; }
-    if (!r.data.item) { current = null; RV.heldItemId = null; renderEmpty(r.data.pool); return; }
-    current = r.data;
-    RV.heldItemId = current.item.id;
-    render();
+    await RV.next();
   }
 
   async function reopen(eventId) {
@@ -267,7 +278,7 @@ RV.views.single = (() => {
       if (r.status === 409 || r.status === 404
           || (r.status === 403 && r.data.error === "this box was not served to you")) {
         RV.toast(r.data.error || "That box isn't available any more. Here's the next one.");
-        RV.heldItemId = null;
+        RV.held = null;
         await loadNext();
         return;
       }
@@ -277,7 +288,7 @@ RV.views.single = (() => {
         if (r.data.error === "pick a species from the list") await RV.loadCatalogue();
         return;
       }
-      RV.heldItemId = null;
+      RV.held = null;
       await RV.refreshMine();
       await loadNext();
     } finally {
@@ -296,7 +307,7 @@ RV.views.single = (() => {
     try {
       if (!reopened && current.item.id) {
         await RV.post(`/api/review/items/${current.item.id}/skip`);
-        RV.heldItemId = null;
+        RV.held = null;
       }
       await loadNext();
     } finally {
@@ -312,8 +323,12 @@ RV.views.single = (() => {
     return Boolean(RV.views.frame && c && c.item.pass !== 2);
   }
 
-  function openFrame() {
-    if (frameAllowed(current)) RV.show("frame", { savedFrameId: current.box.saved_frame_id });
+  function openFrame(eventId) {
+    if (frameAllowed(current)) {
+      RV.setMode("frame");
+      RV.show("frame", { savedFrameId: current.box.saved_frame_id,
+        selectEventId: eventId || current.item.event_id });
+    }
   }
 
   function renderRecent() {

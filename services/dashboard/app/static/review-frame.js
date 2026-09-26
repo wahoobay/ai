@@ -8,12 +8,13 @@
 // busy guard (shared by every action here, the same pattern
 // review-single.js's submit()/skip()/reopen() use) keeps a held-down key
 // or a fast double click from firing two overlapping requests; entering
-// the view releases any single-box item the volunteer was still holding
-// (RV.releaseHeld), since claiming the frame's boxes supersedes it; and
-// "Looks right" asks for a life stage first when the catalogue lists the
-// model's guess only under specific stages, exactly as review-single.js's
-// acceptGuess() does, rather than round-tripping the server's 400 "choose
-// a life stage for <species>".
+// the view keeps a held box from this same frame (the one the queue just
+// served, or the single box the volunteer was on) and releases one held
+// from any other frame (spec amendment 2026-09-25); and "Looks right"
+// asks for a life stage first when the catalogue lists the model's guess
+// only under specific stages, exactly as review-single.js's acceptGuess()
+// does, rather than round-tripping the server's 400 "choose a life stage
+// for <species>".
 "use strict";
 
 RV.views.frame = (() => {
@@ -43,30 +44,63 @@ RV.views.frame = (() => {
 
   async function enter(arg) {
     const id = arg.savedFrameId || (state && state.saved_frame_id);
-    if (!id) { RV.show("single"); return; }
+    if (!id) { await RV.next(); return; }
     if (busy) return;
     busy = true;
     try {
-      // Claiming this frame's boxes supersedes whatever single-box item
-      // the volunteer was still holding when they clicked "Whole frame".
-      RV.releaseHeld();
+      // Keep the claim on a box held from this same frame (the one the
+      // queue just served, or the single box the volunteer was on); a box
+      // held from any other frame is released as before (spec amendment
+      // 2026-09-25).
+      RV.releaseHeld(id);
+      if (RV.openFrameId && RV.openFrameId !== id) RV.releaseFrame();
       const r = await RV.post(`/api/review/frames/${id}/open`);
-      if (!r.ok) { RV.toast(r.data.error || "Couldn't open that frame."); RV.show("single"); return; }
+      if (!r.ok) {
+        RV.toast(r.data.error || "Couldn't open that frame.");
+        // Never ask the queue again from here: a frame that can't be
+        // opened would be served straight back. Show the served box on
+        // its own instead, or the error.
+        RV.show("single", arg.payload ? { payload: arg.payload } : { result: r });
+        return;
+      }
       state = r.data;
+      RV.held = null;            // the frame's claims now include it
+      RV.openFrameId = id;
       drawing = false;
-      selectFirst();
+      if (!(arg.selectEventId && selectBox(arg.selectEventId))) selectFirst();
       render();
     } finally {
       busy = false;
     }
   }
 
+  function selectBox(eventId) {
+    const b = modelBox(eventId);
+    if (!b) return false;
+    selected = { kind: "model", id: b.event_id, bbox: b.bbox.slice(), original: b.bbox.slice() };
+    hintName = null;
+    notSure = false;
+    return true;
+  }
+
+  // Re-opening (not a plain GET) refreshes this volunteer's claims on the
+  // frame each time an answer reloads it, so they don't lapse while
+  // someone works through a busy frame (spec amendment 2026-09-25).
   async function reload(keepSelection) {
-    const r = await RV.get(`/api/review/frames/${state.saved_frame_id}`);
+    const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/open`);
     if (!r.ok) { RV.toast(r.data.error || "Couldn't refresh the frame."); return; }
     state = r.data;
     if (!keepSelection) selectFirst();
     render();
+  }
+
+  // F / "Single boxes": switch modes for good (remembered in this browser),
+  // give this frame's boxes back without skipping them, and let the queue
+  // pick the next single box.
+  async function toSingle() {
+    RV.setMode("single");
+    await RV.releaseFrame();
+    await RV.next();
   }
 
   function selectFirst() {
@@ -373,8 +407,8 @@ RV.views.frame = (() => {
   function render() {
     root().replaceChildren(
       RV.el("div", { class: "rv-frame-top" },
-        RV.el("button", { type: "button", class: "rv-link", onclick: () => RV.show("single") },
-          "← Back to single boxes ", kbd("F")),
+        RV.el("button", { type: "button", class: "rv-link", onclick: toSingle },
+          "Single boxes ", kbd("F")),
         RV.el("span", { class: "rv-muted", text: `${state.source_name} · ${new Date(state.ts).toLocaleString()}` }),
         RV.el("button", { type: "button", class: drawing ? "on" : "", disabled: Boolean(state.complete), onclick: toggleDraw },
           drawing ? "Drawing: drag on the frame (Esc to cancel) " : "Draw a box ", kbd("D"))),
@@ -447,20 +481,25 @@ RV.views.frame = (() => {
   async function complete() {
     if (busy) return;
     busy = true;
+    let done = false;
     try {
       const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/complete`);
       if (!r.ok) { RV.toast(r.data.error || "The frame isn't complete yet."); await reload(true); return; }
       RV.toast("Frame marked complete. Thank you!");
-      RV.show("single");
+      RV.openFrameId = null;     // every box is answered: nothing left to release
+      done = true;
     } finally {
       busy = false;
     }
+    // Outside the busy guard: RV.next() may re-enter this view, and
+    // enter() refuses while busy.
+    if (done) await RV.next();
   }
 
   RV.onKey("frame", (key) => {
     if (!state) return false;
     const k = key.length === 1 ? key.toLowerCase() : key;
-    if (k === "f") { RV.show("single"); return true; }
+    if (k === "f") { toSingle(); return true; }
     if (k === "d") { toggleDraw(); return true; }
     if (k === "Escape") {
       if (drawing) { drawing = false; render(); } else if (selected && selected.original) {
