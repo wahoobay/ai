@@ -1,54 +1,84 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-palette="blue" data-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Accounts — Wahoo Bay admin</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>Accounts — Wahoo Bay</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/theme.css?v={{ asset_version }}">
+  <script src="/static/theme.js?v={{ asset_version }}"></script>
+  <script src="/static/time-et.js?v={{ asset_version }}" defer></script>
 </head>
-<body>
-  <h1>Accounts</h1>
-  <p>Signed in as {{ me }}.</p>
+<body class="auth-page">
+  <header class="auth-top">
+    <h1><a href="/">Wahoo Bay · Live Fish ID</a></h1>
+    <nav class="admin-nav" aria-label="Pages">
+      <a href="/">Dashboard</a>
+      <a href="/review">Review</a>
+      <span class="admin-me">Signed in as <b>{{ me }}</b></span>
+    </nav>
+    <div id="theme-controls" class="theme-controls"></div>
+  </header>
+  <main class="admin-page">
+    <p class="auth-eyebrow">Administration</p>
+    <h1>Accounts</h1>
+    <p class="auth-sub">Approve new volunteers, change what each account can do, and manage who is signed in.</p>
+    <p class="admin-error" id="admin-error" role="alert" hidden></p>
 
-  <h2>Awaiting approval</h2>
-  <table id="pending-table"><thead><tr>
-    <th>Username</th><th>Name</th><th>Email</th><th>Verified</th>
-    <th>Registered</th><th>Approve as</th></tr></thead><tbody></tbody></table>
+    <section class="admin-card" aria-labelledby="pending-h">
+      <div class="admin-card-head">
+        <h2 id="pending-h">Awaiting approval</h2><span class="admin-count" id="pending-count"></span>
+      </div>
+      <div class="admin-table-wrap">
+        <table id="pending-table"><thead><tr>
+          <th>Name</th><th>Email</th><th>Email confirmed</th><th>Registered</th><th>Approve as</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </section>
 
-  <h2>All accounts</h2>
-  <table id="users-table"><thead><tr>
-    <th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th>
-    <th>Last login</th><th></th><th>Reset link</th></tr></thead><tbody></tbody></table>
+    <section class="admin-card" aria-labelledby="users-h">
+      <div class="admin-card-head">
+        <h2 id="users-h">All accounts</h2><span class="admin-count" id="users-count"></span>
+      </div>
+      <div class="admin-table-wrap">
+        <table id="users-table"><thead><tr>
+          <th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Actions</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </section>
 
-  <h2>Active sessions</h2>
-  <table id="sessions-table"><thead><tr>
-    <th>User</th><th>Started</th><th>Last seen</th><th>IP</th><th></th>
-  </tr></thead><tbody></tbody></table>
+    <section class="admin-card" aria-labelledby="sessions-h">
+      <div class="admin-card-head">
+        <h2 id="sessions-h">Signed in now</h2><span class="admin-count" id="sessions-count"></span>
+      </div>
+      <div class="admin-table-wrap">
+        <table id="sessions-table"><thead><tr>
+          <th>Account</th><th>Signed in</th><th>Last seen</th><th>IP address</th><th></th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+  </main>
 
 <script>
+// Everything from the server is set as text (textContent), never as markup.
 const CSRF = {"Content-Type": "application/json", "X-Requested-With": "wahoobay"};
-const post = (url, body) => fetch(url, {
-  method: "POST", headers: CSRF, credentials: "same-origin",
-  body: JSON.stringify(body || {}),
-}).then(r => r.json());
-
 const ROLES = ["viewer", "reviewer", "admin"];
+const errorBox = document.getElementById("admin-error");
 
-function roleSelect(current) {
-  const s = document.createElement("select");
-  for (const r of ROLES) {
-    const o = document.createElement("option");
-    o.value = r; o.textContent = r; o.selected = (r === current);
-    s.append(o);
-  }
-  return s;
+function showError(message) {
+  errorBox.textContent = message || "";
+  errorBox.hidden = !message;
 }
 
-function cell(row, text) {
-  const td = document.createElement("td");
-  td.textContent = text == null ? "" : String(text);
-  row.append(td);
-  return td;
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: "POST", headers: CSRF, credentials: "same-origin",
+    body: JSON.stringify(body || {}),
+  });
+  let data = {};
+  try { data = await r.json(); } catch (err) { data = {}; }
+  if (!r.ok) showError(data.error || data.detail || `That didn't work (${r.status}).`);
+  return data;
 }
 
 async function getJSON(url) {
@@ -62,6 +92,56 @@ async function getJSON(url) {
   return r.json();
 }
 
+// Wahoo Bay's own time, US Eastern (time-et.js); "—" for never.
+const when = (iso) => (iso ? fmtET(iso, "short") : "—");
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = String(text);
+  return node;
+}
+
+function cell(row, ...children) {
+  const td = document.createElement("td");
+  td.append(...children);
+  row.append(td);
+  return td;
+}
+
+function who(u) {
+  const box = el("div", "admin-who");
+  box.append(el("span", "admin-name", u.display_name || u.username),
+    el("span", "admin-username", "@" + u.username));
+  return box;
+}
+
+function button(label, kind, onclick) {
+  const b = el("button", "admin-btn" + (kind ? " " + kind : ""), label);
+  b.type = "button";
+  b.onclick = onclick;
+  return b;
+}
+
+function roleSelect(current) {
+  const s = el("select", "admin-select");
+  for (const r of ROLES) {
+    const o = el("option", null, r);
+    o.value = r;
+    o.selected = (r === current);
+    s.append(o);
+  }
+  return s;
+}
+
+function emptyRow(tbody, columns, text) {
+  const tr = document.createElement("tr");
+  const td = el("td", "admin-empty", text);
+  td.colSpan = columns;
+  tr.append(td);
+  tbody.replaceChildren(tr);
+}
+
 async function refresh() {
   const [pending, users, sessions] = await Promise.all([
     getJSON("/api/admin/users?status=pending"),
@@ -70,77 +150,90 @@ async function refresh() {
   ]);
 
   const pb = document.querySelector("#pending-table tbody");
-  pb.innerHTML = "";
-  for (const u of pending) {
-    const tr = document.createElement("tr");
-    cell(tr, u.username); cell(tr, u.display_name); cell(tr, u.email);
-    cell(tr, u.email_verified_at ? "yes" : "no"); cell(tr, u.created_at);
-    const td = document.createElement("td");
-    const sel = roleSelect("reviewer");
-    const btn = document.createElement("button");
-    btn.textContent = "Approve";
-    btn.onclick = async () => {
-      await post(`/api/admin/users/${u.id}/approve`, {role: sel.value});
-      refresh();
-    };
-    td.append(sel, btn); tr.append(td); pb.append(tr);
+  document.getElementById("pending-count").textContent = pending.length ? String(pending.length) : "";
+  if (!pending.length) {
+    emptyRow(pb, 5, "No one is waiting for approval.");
+  } else {
+    pb.replaceChildren(...pending.map((u) => {
+      const tr = document.createElement("tr");
+      cell(tr, who(u));
+      cell(tr, el("span", "admin-email", u.email));
+      cell(tr, el("span", u.email_verified_at ? "admin-yes" : "admin-muted",
+        u.email_verified_at ? "yes" : "not yet"));
+      cell(tr, el("span", "admin-muted", when(u.created_at)));
+      const sel = roleSelect("reviewer");
+      const approve = button("Approve", "primary", async () => {
+        const data = await post(`/api/admin/users/${u.id}/approve`, {role: sel.value});
+        if (!data.error && !data.detail) showError("");
+        refresh();
+      });
+      const box = el("div", "admin-actions");
+      box.append(sel, approve);
+      cell(tr, box);
+      return tr;
+    }));
   }
 
   const ub = document.querySelector("#users-table tbody");
-  ub.innerHTML = "";
-  for (const u of users) {
+  document.getElementById("users-count").textContent = String(users.length);
+  ub.replaceChildren(...users.map((u) => {
     const tr = document.createElement("tr");
-    cell(tr, u.username); cell(tr, u.display_name); cell(tr, u.email);
-    const roleTd = document.createElement("td");
+    cell(tr, who(u));
+    cell(tr, el("span", "admin-email", u.email));
     const sel = roleSelect(u.role);
-    sel.onchange = () => post(`/api/admin/users/${u.id}/role`, {role: sel.value});
-    roleTd.append(sel); tr.append(roleTd);
-    cell(tr, u.status); cell(tr, u.last_login_at);
-    const actTd = document.createElement("td");
-    const off = document.createElement("button");
-    off.textContent = "Deactivate";
-    off.onclick = async () => {
+    sel.onchange = async () => {
+      await post(`/api/admin/users/${u.id}/role`, {role: sel.value});
+      refresh();
+    };
+    cell(tr, sel);
+    cell(tr, el("span", `admin-pill status-${u.status}`, u.status));
+    cell(tr, el("span", "admin-muted", when(u.last_login_at)));
+
+    const actions = el("div", "admin-actions");
+    const off = button(u.status === "disabled" ? "Deactivated" : "Deactivate", "danger", async () => {
       await post(`/api/admin/users/${u.id}/deactivate`, {});
       refresh();
-    };
-    actTd.append(off); tr.append(actTd);
-
-    // Manual mail backend never actually sends the verification/reset
-    // email (see docs/operations.md) — this is the out-of-band path: mint
-    // a fresh link and show it here for the admin to copy and pass on
-    // themselves. Always textContent, never innerHTML — the link contains
-    // a bearer-style token and must never be parsed as markup.
-    const resetTd = document.createElement("td");
-    const resetBtn = document.createElement("button");
-    resetBtn.textContent = "Reset link";
-    const resetOut = document.createElement("span");
-    resetOut.className = "reset-link-out";
-    resetBtn.onclick = async () => {
+    });
+    off.disabled = u.status === "disabled";
+    // The out-of-band path when an email doesn't arrive: mint a fresh reset
+    // link and show it here for the admin to pass on. The link carries a
+    // bearer-style token, so it is set as text and never logged.
+    const linkOut = el("code", "admin-link");
+    linkOut.hidden = true;
+    const reset = button("Reset link", null, async () => {
       const data = await post(`/api/admin/users/${u.id}/reset-link`, {});
-      resetOut.textContent = data.link || data.error || "failed";
-    };
-    resetTd.append(resetBtn, resetOut); tr.append(resetTd);
-
-    ub.append(tr);
-  }
+      linkOut.textContent = data.link || data.error || "failed";
+      linkOut.hidden = false;
+    });
+    actions.append(off, reset);
+    const td = cell(tr, actions);
+    td.append(linkOut);
+    return tr;
+  }));
 
   const sb = document.querySelector("#sessions-table tbody");
-  sb.innerHTML = "";
-  for (const s of sessions) {
-    const tr = document.createElement("tr");
-    cell(tr, s.username); cell(tr, s.created_at); cell(tr, s.last_seen_at); cell(tr, s.ip);
-    const td = document.createElement("td");
-    const btn = document.createElement("button");
-    btn.textContent = "Revoke";
-    btn.onclick = async () => {
-      await post(`/api/admin/sessions/${s.id}/revoke`, {});
-      refresh();
-    };
-    td.append(btn); tr.append(td); sb.append(tr);
+  document.getElementById("sessions-count").textContent = String(sessions.length);
+  if (!sessions.length) {
+    emptyRow(sb, 5, "No one is signed in.");
+  } else {
+    sb.replaceChildren(...sessions.map((s) => {
+      const tr = document.createElement("tr");
+      cell(tr, el("span", "admin-name", s.username));
+      cell(tr, el("span", "admin-muted", when(s.created_at)));
+      cell(tr, el("span", "admin-muted", when(s.last_seen_at)));
+      cell(tr, el("code", "admin-ip", s.ip || "—"));
+      cell(tr, button("Revoke", "danger", async () => {
+        await post(`/api/admin/sessions/${s.id}/revoke`, {});
+        refresh();
+      }));
+      return tr;
+    }));
   }
 }
 
-document.addEventListener("DOMContentLoaded", refresh);
+document.addEventListener("DOMContentLoaded", () => {
+  refresh().catch((err) => showError(`Couldn't load the accounts: ${err.message}`));
+});
 </script>
 </body>
 </html>

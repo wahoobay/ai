@@ -12,6 +12,7 @@ APP = Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app"
 PALETTES = ("blue", "green", "reef", "sand")
 MODES = ("light", "dark")
 THEMED_PAGES = ["review.html", "login.html", "register.html", "forgot_password.html",
+                "users_admin.html",
                 "reset_password.html"]
 # (text, background) token pairs that carry text somewhere on these pages
 PAIRS = [("ink", "bg"), ("ink", "panel"), ("ink", "note-bg"), ("ink", "input-bg"),

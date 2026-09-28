@@ -85,7 +85,11 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
 
     @router.get("/admin/users.html", response_class=HTMLResponse)
     async def users_page(request: Request, user=Depends(admin_only)):
-        return templates.TemplateResponse(request, "users_admin.html", {"me": user.username})
+        version = state.get("asset_version")
+        return templates.TemplateResponse(request, "users_admin.html", {
+            "me": user.username,
+            "asset_version": version() if version else "",
+        })
 
     @router.get("/api/admin/users")
     async def list_users(status: str | None = None, user=Depends(admin_only)):
