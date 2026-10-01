@@ -69,3 +69,15 @@ async def test_old_backups_are_pruned_from_both_places(rdb, tmp_path):
         assert not (tmp_path / d / "wahoobay-20200101-000000.dump").exists()
         assert (tmp_path / d / "notes.txt").exists(), "only backup files are pruned"
         assert len(list((tmp_path / d).glob("wahoobay-*.dump"))) == 1, "tonight's dump stays"
+
+
+async def test_by_default_there_is_no_second_copy(rdb, tmp_path):
+    # 2026-10-01: the home directory is on the nearly full root disk and must
+    # hold no project data, so a copy is made only when BACKUP_COPY_DIR is set.
+    env = {k: v for k, v in os.environ.items() if k != "BACKUP_COPY_DIR"}
+    env.update(BACKUP_DATABASE_URL=TEST_DSN, BACKUP_DIR=str(tmp_path / "main"))
+    r = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.rstrip().endswith(str(tmp_path / "main")), "no '+ <copy>' in the log line"
+    assert "beegfs" not in SCRIPT.read_text()

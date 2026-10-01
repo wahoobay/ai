@@ -887,11 +887,12 @@ keeps what can't be re-derived from the cameras:
   usable even if `detection_events` itself were lost.
 
 Files are mode 0600 (they hold emails and password hashes). They're
-written to `/raid/scratch/dzimmerman2021/backups/wahoobay-db/` and
-copied to `/mnt/beegfs/home/dzimmerman2021/backups/wahoobay-db/` on the
-DGX's other disk array. Files older than 30 days are pruned from both.
-Both copies are on this machine; an off-machine copy waits for the cloud
-move. Run it by hand at any time: `scripts/dev/backup_db.sh`.
+written to `/raid/scratch/dzimmerman2021/backups/wahoobay-db/`, and files
+older than 30 days are pruned. There is no second copy by default: the home
+directory (`/mnt/beegfs/home/...`) is on the DGX's nearly full root disk and
+must not hold project data (2026-10-01). Set `BACKUP_COPY_DIR` to add a
+copy elsewhere; an off-machine copy waits for the cloud move. Run it by hand
+at any time: `scripts/dev/backup_db.sh`.
 
 To restore:
 

@@ -9,8 +9,10 @@
 #   labels-<stamp>.csv.gz   every verdict joined with its detection and saved
 #                           frame, so volunteers' work stays usable even if
 #                           detection_events itself were lost.
-# Files are 0600 (emails, password hashes). A copy goes to a second disk, and
-# files older than BACKUP_KEEP_DAYS are pruned from both. One log line per run.
+# Files are 0600 (emails, password hashes). Set BACKUP_COPY_DIR to also copy
+# them somewhere else; by default there is no second copy (the home directory
+# is on the nearly full root disk and must hold no data, 2026-10-01). Files
+# older than BACKUP_KEEP_DAYS are pruned. One log line per run.
 #
 # Cron (the user's crontab): 30 2 * * * <repo>/scripts/dev/backup_db.sh >> <repo>/logs/app/backup.log 2>&1
 # Overrides (tests): BACKUP_DATABASE_URL, BACKUP_DIR, BACKUP_COPY_DIR (empty: no copy),
@@ -26,7 +28,7 @@ else
   DSN="$(grep '^DATABASE_URL=' "$REPO/.env" | cut -d= -f2- | tr -d "\"'")"
 fi
 DIR="${BACKUP_DIR:-/raid/scratch/dzimmerman2021/backups/wahoobay-db}"
-COPY="${BACKUP_COPY_DIR-/mnt/beegfs/home/dzimmerman2021/backups/wahoobay-db}"
+COPY="${BACKUP_COPY_DIR:-}"
 KEEP="${BACKUP_KEEP_DAYS:-30}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
