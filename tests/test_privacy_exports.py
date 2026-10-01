@@ -1,5 +1,8 @@
-"""Public exports must not publish who labelled what (spec §12.1), and a
-box's frame is the one captured at the box's own timestamp (spec §12.3)."""
+"""Non-admin views and exports must not publish who labelled what (spec
+§12.1), and a box's frame is the one captured at the box's own timestamp
+(spec §12.3). Since 2026-09-30 the whole site is behind sign-in, so the
+"public" these rules protect against is any signed-in account that isn't an
+admin; the tests use a viewer, the least privileged one."""
 from __future__ import annotations
 
 import csv
@@ -38,8 +41,14 @@ def _header(text: str) -> set[str]:
     return set(text.splitlines()[0].split(","))
 
 
-async def test_anonymous_labeled_corrections_has_labels_but_no_identity(rdb, rclient, tmp_path):
+async def _as_viewer(rdb, rclient) -> None:
+    await make_user(rdb, "vic", role="viewer")
+    login(rclient, "vic")
+
+
+async def test_a_viewers_labeled_corrections_have_labels_but_no_identity(rdb, rclient, tmp_path):
     await _seed_named_verdict(rdb, tmp_path)
+    await _as_viewer(rdb, rclient)
     r = rclient.get("/api/export/labeled_corrections.csv")
     assert r.status_code == 200
     header = _header(r.text)
@@ -58,8 +67,9 @@ async def test_admin_labeled_corrections_includes_identity(rdb, rclient, tmp_pat
     assert "Alice Example" in r.text
 
 
-async def test_anonymous_corrections_csv_and_list_hide_identity(rdb, rclient, tmp_path):
+async def test_a_viewers_corrections_csv_and_list_hide_identity(rdb, rclient, tmp_path):
     await _seed_named_verdict(rdb, tmp_path)
+    await _as_viewer(rdb, rclient)
     csv_text = rclient.get("/api/export/corrections.csv").text
     assert not (IDENTITY & _header(csv_text)) and "Alice Example" not in csv_text
     rows = rclient.get("/api/corrections").json()
@@ -68,6 +78,7 @@ async def test_anonymous_corrections_csv_and_list_hide_identity(rdb, rclient, tm
 
 async def test_filtering_by_reviewer_is_admin_only(rdb, rclient, tmp_path):
     await _seed_named_verdict(rdb, tmp_path)
+    await _as_viewer(rdb, rclient)
     assert rclient.get("/api/corrections?reviewer=Alice%20Example").status_code == 403
     assert rclient.get("/api/export/corrections.csv?reviewer=x").status_code == 403
     await make_user(rdb, "boss", role="admin")
@@ -88,7 +99,7 @@ def _app_state(client) -> dict:
 
 async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(rdb, rclient, tmp_path,
                                                                          monkeypatch):
-    """Final review C1: GET /api/celebrities/{id} is public, and the review
+    """Final review C1: GET /api/celebrities/{id} is open to every account, and the review
     page tags named individuals with reviewer = the volunteer's display
     name. Nobody has opted in to public credit (spec §1), so the gallery
     drops the key for everyone but admins (spec §12.1: removed, not
@@ -108,7 +119,7 @@ async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(rdb, rcl
     # a signed-in volunteer is not an admin either
     mine = rclient.get(url).json()["gallery"]
     assert mine and all("reviewer" not in g for g in mine)
-    rclient.cookies.clear()
+    await _as_viewer(rdb, rclient)
     r = rclient.get(url)
     assert r.status_code == 200
     gallery = r.json()["gallery"]
@@ -128,6 +139,7 @@ async def test_roi_uses_the_frame_saved_at_the_detections_own_timestamp(rdb, rcl
                               boxes=[{"bbox": [100, 100, 300, 250]}])
     await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=2), frame_id=500,
                      color=(10, 220, 10), boxes=[{"bbox": [100, 100, 300, 250]}])
+    await _as_viewer(rdb, rclient)
     r = rclient.get(f"/api/detections/{before['event_ids'][0]}/roi.jpg")
     assert r.status_code == 200
     red, green, _ = Image.open(io.BytesIO(r.content)).convert("RGB").resize((1, 1)).getpixel((0, 0))
@@ -138,6 +150,7 @@ async def test_detection_whose_own_frame_was_not_saved_gets_no_image(rdb, rclien
     await seed_frame(rdb, tmp_path, ts=T0, frame_id=500, boxes=[{"bbox": [1, 1, 50, 50]}])
     orphan = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=1), frame_id=500,
                               save=False, boxes=[{"bbox": [1, 1, 50, 50]}])
+    await _as_viewer(rdb, rclient)
     assert rclient.get(f"/api/detections/{orphan['event_ids'][0]}/roi.jpg").status_code == 404
     assert rclient.get(f"/api/detections/{orphan['event_ids'][0]}/frame.jpg").status_code == 404
 
@@ -149,6 +162,7 @@ async def test_labeled_corrections_frame_path_matches_the_timestamp(rdb, rclient
                              boxes=[{"bbox": [1, 1, 50, 50]}])
     uid = await make_user(rdb, "alice")
     await add_verdict(rdb, before["event_ids"][0], uid, not_a_fish=True)
+    await _as_viewer(rdb, rclient)
     text = rclient.get("/api/export/labeled_corrections.csv").text
     assert before["image_path"] in text and after["image_path"] not in text
 
@@ -171,6 +185,7 @@ async def _spot_pending(rdb, tmp_path, status="open"):
 async def test_a_pending_spot_checks_first_answer_stays_out_of_public_lists(rdb, rclient,
                                                                            tmp_path, status):
     event, spot = await _spot_pending(rdb, tmp_path, status)
+    await _as_viewer(rdb, rclient)
     assert event not in {r["event_id"] for r in rclient.get("/api/corrections").json()}
     assert event not in _csv_events(rclient.get("/api/export/corrections.csv").text)
     assert event not in _csv_events(rclient.get("/api/export/labeled_corrections.csv").text)
@@ -178,7 +193,7 @@ async def test_a_pending_spot_checks_first_answer_stays_out_of_public_lists(rdb,
     login(rclient, "boss")
     assert event in {r["event_id"] for r in rclient.get("/api/corrections").json()}
     assert event in _csv_events(rclient.get("/api/export/corrections.csv").text)
-    rclient.cookies.clear()
+    login(rclient, "vic")
     async with rdb.connection() as conn:
         await conn.execute("UPDATE review_items SET status = 'done' WHERE id = %s", (spot,))
     assert event in {r["event_id"] for r in rclient.get("/api/corrections").json()}
@@ -188,6 +203,7 @@ async def test_cant_identify_shows_as_such_in_public_outputs(rdb, rclient, tmp_p
     frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250]}])
     await add_verdict(rdb, frame["event_ids"][0], await make_user(rdb, "alice"),
                       unidentifiable=True)
+    await _as_viewer(rdb, rclient)
     [row] = rclient.get("/api/corrections").json()
     assert row["unidentifiable"] is True and row["corrected_name"] is None
     [csv_row] = list(csv.DictReader(io.StringIO(
@@ -211,6 +227,7 @@ async def test_the_celebrity_gallery_counts_each_event_once_and_hides_a_pending_
                 """INSERT INTO detection_corrections (event_id, corrected_name, user_id,
                                                       celebrity_id)
                    VALUES (%s, 'Acanthurus coeruleus', %s, %s)""", (event, alice, bobby["id"]))
+    await _as_viewer(rdb, rclient)
     detail = rclient.get(f"/api/celebrities/{bobby['id']}").json()
     assert detail["sightings"] == 1 and [g["event_id"] for g in detail["gallery"]] == [event]
     [listed] = rclient.get("/api/celebrities").json()["celebrities"]
@@ -237,6 +254,7 @@ async def test_the_species_gallery_uses_the_frame_saved_at_the_detections_own_ti
     # frame_id restarts with every worker run: the same camera and frame_id
     # an hour later is another frame, with no Seriola in it
     await seed_frame(rdb, tmp_path, ts=now - timedelta(hours=1), frame_id=7, boxes=[])
+    await _as_viewer(rdb, rclient)
     r = rclient.get("/api/species/Seriola%20zonata/profile?hours=24")
     assert r.status_code == 200, r.text
     frames = r.json()["recent_frames"]
@@ -255,6 +273,7 @@ async def _alert(rdb):
 
 async def test_the_alert_acknowledger_is_named_to_admins_only(rdb, rclient):
     await _alert(rdb)
+    await _as_viewer(rdb, rclient)
     r = rclient.get("/api/alerts/active")
     assert r.status_code == 200 and r.json()
     assert all("acknowledged_by" not in a for a in r.json()) and "Boss Person" not in r.text

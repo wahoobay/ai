@@ -70,40 +70,39 @@ async function renderIdentityChip() {
     s.className = cls;
     return s;
   };
+  // The whole site is behind sign-in (2026-09-30), so a page with this chip
+  // always has a signed-in, approved account behind it.
+  if (!me.authenticated) return;
   slot.hidden = false;
-  if (!me.authenticated) {
-    // Signed out: the way in for reviewers (demo walk-through 2026-09-26).
-    // Log in returns to the review tool.
-    slot.classList.add("signed-out");
-    slot.replaceChildren(span("Reviewers:", "chip-label"), link("/register", "Sign up"),
-      span("·", "chip-sep"), link("/login?next=/review", "Log in"));
-    return;
-  }
-  slot.classList.remove("signed-out");
   const parts = [];
-  const canReview = me.status === "active" && (me.role === "reviewer" || me.role === "admin");
+  const active = me.status === "active";
+  const canReview = active && (me.role === "reviewer" || me.role === "admin");
   if (canReview && !window.location.pathname.startsWith("/review")) {
     parts.push(link("/review", "Review fish →", "chip-review"));
   }
+  if (active && me.role === "admin") parts.push(link("/admin/users.html", "Accounts", "chip-admin"));
+  parts.push(span(`${me.display_name} (${me.role})`, "chip-name"), signOutButton("chip-signout"));
+  slot.replaceChildren(...parts);
+}
+
+function signOutButton(className) {
   const out = document.createElement("button");
   out.type = "button";
-  out.className = "chip-signout";
+  if (className) out.className = className;
   out.textContent = "Sign out";
-  out.addEventListener("click", async () => {
-    await postJSON("/api/auth/logout", {});
-    window.location.reload();
-  });
-  parts.push(span(`${me.display_name} (${me.role})`, "chip-name"), out);
-  slot.replaceChildren(...parts);
+  out.addEventListener("click", signOut);
+  return out;
+}
 
-  if (me.status === "pending") {
-    const banner = document.createElement("div");
-    banner.className = "pending-banner";
-    banner.textContent =
-      "Your account is awaiting administrator approval. You can browse, " +
-      "but not yet submit corrections.";
-    document.body.prepend(banner);
-  }
+async function signOut() {
+  await postJSON("/api/auth/logout", {});
+  window.location.href = "/login";
+}
+
+// The waiting and no-access pages (notice.html) carry their own button.
+function wireSignOutButton() {
+  const button = document.getElementById("signout-button");
+  if (button) button.addEventListener("click", signOut);
 }
 
 function wireRegisterForm() {
@@ -174,4 +173,5 @@ document.addEventListener("DOMContentLoaded", () => {
   autoVerifyEmail();
   wireForgotForm();
   wireResetForm();
+  wireSignOutButton();
 });

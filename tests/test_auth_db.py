@@ -215,8 +215,10 @@ def test_needs_touch_respects_throttle():
 
 def test_effective_role_pins_pending_and_disabled():
     assert effective_role("active", "admin") == "admin"
-    assert effective_role("pending", "admin") == "viewer"
-    assert effective_role("pending", "reviewer") == "viewer"
+    # Since 2026-09-30 the site is behind sign-in and anyone can register,
+    # so an account waiting for approval gets nothing, not viewer access.
+    assert effective_role("pending", "admin") == "pending"
+    assert effective_role("pending", "reviewer") == "pending"
     assert effective_role("disabled", "admin") == "none"
 
 
@@ -1093,11 +1095,13 @@ async def test_admin_deactivate_nonexistent_user_returns_404_and_writes_no_audit
 
 
 @pytest.mark.anyio
-async def test_public_reads_still_work_anonymously(pool, client):
-    # The regression test this whole design most needs: the public fish
-    # view is a stated deliverable and must not require a login.
-    for path in ("/", "/api/species_counts", "/api/auth/me"):
-        assert client.get(path).status_code == 200
+async def test_signed_out_only_the_sign_in_pages_answer(pool, client):
+    # Reversed 2026-09-30: Wahoo Bay asked for the whole site behind sign-in.
+    # tests/test_site_gate.py walks every route; this pins the headline.
+    for path in ("/login", "/register", "/forgot-password", "/api/auth/me"):
+        assert client.get(path).status_code == 200, path
+    for path in ("/", "/api/species_counts", "/api/export/README.md"):
+        assert client.get(path).status_code == 401, path
 
 
 @pytest.mark.anyio

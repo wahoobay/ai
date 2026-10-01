@@ -1,7 +1,8 @@
-"""The main dashboard's way in for reviewers (demo walk-through 2026-09-26):
-signed out, the header offers "Reviewers: Sign up · Log in"; signed in as an
-active reviewer or admin, a "Review fish" link to /review. Static checks: no
-browser harness in this repo."""
+"""The header's account chip. Signed in as an active reviewer or admin, a
+"Review fish" link to /review (demo walk-through 2026-09-26); admins also
+get "Accounts". Since 2026-09-30 the whole site is behind sign-in, so the
+chip has nothing to show a signed-out visitor. Static checks: no browser
+harness in this repo."""
 from __future__ import annotations
 
 import re
@@ -22,11 +23,16 @@ def _chip() -> str:
     raise AssertionError("unbalanced braces")
 
 
-def test_signed_out_visitors_get_sign_up_and_log_in():
+def test_signed_out_the_chip_shows_nothing():
     body = _chip()
-    signed_out = body[body.index("if (!me.authenticated)"):body.index("return;", body.index("if (!me.authenticated)"))]
-    assert '"/register"' in signed_out and '"/login?next=/review"' in signed_out
-    assert '"Reviewers:"' in signed_out
+    assert "if (!me.authenticated) return;" in body
+    assert body.index("if (!me.authenticated) return;") < body.index("slot.hidden = false")
+    assert '"/register"' not in body
+
+
+def test_admins_get_a_link_to_the_accounts_page():
+    body = _chip()
+    assert re.search(r'active && me\.role === "admin"\) parts\.push\(link\("/admin/users\.html", "Accounts"', body)
 
 
 def test_active_reviewers_and_admins_get_a_review_link_except_on_review():
@@ -43,6 +49,5 @@ def test_the_chip_builds_nodes_not_markup():
 
 def test_the_chip_is_styled_like_the_dashboard():
     css = (STATIC / "style.css").read_text()
-    for selector in ("#identity-chip.signed-out", "#identity-chip .chip-review",
-                     "#identity-chip .chip-signout"):
+    for selector in ("#identity-chip .chip-review", "#identity-chip .chip-signout"):
         assert re.search(re.escape(selector) + r"\s*\{", css), f"style.css needs {selector}"

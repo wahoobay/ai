@@ -1455,11 +1455,7 @@ li.empty { color: var(--muted); font-style: italic; }
    sign-in pages; the fallbacks are the dashboard's own palette. */
 #identity-chip a { color: var(--accent); text-decoration: none; }
 #identity-chip a:hover { text-decoration: underline; }
-#identity-chip.signed-out {
-  padding: 5px 12px; border: 1px solid var(--line, #1f3b4f); border-radius: 999px;
-  background: rgba(79, 193, 255, 0.06); white-space: nowrap;
-}
-#identity-chip .chip-label, #identity-chip .chip-sep, #identity-chip .chip-name { color: var(--muted); }
+#identity-chip .chip-name { color: var(--muted); }
 #identity-chip .chip-review {
   padding: 5px 12px; border-radius: 6px; font-weight: 600;
   background: var(--accent); color: var(--on-accent, #0b1a24);
@@ -1470,7 +1466,6 @@ li.empty { color: var(--muted); font-style: italic; }
   border: 1px solid var(--line, #1f3b4f); background: transparent; color: var(--ink);
 }
 #identity-chip .chip-signout:hover { border-color: var(--accent); }
-.pending-banner { padding: 0.6rem 1rem; background: #fff4ce; color: #3b3100; }
 
 /* Accounts page (/admin/users.html, 2026-09-28): the sign-in pages' header
    and --auth-* palette variables (body.auth-page), with each table in a card

@@ -40,7 +40,7 @@ def verify_email(link: str) -> tuple[str, str]:
         "Confirm your email address for your Wahoo Bay account:\n\n"
         f"{link}\n\n"
         "An administrator still needs to approve the account before you can "
-        "review detections.\n",
+        "use the site.\n",
     )
 
 

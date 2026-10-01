@@ -137,12 +137,31 @@ def token_digest(token: str) -> str:
 
 def effective_role(status: str, role: str) -> str:
     """Status wins over role. An admin revoking access by setting status
-    never has to also remember to downgrade the role."""
+    never has to also remember to downgrade the role. An account waiting
+    for approval is "pending", not a viewer: since 2026-09-30 the whole site
+    is behind sign-in, and anyone can register."""
     if status == "disabled":
         return "none"
     if status == "pending":
-        return "viewer"
+        return "pending"
     return role
+
+
+# The 403 detail for an account an admin hasn't approved yet. The error
+# handlers send a browser on to the waiting page when they see it.
+AWAITING_APPROVAL = "your account is waiting for approval"
+
+# The only paths a signed-out visitor may reach (owner's decision
+# 2026-09-30): sign in, sign up, forgot password and the email links they
+# send, the waiting page, and a bare health check. Static files are a mount,
+# not a route, so the site gate never sees them: they hold no data.
+OPEN_PATHS = frozenset({"/login", "/register", "/forgot-password", "/reset-password",
+                        "/verify-email", "/waiting", "/healthz"})
+OPEN_PREFIXES = ("/api/auth/",)
+
+
+def is_open_path(path: str) -> bool:
+    return path in OPEN_PATHS or path.startswith(OPEN_PREFIXES)
 
 
 def needs_touch(last_seen_at: datetime, now: datetime) -> bool:
@@ -297,6 +316,8 @@ def make_require_role(cfg, state):
             if user is None:
                 raise HTTPException(status_code=401, detail="authentication required")
             role = effective_role(user.status, user.role)
+            if role == "pending":
+                raise HTTPException(status_code=403, detail=AWAITING_APPROVAL)
             if role not in allowed:
                 # A valid session repeatedly probing above its role is the
                 # signal you most want after opening a public signup form.

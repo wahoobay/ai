@@ -161,7 +161,7 @@ async function refresh() {
       cell(tr, el("span", u.email_verified_at ? "admin-yes" : "admin-muted",
         u.email_verified_at ? "yes" : "not yet"));
       cell(tr, el("span", "admin-muted", when(u.created_at)));
-      const sel = roleSelect("reviewer");
+      const sel = roleSelect("viewer");   // new accounts start as viewers
       const approve = button("Approve", "primary", async () => {
         const data = await post(`/api/admin/users/${u.id}/approve`, {role: sel.value});
         if (!data.error && !data.detail) showError("");

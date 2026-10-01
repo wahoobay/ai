@@ -530,7 +530,25 @@ def build_app() -> FastAPI:
             if state.get("pool") is not None:
                 await state["pool"].close()
 
-    app = FastAPI(title="Wahoo Bay dashboard", lifespan=lifespan)
+    from .auth import AWAITING_APPROVAL, is_open_path, make_require_role, require_csrf
+    require_role = make_require_role(cfg, state)
+    site_member = require_role("viewer", "reviewer", "admin")
+
+    async def site_gate(request: Request, response: Response) -> None:
+        """The whole site is behind sign-in (owner's decision 2026-09-30,
+        after meeting Wahoo Bay). Every route inherits this from the app, so
+        a route added later is closed unless it is added to OPEN_PATHS.
+        Signed out: 401. Waiting for approval: 403 AWAITING_APPROVAL. A
+        route's own require_role then narrows further: reviewers for the
+        review site, admins for the admin pages."""
+        if is_open_path(request.url.path):
+            return
+        await site_member(request, response)
+
+    # No interactive API docs: they would list every route to anyone.
+    app = FastAPI(title="Wahoo Bay dashboard", lifespan=lifespan,
+                  dependencies=[Depends(site_gate)],
+                  docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     from .routes_auth import build_auth_router
@@ -542,9 +560,6 @@ def build_app() -> FastAPI:
     from .routes_review import build_review_router
     app.include_router(build_review_router(cfg, state, TEMPLATES))
 
-    from .auth import make_require_role, require_csrf
-    require_role = make_require_role(cfg, state)
-
     from .auth import effective_role, make_optional_user
     optional_user = make_optional_user(state)
 
@@ -553,11 +568,31 @@ def build_app() -> FastAPI:
 
     from fastapi.responses import RedirectResponse
 
+    def _wants_html(request: Request) -> bool:
+        return "text/html" in request.headers.get("accept", "")
+
     @app.exception_handler(401)
     async def unauthenticated(request: Request, exc):
-        if "text/html" in request.headers.get("accept", ""):
+        if _wants_html(request):
             return RedirectResponse(f"/login?next={request.url.path}", status_code=302)
         return JSONResponse({"error": "authentication required"}, status_code=401)
+
+    @app.exception_handler(403)
+    async def forbidden(request: Request, exc):
+        """A browser gets the waiting page (account not approved yet) or a
+        page saying it has no access; a script gets the usual JSON."""
+        detail = getattr(exc, "detail", "forbidden")
+        if not _wants_html(request):
+            return JSONResponse({"detail": detail}, status_code=403)
+        if detail == AWAITING_APPROVAL:
+            return RedirectResponse("/waiting", status_code=302)
+        return TEMPLATES.TemplateResponse(request, "notice.html", {
+            "asset_version": _asset_version(),
+            "eyebrow": "No access",
+            "title": "This page isn't open to your account",
+            "message": "Ask an administrator if you need it.",
+            "home_link": True,
+        }, status_code=403)
 
     # Cache-bust static assets so a new dashboard build doesn't get hidden
     # behind a stale browser cache. We hash the JS+CSS+template mtimes at
@@ -1591,7 +1626,7 @@ def build_app() -> FastAPI:
     # subprocess startup.
     # ------------------------------------------------------------------
 
-    @app.get("/admin/regions.html")
+    @app.get("/admin/regions.html", dependencies=[Depends(require_role("admin"))])
     async def regions_admin_page() -> Response:
         """The polygon-drawing admin UI. Standalone HTML page — no
         templating needed, the JS fetches everything else from the
@@ -1604,7 +1639,7 @@ def build_app() -> FastAPI:
             )
         return Response(content=html, media_type="text/html")
 
-    @app.get("/api/admin/negative_regions")
+    @app.get("/api/admin/negative_regions", dependencies=[Depends(require_role("admin"))])
     async def get_negative_regions() -> Response:
         try:
             data = json.loads(Path(cfg.negative_regions_path).read_text())

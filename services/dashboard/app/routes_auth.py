@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
@@ -148,7 +148,7 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     # Same body for every outcome: created, username taken, email taken.
     REG_OK = {"ok": True, "message":
               "Check your email to confirm the address. An administrator "
-              "must approve the account before you can review detections."}
+              "must approve the account before you can use the site."}
 
     def _page(**ctx) -> dict:
         """Template context for an auth page.
@@ -359,7 +359,26 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
                 "UPDATE users SET email_verified_at = NOW() WHERE id = %s", (user_id,))
         return JSONResponse({"ok": True, "message":
                              "Email confirmed. An administrator will approve "
-                             "your account before you can review detections."})
+                             "your account before you can use the site."})
+
+    @router.get("/waiting", response_class=HTMLResponse)
+    async def waiting_page(request: Request):
+        """Where an account waiting for approval lands: the site gate sends
+        its every page here (owner's decision 2026-09-30). Signed out: sign
+        in first. Anyone already approved: on to the dashboard."""
+        from .auth import effective_role, load_session
+        user = await load_session(_pool(), request.cookies.get(COOKIE_NAME, ""))
+        if user is None:
+            return RedirectResponse("/login?next=/waiting", status_code=302)
+        if effective_role(user.status, user.role) != "pending":
+            return RedirectResponse("/", status_code=302)
+        return templates.TemplateResponse(request, "notice.html", _page(
+            eyebrow="Account created",
+            title="Waiting for approval",
+            message=("An administrator needs to approve your account before you can see "
+                     "the site. Sign in again once they have."),
+            signout=True,
+        ))
 
     @router.post("/api/auth/logout", dependencies=[Depends(require_csrf)])
     async def logout(request: Request):

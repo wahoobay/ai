@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-palette="blue" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{{ title }} — Wahoo Bay</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/theme.css?v={{ asset_version }}">
+  <script src="/static/theme.js?v={{ asset_version }}"></script>
+</head>
+<body class="auth-page">
+  <header class="auth-top">
+    <h1><a href="/">Wahoo Bay · Live Fish ID</a></h1>
+    <div id="theme-controls" class="theme-controls"></div>
+  </header>
+  <main class="auth-card">
+    <p class="auth-eyebrow">{{ eyebrow }}</p>
+    <h1>{{ title }}</h1>
+    <p class="auth-sub">{{ message }}</p>
+    {% if signout %}<button type="button" id="signout-button">Sign out</button>{% endif %}
+    {% if home_link %}<p class="auth-links"><a href="/">Go to the dashboard</a></p>{% endif %}
+  </main>
+  <script src="/static/auth.js?v={{ asset_version }}"></script>
+</body>
+</html>

@@ -479,13 +479,26 @@ after a chatter has named a new fish and you want it live immediately.
 
 ## Accounts and roles
 
-Three roles: `viewer` (read-only — the default for a freshly-approved
-or self-registered account), `reviewer` (can submit corrections),
-`admin` (can also acknowledge alerts, refresh the sheet, save
-no-fish-zone regions, and manage other accounts at
-`/admin/users.html`). A `pending` account (awaiting approval) or a
-`disabled` one can read the public dashboard but every mutation route
-returns 401/403 regardless of its underlying role — see
+**The whole site is behind sign-in** (Wahoo Bay's decision, 2026-09-30).
+Signed out, only the sign-in, create-account and forgot-password pages
+answer, plus the email links they send (`/reset-password`,
+`/verify-email`), `/api/auth/*`, the static files and `/healthz`. Every
+other page redirects to `/login?next=…`, and every other API route answers
+401. One app-wide dependency (`site_gate` in `main.py`, allowlist
+`OPEN_PATHS` in `auth.py`) does this, so a new route is closed unless it is
+added to that list. `tests/test_site_gate.py` walks every route.
+
+Three roles:
+- `viewer`: the dashboard, including the live cameras, charts and data
+  downloads. New accounts are approved as viewers unless the admin picks
+  another role.
+- `reviewer`: the dashboard and the review site (`/review`).
+- `admin`: everything, including accounts (`/admin/users.html`), alerts,
+  the sheet refresh and the no-fish-zone regions page.
+
+A `pending` account (registered, not yet approved) can sign in but sees only
+`/waiting`: its pages redirect there and its API calls answer 403 "your
+account is waiting for approval". A `disabled` account can't sign in. See
 `effective_role()` in `services/dashboard/app/auth.py`.
 
 **Creating the first admin.** Self-registration always creates a
@@ -569,7 +582,7 @@ again restarts the clock.
 
 ### The dashboard's older correction form
 
-`POST /api/corrections` (the endorse / correct / not-a-fish buttons on the public
+`POST /api/corrections` (the endorse / correct / not-a-fish buttons on the
 dashboard) is saved through the review tool's rules. It is never spot-checked. It answers
 403 when another volunteer already answered the box; 409 while someone holds it, or "a
 second opinion is pending on this box" while a spot-check on it is waiting (for anyone
