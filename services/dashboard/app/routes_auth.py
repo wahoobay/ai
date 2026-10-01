@@ -329,7 +329,8 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
 
         token = await create_user_token(pool, user_id, "email_verify",
                                         cfg.verify_ttl_h * 60, ip)
-        subject, text = verify_email(mailer.link("/verify-email", token))
+        subject, text = verify_email(mailer.link("/verify-email", token),
+                                     hours=cfg.verify_ttl_h)
         delivered = mailer.send(email, subject, text)
         async with pool.connection() as conn:
             await conn.execute(

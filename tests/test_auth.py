@@ -82,7 +82,19 @@ def test_hash_password_rejects_oversized_password():
         hash_password("a" * (MAX_PASSWORD_LEN + 1))
 
 
-from app.mailer import Mailer, reset_email  # noqa: E402
+from app.mailer import Mailer, reset_email, verify_email  # noqa: E402
+
+
+def test_the_sign_up_email_says_the_request_is_waiting_for_approval():
+    # Owner's request 2026-10-01: someone who registers is told at once that
+    # their request arrived and is waiting for an admin, not only asked to
+    # confirm an address.
+    subject, body = verify_email("https://example.org/verify-email?token=abc", hours=24)
+    assert "account request" in subject.lower()
+    assert "waiting for an administrator to approve" in body
+    assert "https://example.org/verify-email?token=abc" in body
+    assert "24 hours" in body
+    assert body.index("waiting for an administrator") < body.index("https://example.org")
 
 
 def test_manual_backend_does_not_attempt_smtp(monkeypatch):

@@ -34,13 +34,19 @@ def reset_email(link: str) -> tuple[str, str]:
     )
 
 
-def verify_email(link: str) -> tuple[str, str]:
+def verify_email(link: str, hours: int = 24) -> tuple[str, str]:
+    """Sent the moment someone registers: their request arrived and is
+    waiting for an administrator (owner's request 2026-10-01), plus the link
+    that confirms their address."""
     return (
-        "Wahoo Bay dashboard: confirm your email",
-        "Confirm your email address for your Wahoo Bay account:\n\n"
+        "Wahoo Bay Live Fish ID: we've received your account request",
+        "Thanks for requesting an account for Wahoo Bay Live Fish ID.\n\n"
+        "Your request is waiting for an administrator to approve it. Until "
+        "then, signing in shows a \"waiting for approval\" page.\n\n"
+        "Please confirm your email address in the meantime:\n\n"
         f"{link}\n\n"
-        "An administrator still needs to approve the account before you can "
-        "use the site.\n",
+        f"The link expires in {hours} hours. If you didn't request an account, "
+        "you can ignore this message.\n",
     )
 
 
