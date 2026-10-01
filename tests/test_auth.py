@@ -82,7 +82,7 @@ def test_hash_password_rejects_oversized_password():
         hash_password("a" * (MAX_PASSWORD_LEN + 1))
 
 
-from app.mailer import Mailer, reset_email, verify_email  # noqa: E402
+from app.mailer import Mailer, approved_email, reset_email, verify_email  # noqa: E402
 
 
 def test_the_sign_up_email_says_the_request_is_waiting_for_approval():
@@ -95,6 +95,17 @@ def test_the_sign_up_email_says_the_request_is_waiting_for_approval():
     assert "https://example.org/verify-email?token=abc" in body
     assert "24 hours" in body
     assert body.index("waiting for an administrator") < body.index("https://example.org")
+
+
+@pytest.mark.parametrize("role, says", [
+    ("viewer", "live cameras"),
+    ("reviewer", "review site"),
+    ("admin", "manage accounts"),
+])
+def test_the_approval_email_says_what_the_account_can_do(role, says):
+    subject, body = approved_email("https://example.org/login", role)
+    assert "approved" in subject.lower()
+    assert "https://example.org/login" in body and says in body
 
 
 def test_manual_backend_does_not_attempt_smtp(monkeypatch):

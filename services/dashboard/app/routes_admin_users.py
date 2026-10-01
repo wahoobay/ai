@@ -26,6 +26,7 @@ from .auth import (
     require_csrf,
 )
 from .auth import client_ip as _client_ip
+from .mailer import approved_email
 
 log = logging.getLogger(__name__)
 ROLES = ("viewer", "reviewer", "admin")
@@ -146,14 +147,22 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
             cur = await conn.execute(
                 """UPDATE users SET status = 'active', role = %s,
                                     approved_at = NOW(), approved_by = %s
-                    WHERE id = %s AND status = 'pending' RETURNING id""",
+                    WHERE id = %s AND status = 'pending' RETURNING email""",
                 (body.role, user.id, user_id),
             )
-            if await cur.fetchone() is None:
+            row = await cur.fetchone()
+            if row is None:
                 return JSONResponse({"error": "no pending user with that id"},
                                     status_code=404)
             await _audit(conn, user.id, "user.approve", user_id, {"role": body.role})
         log.info("admin: user id=%s approved as %s by id=%s", user_id, body.role, user.id)
+        # Tell them they're in (owner's request 2026-10-01). Off the event
+        # loop: an SMTP exchange can take seconds. The mailer never raises; a
+        # failed send falls back to manual and is logged there.
+        mailer = state.get("mailer")
+        if mailer is not None:
+            subject, text = approved_email(mailer.link_to("/login"), body.role)
+            await asyncio.to_thread(mailer.send, row[0], subject, text)
         return JSONResponse({"ok": True})
 
     @router.post("/api/admin/users/{user_id}/role", dependencies=[Depends(require_csrf)])

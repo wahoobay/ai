@@ -50,6 +50,28 @@ def verify_email(link: str, hours: int = 24) -> tuple[str, str]:
     )
 
 
+# What each role opens up, for the approval email.
+ROLE_ACCESS = {
+    "viewer": "You can now see the live cameras, the fish they record and the data.",
+    "reviewer": ("You can now see the live cameras, the fish they record and the data, "
+                 "and help identify fish on the review site."),
+    "admin": ("You can now see everything on the site, including the review site, and "
+              "manage accounts."),
+}
+
+
+def approved_email(login_link: str, role: str) -> tuple[str, str]:
+    """Sent when an administrator approves an account (owner's request
+    2026-10-01): with the site behind sign-in, this is how a new member
+    learns they're in."""
+    return (
+        "Wahoo Bay Live Fish ID: your account is approved",
+        "Your Wahoo Bay Live Fish ID account has been approved.\n\n"
+        f"{ROLE_ACCESS.get(role, ROLE_ACCESS['viewer'])}\n\n"
+        f"Sign in here:\n\n{login_link}\n",
+    )
+
+
 def collision_notice() -> tuple[str, str]:
     return (
         "Wahoo Bay dashboard: registration attempt",
@@ -91,6 +113,9 @@ class Mailer:
 
     def link(self, path: str, token: str) -> str:
         return f"{self.base_url}{path}?token={token}"
+
+    def link_to(self, path: str) -> str:
+        return f"{self.base_url}{path}"
 
     def send(self, to: str, subject: str, body: str) -> str:
         """Returns the backend that actually handled the message."""

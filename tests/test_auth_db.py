@@ -840,6 +840,37 @@ async def _login_as(pool, client, username, role="admin", status="active"):
 
 
 @pytest.mark.anyio
+async def test_approving_an_account_emails_its_owner(pool, client, monkeypatch):
+    # Owner's request 2026-10-01: with the site behind sign-in, a new member
+    # learns they're in from an email, not by signing in to check.
+    from app.mailer import Mailer
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_send(self, to, subject, text):
+        calls.append((to, subject, text))
+        return "manual"
+
+    monkeypatch.setattr(Mailer, "send", fake_send)
+    assert client.post("/api/auth/register", json=REG, headers=CSRF).status_code == 200
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT id FROM users WHERE username = %s", (REG["username"],))
+        target = (await cur.fetchone())[0]
+    calls.clear()
+    await _login_as(pool, client, "boss")
+    r = client.post(f"/api/admin/users/{target}/approve", json={"role": "reviewer"},
+                    headers=CSRF)
+    assert r.status_code == 200
+    [(to, subject, text)] = calls
+    assert to == REG["email"] and "approved" in subject.lower()
+    assert "/login" in text and "review site" in text
+    # Approving it again does nothing, so it sends nothing.
+    calls.clear()
+    again = client.post(f"/api/admin/users/{target}/approve", json={"role": "viewer"},
+                        headers=CSRF)
+    assert again.status_code == 404 and calls == []
+
+
+@pytest.mark.anyio
 async def test_admin_routes_are_closed_to_reviewers(pool, client):
     await _login_as(pool, client, "rev", role="reviewer")
     assert client.get("/api/admin/users").status_code == 403
