@@ -34,3 +34,8 @@ __pycache__/
 /*.jpg
 /*.jpeg
 /*.webp
+
+# Claude Code / superpowers scratch and dashboard exports
+.superpowers/
+.remember/
+exports/
