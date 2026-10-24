@@ -17,8 +17,9 @@ the live system on the DGX.
 | Cloudflare tunnel | random `*.trycloudflare.com` URL | `~/.local/bin/cloudflared tunnel --url http://localhost:18080` |
 
 All five Python processes are launched via `scripts/dev/run_*.sh` from
-disowned bash background jobs. They survive logout but **not a DGX
-reboot** — see "Recovery from a DGX reboot" below.
+disowned bash background jobs. They survive logout, and an `@reboot`
+crontab entry brings all but the tunnel back after a DGX reboot — see
+"Recovery from a DGX reboot" below.
 
 ---
 
@@ -164,17 +165,29 @@ harmless but ugly.
 
 ## Recovery from a DGX reboot
 
-The whole stack does not currently auto-start on boot. After a reboot:
+Two minutes after boot, this `@reboot` entry in the user crontab runs
+`scripts/dev/start_all.sh`:
 
-```bash
-conda activate wahoobay
-cd /raid/scratch/dzimmerman2021/wahoobay
-# follow "Starting from cold" above
+```
+@reboot sleep 120 && /raid/scratch/dzimmerman2021/wahoobay/scripts/dev/start_all.sh >> /raid/scratch/dzimmerman2021/wahoobay/logs/app/start_all.log 2>&1
 ```
 
-To make this survive reboots, the documented fix is `systemd --user`
-units (one per service); writing those is on the deferred-work list.
-For now, restart by hand.
+The script follows "Starting from cold" above (postgres, both workers,
+dashboard, poller) and skips any service whose port is already
+listening, so it is also the quickest by-hand restart:
+
+```bash
+./scripts/dev/start_all.sh
+```
+
+It does **not** start the public tunnel. A restarted tunnel has a new
+URL that has to be sent to the people using it, and the lab machine
+should only be exposed while demoing. Start it by hand (step 5 above)
+when you need it.
+
+Check `logs/app/start_all.log` and the quick health check after a
+reboot. The workers use the GPUs pinned in `.env`; if a neighbour has
+taken them by then, see "GPU pinning" above.
 
 ---
 

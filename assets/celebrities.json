@@ -1,6 +1,6 @@
 {
   "_about": "Named recurring animals at Wahoo Bay, sourced from the 'Fish named by Chatters' sheet inside assets/species.xlsx. Regenerate by re-running scripts/build_celebrities.py after editing the sheet. Each entry's `id` is the stable identifier used by detection_corrections.celebrity_id.",
-  "count": 25,
+  "count": 28,
   "celebrities": [
     {
       "id": "bobby",
@@ -32,7 +32,7 @@
       "id_mark": "another female with just a small barnacle at the rear of its carapace",
       "screenshot_label": null,
       "first_seen": "2025-01-30",
-      "last_seen": null,
+      "last_seen": "2026-07-17",
       "named_by": "Roy CamOp"
     },
     {
@@ -87,7 +87,7 @@
       "id_mark": "cos it is literally Half a Perch",
       "screenshot_label": null,
       "first_seen": "2025-02-17",
-      "last_seen": null,
+      "last_seen": "end of Feb RIP HP",
       "named_by": "Reef Geek"
     },
     {
@@ -131,7 +131,7 @@
       "id_mark": "white spots between rear dorsalfin and tail, and on bottom lip",
       "screenshot_label": null,
       "first_seen": "2025-03-14",
-      "last_seen": "2026-01-30",
+      "last_seen": "2026-10-12",
       "named_by": "Tricia S."
     },
     {
@@ -153,7 +153,7 @@
       "id_mark": "no tail",
       "screenshot_label": null,
       "first_seen": "2025-04-11",
-      "last_seen": "2025-04-17",
+      "last_seen": "2026-07-09",
       "named_by": "Rusty"
     },
     {
@@ -219,7 +219,7 @@
       "id_mark": "has spent 2 days in the next alley up from the cam, maybe pregnant",
       "screenshot_label": null,
       "first_seen": "2025-12-31",
-      "last_seen": "2026-02-06",
+      "last_seen": "2026-07-17",
       "named_by": "Dana D"
     },
     {
@@ -230,7 +230,7 @@
       "id_mark": "has a big chunk missing from top of body",
       "screenshot_label": null,
       "first_seen": "2025-11-04",
-      "last_seen": "2026-02-01",
+      "last_seen": "2026-07-11",
       "named_by": "Dana D"
     },
     {
@@ -263,7 +263,7 @@
       "id_mark": "no distinctive markings, just only one we've ever seen",
       "screenshot_label": null,
       "first_seen": "2026-03-29",
-      "last_seen": null,
+      "last_seen": "2026-07-16",
       "named_by": "Dana D"
     },
     {
@@ -276,6 +276,39 @@
       "first_seen": "2026-05-05",
       "last_seen": null,
       "named_by": "SusieQ"
+    },
+    {
+      "id": "louis",
+      "nickname": "Louis",
+      "species_common": "Trumpetfish",
+      "binomial": "Aulostomus maculatus",
+      "id_mark": "Only one that has been seen so far, every day since May 4th",
+      "screenshot_label": null,
+      "first_seen": "2026-05-04",
+      "last_seen": "2026-05-20",
+      "named_by": "Marie Mier"
+    },
+    {
+      "id": "bob",
+      "nickname": "Bob",
+      "species_common": "Bluestriped Grunt",
+      "binomial": "Haemulon sciurus",
+      "id_mark": "has no tail",
+      "screenshot_label": null,
+      "first_seen": "2026-08-22",
+      "last_seen": "2026-08-30",
+      "named_by": "ReefGeek"
+    },
+    {
+      "id": "tailor",
+      "nickname": "Tailor",
+      "species_common": "Checkered Puffer",
+      "binomial": "Sphoeroides testudineus",
+      "id_mark": "has no tail",
+      "screenshot_label": null,
+      "first_seen": "2026-10-02",
+      "last_seen": null,
+      "named_by": "Rusty"
     }
   ]
 }
