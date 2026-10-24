@@ -1,0 +1,11 @@
+# Rush Hour at the Seahives
+
+A parrotfish cruises past the "seahives," the hexagonal concrete modules of the Wahoo Bay artificial reef in Pompano Beach, Florida, while grunts crowd the water around it. Every fish in the picture is boxed and named, not by a person at the time, but by an artificial-intelligence system that has been watching this reef around the clock since spring.
+
+The seahives were placed to give young fish somewhere to hide and feed close to shore. The question behind this project is simple: is it working, and who is using it? Divers can only visit now and then. A camera never leaves. Two underwater cameras stream live video from the reef and the nearby pier, and a computer at Florida Atlantic University checks every frame as it arrives, draws a box around each fish it finds and suggests a species. By the time this picture was taken the system had logged hundreds of millions of fish sightings. Volunteers then sign in to a review site to confirm or correct the computer's guesses, and each correction helps it get better. The result is a continuous, searchable record of which species visit the reef, when, and how that changes with the seasons, the weather and the water.
+
+This frame was not taken by a photographer. It was saved automatically at 7:18 on a May morning because the system judged the scene unusually busy, then found again months later when we asked a second AI to sort through about a million saved frames for the most striking images. The colored boxes are the system's detections, with the species names checked by hand. The orange-and-blue parrotfish turned out to be a regular: the cameras recorded it visiting the seahives more than twenty times over the summer.
+
+---
+
+*If submitting the 25 June frame instead, replace the first sentence with:* A French angelfish and a parrotfish share the frame in front of the "seahives," the hexagonal concrete modules of the Wahoo Bay artificial reef in Pompano Beach, Florida, while grunts hover around the structure. *And replace the last two sentences with:* The frame was saved automatically just before 7 a.m. on a June morning and surfaced months later when we used a second AI to sort about a million saved frames for the most striking images. The colored boxes are the system's detections, with the species names checked by hand.
