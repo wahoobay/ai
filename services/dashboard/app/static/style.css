@@ -1550,3 +1550,7 @@ li.empty { color: var(--muted); font-style: italic; }
 @media (max-width: 640px) {
   .admin-nav { display: none; }
 }
+
+/* Live video without a worker: the embed fills the stream panel. */
+.live-embed { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; }
+.stream-offline { padding: 2rem 1rem; text-align: center; opacity: 0.8; }

@@ -24,6 +24,7 @@ OPEN_PATHS = {
     "/verify-email",
     "/waiting",
     "/healthz",
+    "/robots.txt",
 }
 OPEN_PREFIXES = ("/api/auth/",)
 JSON = {"Accept": "application/json"}
@@ -79,6 +80,7 @@ async def test_the_sign_in_pages_and_their_assets_stay_open(rdb, rclient):
         "/reset-password?token=x",
         "/verify-email?token=x",
         "/healthz",
+        "/robots.txt",
         "/static/style.css",
         "/static/auth.js",
         "/static/theme.css",

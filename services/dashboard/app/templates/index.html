@@ -27,6 +27,7 @@
   <main>
     <section class="stream-col">
       <div class="stream-wrap">
+        {% if worker_url %}
         <img id="stream" src="/api/stream.mjpeg" alt="live stream">
         <div id="camera-toggle" class="camera-toggle" title="Switch camera">
           <button class="cam-btn active" data-cam="seahivecam">🪸 SeaHIVE</button>
@@ -37,6 +38,13 @@
           🌙 <strong>Camera is dark</strong> — showing previously-recorded clips for visual continuity.
           <span class="fallback-banner-detail">No new species, sightings, or detection data are being collected during this period.</span>
         </div>
+        {% elif live_video_embed_url %}
+        <iframe id="live-embed" class="live-embed" src="{{ live_video_embed_url }}" title="Live video"
+                allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen
+                referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>
+        {% else %}
+        <div class="stream-offline">Live video is off: no camera worker and no embed are configured for this site.</div>
+        {% endif %}
       </div>
       <div class="current">
         <h2>Current detections <span class="reviewer-line" id="current-count"></span></h2>

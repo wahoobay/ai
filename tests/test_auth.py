@@ -234,16 +234,16 @@ def test_reset_email_contains_the_link_and_no_token_elsewhere():
     assert subject and "\n" not in subject
 
 
-def test_unrecognized_backend_logs_warning_and_falls_back_to_manual(caplog):
+def test_unrecognized_backend_logs_warning_and_falls_back_to_console(caplog):
     m = Mailer(
         backend="SMTP",
         smtp={"host": "h", "port": 25},
         from_addr="x@y.org",
         base_url="https://example.org",
     )
-    assert m.backend == "manual"
+    assert m.backend == "console"  # the message goes to the log, never silently nowhere
     assert "unrecognized backend 'SMTP'" in caplog.text
-    assert "falling back to manual" in caplog.text
+    assert "falling back to console" in caplog.text
 
 
 def test_smtp_missing_config_logs_error_and_falls_back_to_manual(monkeypatch, caplog):
