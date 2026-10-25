@@ -102,7 +102,9 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     def _pool():
         pool = state.get("pool")
         if pool is None:
-            raise HTTPException(status_code=503, detail="database unavailable")
+            raise HTTPException(
+                status_code=503, detail="database unavailable", headers={"Retry-After": "5"}
+            )
         return pool
 
     _REG_HITS_SWEEP_CAP = 10000

@@ -1,13 +1,15 @@
 """SLO alert checker.
 
-Runs as a background asyncio task inside the dashboard process. Every
-``interval_s`` seconds, each rule queries Postgres or another service's
-health endpoint, computes a pass/fail, and upserts into the ``alerts`` table.
+Run by the jobs runner (``python -m app.jobs alert_rules``; the jobs Lambda on
+the platform's cadence), not inside the web process. Each rule queries Postgres
+or the worker's health endpoint, computes a pass/fail, and upserts into the
+``alerts`` table. Rules about the camera pipeline are skipped when no worker is
+configured (WORKER_URL empty: a sensors-only site, or staging).
 
 Current rules:
   - pipeline_silence:       no detection_events inserted in > 5 min
   - inference_latency_p95:  worker /stats reports last_infer_ms > 100 ms
-  - poller_probe_stale:     sensestream_poller last_probe_ok_at > 30 min old
+  - poller_probe_stale:     a poller's last OK in poller_status is > 30 min old
   - frame_stats_stalled:    no frame_stats rows in > 5 min
   - drift_luma_delta:       |luma_1h - luma_7d| > 25   (biofouling or lighting change)
   - drift_fish_rate_crash:  fish_rate_1h < 0.5 * fish_rate_7d and samples>=100
@@ -18,7 +20,6 @@ Alerts auto-resolve (``resolved_at`` set) once the condition clears.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ class SLORule:
     severity: str  # info | warning | critical
     check: Callable[[SLOChecker], Awaitable[RuleResult]]
     description: str = ""
+    needs_worker: bool = False  # about the camera pipeline: skipped when WORKER_URL is empty
 
 
 # ---------------------------------------------------------------------------
@@ -105,28 +107,31 @@ async def _check_inference_latency(c: SLOChecker) -> RuleResult:
 
 
 async def _check_poller_probe_stale(c: SLOChecker) -> RuleResult:
-    try:
-        r = await c.http.get(f"{c.poller_url}/status", timeout=5.0)
-        if r.status_code != 200:
-            return (True, f"poller /status returned {r.status_code}", {})
-        j = r.json()
-    except Exception as e:
-        return (True, f"poller unreachable: {e}", {})
-    last = j.get("last_probe_ok_at")
-    if not last:
-        return (False, "poller hasn't probed yet", j)
-    try:
-        last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-    except Exception:
-        return (False, f"bad timestamp from poller: {last}", {})
-    age_s = (datetime.now(UTC) - last_dt).total_seconds()
-    if age_s > 1800:
-        return (
-            True,
-            f"poller last probe was {age_s/60:.1f} min ago",
-            {"last_probe_ok_at": last, "age_seconds": age_s},
-        )
-    return (False, "ok", {"age_seconds": age_s})
+    """The pollers write poller_status (jobs.record_poller_status). A poller whose
+    last OK is older than 30 min, or that has only ever reported errors, fires;
+    a site where no poller has reported yet is not an alert."""
+    async with c.pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute("SELECT name, last_ok, last_error FROM poller_status ORDER BY name")
+            rows = await cur.fetchall()
+    if not rows:
+        return (False, "no poller has reported yet", {})
+    now = datetime.now(UTC)
+    stale: dict[str, str] = {}
+    for row in rows:
+        if row["last_ok"] is None:
+            stale[row["name"]] = f"never ok: {row['last_error'] or 'no detail'}"
+            continue
+        age_s = (now - row["last_ok"]).total_seconds()
+        if age_s > 1800:
+            stale[row["name"]] = (
+                f"last ok {age_s / 60:.1f} min ago; {row['last_error'] or 'no error recorded'}"
+            )
+    last_ok = {r["name"]: r["last_ok"].isoformat() if r["last_ok"] else None for r in rows}
+    if stale:
+        message = "; ".join(f"{name}: {why}" for name, why in stale.items())
+        return (True, message, {"last_ok": last_ok, "stale": stale})
+    return (False, "ok", {"last_ok": last_ok})
 
 
 async def _check_drift_luma(c: SLOChecker) -> RuleResult:
@@ -171,18 +176,21 @@ SLO_RULES: list[SLORule] = [
         "critical",
         _check_pipeline_silence,
         "No detection_events inserted in the last 5 min.",
+        needs_worker=True,
     ),
     SLORule(
         "frame_stats_stalled",
         "warning",
         _check_frame_stats_stalled,
         "Drift sampler stopped producing frame_stats rows.",
+        needs_worker=True,
     ),
     SLORule(
         "inference_latency_p95",
         "warning",
         _check_inference_latency,
         "Last per-frame inference exceeded 100 ms.",
+        needs_worker=True,
     ),
     SLORule(
         "poller_probe_stale",
@@ -195,12 +203,14 @@ SLO_RULES: list[SLORule] = [
         "warning",
         _check_drift_luma,
         "Current-hour brightness differs from 7-day baseline by >25 (biofouling, lighting change).",
+        needs_worker=True,
     ),
     SLORule(
         "drift_fish_rate_crash",
         "warning",
         _check_drift_fish_rate,
         "Fish-frame rate in the last hour is less than half the 7-day baseline.",
+        needs_worker=True,
     ),
 ]
 
@@ -213,9 +223,8 @@ SLO_RULES: list[SLORule] = [
 @dataclass
 class SLOChecker:
     pool: AsyncConnectionPool
-    worker_url: str
-    poller_url: str
     http_client: httpx.AsyncClient
+    worker_url: str = ""  # empty: no camera pipeline here; its rules are skipped
     rules: list[SLORule] = field(default_factory=lambda: SLO_RULES)
 
     @property
@@ -226,6 +235,8 @@ class SLOChecker:
         """Evaluate each rule, upsert into `alerts`, return {name: firing}."""
         results: dict[str, bool] = {}
         for rule in self.rules:
+            if rule.needs_worker and not self.worker_url:
+                continue
             try:
                 firing, message, details = await rule.check(self)
             except Exception:
@@ -237,12 +248,6 @@ class SLOChecker:
             except Exception:
                 log.exception("SLO upsert for %s failed", rule.name)
         return results
-
-    async def run_forever(self, interval_s: float = 30.0) -> None:
-        log.info("SLO checker starting (%d rules, interval=%.0fs)", len(self.rules), interval_s)
-        while True:
-            await self.run_once()
-            await asyncio.sleep(interval_s)
 
     async def _upsert(self, rule: SLORule, firing: bool, message: str, details: dict) -> None:
         async with self.pool.connection() as conn:

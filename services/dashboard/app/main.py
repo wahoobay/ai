@@ -49,6 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import psycopg
 import uvicorn
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -59,7 +60,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field, ValidationError
 
-from .alerts import SLO_RULES, SLOChecker
+from .alerts import SLO_RULES
 from .common_names import common as common_name
 from .common_names import reload_manifest_names
 from .config import settings
@@ -81,7 +82,6 @@ from .exports import (
     hide_pending_spot_checks,
     query_for,
 )
-from .matviews import MatviewRefresher
 from .review_queue import ReviewError, legacy_verdict, submit_verdict
 from .sheet_poller import SheetPoller
 from .stats import (
@@ -232,13 +232,9 @@ class DashboardCfg:
         # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
         # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
         self.worker_url_pier = _env("WORKER_URL_PIER", "").rstrip("/")
-        self.poller_url = _env("POLLER_URL", "http://localhost:8082").rstrip("/")
         self.host = _env("DASHBOARD_HOST", "0.0.0.0")
         self.port = int(_env("DASHBOARD_PORT", "8080"))
         self.log_level = _env("LOG_LEVEL", "INFO")
-        # How often to refresh species_sightings_mat. 60 s gives the dashboard
-        # near-real-time data; raise on a busy DB to reduce refresh cost.
-        self.matview_refresh_interval_s = float(_env("MATVIEW_REFRESH_INTERVAL_S", "60"))
         # Per-camera no-fish-zones config lives at negative_regions_path (set
         # above from NEGATIVE_REGIONS_PATH). The admin endpoint serves the
         # regions-drawing UI from it and its POST companion writes it; the
@@ -287,14 +283,16 @@ class DashboardCfg:
         self.public_base_url = _env("DASHBOARD_PUBLIC_BASE_URL", "http://localhost:18080")
 
         # --- database pool ---
-        # The review pool task holds a connection for roughly max_run_s
-        # (default 30 s) per run -- every statement it issues is capped at
-        # its own 5 s timeout, so the connection is never held past a run
-        # indefinitely, though the run's own budget is only checked between
-        # probes and can run somewhat past it -- and the matview refresher
-        # holds one through each REFRESH; 6 leaves the public endpoints
-        # room.
-        self.db_pool_max = int(_env("DASHBOARD_DB_POOL_MAX", "6"))
+        # The pool starts empty and lets an idle connection go after 10 s, so
+        # an idle instance holds none (App Runner runs several instances;
+        # Aurora Serverless pauses when nothing is connected). 4 per instance
+        # is plenty: the matview refresh and the alert rules run in the jobs
+        # runner now, and the review pool task holds one connection for
+        # roughly max_run_s (default 30 s) per run.
+        self.db_pool_max = int(_env("DASHBOARD_DB_POOL_MAX", "4"))
+        # How long a request waits for a connection before answering 503 with
+        # Retry-After (a paused database takes a few seconds to resume).
+        self.db_timeout_s = float(_env("DASHBOARD_DB_TIMEOUT_S", "5"))
 
         # --- review tool (docs/superpowers/specs/2026-09-24-...) ---
         repo_root = Path(__file__).resolve().parents[3]
@@ -350,6 +348,15 @@ class DashboardCfg:
         )
 
 
+def db_unavailable() -> JSONResponse:
+    """What every data endpoint answers while the database cannot be reached:
+    503 with Retry-After, so clients back off instead of hammering a database
+    that is resuming. /healthz never touches the database and stays 200."""
+    return JSONResponse(
+        {"error": "database unavailable"}, status_code=503, headers={"Retry-After": "5"}
+    )
+
+
 def build_app() -> FastAPI:
     cfg = DashboardCfg()
     # Every page tells the browser the site's zone (<html data-tz>), so the
@@ -371,7 +378,13 @@ def build_app() -> FastAPI:
         state["client"] = client
         try:
             pool = AsyncConnectionPool(
-                cfg.database_url, min_size=1, max_size=cfg.db_pool_max, open=False
+                cfg.database_url,
+                min_size=0,
+                max_size=cfg.db_pool_max,
+                max_idle=10.0,
+                timeout=cfg.db_timeout_s,
+                open=False,
+                kwargs={"application_name": "wahoobay-dashboard"},
             )
             await pool.open()
             state["pool"] = pool
@@ -401,7 +414,6 @@ def build_app() -> FastAPI:
             state["celebrities_by_id"] = {}
             log.warning("dashboard: failed to load celebrities.json (%s); feature inert", e)
 
-        # SLO checker runs as a background task and upserts rows into `alerts`.
         # Reusable hook: re-read the celebrities catalogue + manifest
         # common-name fallback layer from disk. Called by the sheet
         # poller after a successful build-script run, and by the
@@ -431,34 +443,10 @@ def build_app() -> FastAPI:
 
         state["reload_catalogues"] = _reload_catalogues
 
-        slo_task: asyncio.Task | None = None
-        matview_task: asyncio.Task | None = None
+        # Periodic work (the matview refresh, the alert rules) runs in the jobs
+        # runner -- python -m app.jobs, the jobs Lambda -- not here: a web
+        # instance holds no loops and no state between requests.
         sheet_task: asyncio.Task | None = None
-        if state.get("pool") is not None:
-            checker = SLOChecker(
-                pool=state["pool"],
-                worker_url=cfg.worker_url,
-                poller_url=cfg.poller_url,
-                http_client=client,
-            )
-            state["slo"] = checker
-            slo_task = asyncio.create_task(checker.run_forever(interval_s=30.0), name="slo-checker")
-
-            # Keep species_sightings_mat fresh so user-facing endpoints
-            # don't seq-scan detection_events on every request.
-            refresher = MatviewRefresher(
-                pool=state["pool"],
-                # Order matters: species_sightings_hourly_mat reads from
-                # species_sightings_mat, so the parent must refresh first.
-                names=(
-                    "species_sightings_mat",
-                    "species_sightings_hourly_mat",
-                ),
-                interval_s=cfg.matview_refresh_interval_s,
-            )
-            state["matviews"] = refresher
-            matview_task = asyncio.create_task(refresher.run_forever(), name="matview-refresher")
-
         # Google Sheet poller. Refreshes assets/species.xlsx + the
         # downstream JSON catalogues on the configured cadence. The
         # poller runs even without a DB pool (so manual /api/admin/
@@ -533,7 +521,7 @@ def build_app() -> FastAPI:
         try:
             yield
         finally:
-            for t in (slo_task, matview_task, sheet_task, state.get("prune_task"), review_task):
+            for t in (sheet_task, state.get("prune_task"), review_task):
                 if t is not None:
                     t.cancel()
                     try:
@@ -596,6 +584,12 @@ def build_app() -> FastAPI:
         openapi_url=None,
     )
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+    @app.exception_handler(psycopg.OperationalError)
+    async def _database_unreachable(request: Request, exc: psycopg.OperationalError):
+        # Includes psycopg_pool's PoolTimeout: no connection within db_timeout_s.
+        log.warning("database unavailable (%s %s): %s", request.method, request.url.path, exc)
+        return db_unavailable()
 
     from .routes_auth import build_auth_router
 
@@ -699,6 +693,8 @@ def build_app() -> FastAPI:
 
     @app.get("/api/live.json")
     async def live_json() -> Response:
+        if not cfg.worker_url:
+            return _no_worker_response()
         client: httpx.AsyncClient = state["client"]
         try:
             r = await client.get(f"{cfg.worker_url}/live.json")
@@ -728,6 +724,8 @@ def build_app() -> FastAPI:
 
     @app.get("/api/stats")
     async def stats() -> Response:
+        if not cfg.worker_url:
+            return _no_worker_response()
         client: httpx.AsyncClient = state["client"]
         try:
             r = await client.get(f"{cfg.worker_url}/stats")
@@ -737,9 +735,11 @@ def build_app() -> FastAPI:
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
 
-    def _proxy_mjpeg(worker_path: str, base_url: str | None = None) -> StreamingResponse:
+    def _proxy_mjpeg(worker_path: str, base_url: str | None = None) -> Response:
         client: httpx.AsyncClient = state["client"]
         base = (base_url or cfg.worker_url).rstrip("/")
+        if not base:
+            return _no_worker_response()
 
         async def gen() -> AsyncIterator[bytes]:
             async with client.stream("GET", f"{base}{worker_path}") as r:
@@ -750,6 +750,14 @@ def build_app() -> FastAPI:
             gen(),
             media_type="multipart/x-mixed-replace; boundary=wahoobay-mjpeg-boundary",
             headers={"Cache-Control": "no-cache, no-store, must-revalidate, private"},
+        )
+
+    def _no_worker_response() -> Response:
+        # A site without a camera pipeline (or staging): WORKER_URL is empty
+        # and the live-video routes say so instead of dialling nowhere.
+        return JSONResponse(
+            {"error": "no worker configured (WORKER_URL unset); live video is off"},
+            status_code=503,
         )
 
     def _no_pier_response() -> Response:
@@ -784,6 +792,8 @@ def build_app() -> FastAPI:
         the bare camera frame (no bbox overlay) — used by the
         negative-regions admin UI so polygons get drawn against a clean
         image."""
+        if not cfg.worker_url:
+            return _no_worker_response()
         client: httpx.AsyncClient = state["client"]
         worker_path = "/snapshot_raw.jpg" if raw else "/snapshot.jpg"
         try:
@@ -878,7 +888,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         # Each predicate is already fully qualified with its table alias
         # (de.*) — no string-mangling on the join side.
         where = ["de.best_name IS NOT NULL", "de.best_accuracy >= %s"]
@@ -955,7 +965,7 @@ def build_app() -> FastAPI:
         """
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
@@ -1029,7 +1039,7 @@ def build_app() -> FastAPI:
         """
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
@@ -1111,7 +1121,7 @@ def build_app() -> FastAPI:
         """
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         if mode == "sightings":
             sql = """
                 SELECT species_id, name,
@@ -1172,7 +1182,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         cols = ", ".join(SENSOR_COLUMNS)
         sql = f"""
             SELECT ts, deployment_uri, source, {cols}
@@ -1203,7 +1213,7 @@ def build_app() -> FastAPI:
         """
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         # bucket size in seconds
         bucket_s = max(60, (hours * 3600) // max_points)
         aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in SENSOR_COLUMNS)
@@ -1239,7 +1249,7 @@ def build_app() -> FastAPI:
         """Min / mean / max for each parameter over the window."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         aggs = ",\n              ".join(
             f"min({c})::real AS {c}_min, "
             f"avg({c})::real AS {c}_mean, "
@@ -1306,7 +1316,7 @@ def build_app() -> FastAPI:
     async def weather_latest(deployment: str = Depends(deployment_param)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         cols = ", ".join(WEATHER_COLUMNS)
         sql = f"""
             SELECT ts, deployment_uri, source, {cols}
@@ -1334,7 +1344,7 @@ def build_app() -> FastAPI:
         (taking the most-recent value per bucket) since it's categorical."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         bucket_s = max(60, (hours * 3600) // max_points)
         # Categorical columns (weather_code, weather_description) can't be
         # averaged — we take the most-recent value per bucket via array_agg.
@@ -1377,7 +1387,7 @@ def build_app() -> FastAPI:
         """Current hour vs. 7-day and 28-day baselines from frame_stats_drift view."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("SELECT * FROM frame_stats_drift ORDER BY source_name")
@@ -1392,7 +1402,7 @@ def build_app() -> FastAPI:
         """Hourly rollup for plotting brightness / detection rate over time."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         where = ["hour >= NOW() - (%s::int || ' hours')::interval"]
         params: list = [hours]
         if source_name:
@@ -1433,7 +1443,7 @@ def build_app() -> FastAPI:
         """
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT best_species_id, best_name
               FROM detection_events
@@ -1471,7 +1481,7 @@ def build_app() -> FastAPI:
         """Wilson CI for frame-with-fish rate from frame_stats."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT count(*) AS n,
                    sum(CASE WHEN num_detections > 0 THEN 1 ELSE 0 END) AS k
@@ -1506,7 +1516,7 @@ def build_app() -> FastAPI:
         frame was not saved."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         catalogue = await state["review_catalogue"].aget()
         try:
             verdict = legacy_verdict(body, catalogue=catalogue)
@@ -1556,7 +1566,7 @@ def build_app() -> FastAPI:
             )
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         where = []
         params: list = []
         if reviewer:
@@ -1898,7 +1908,7 @@ def build_app() -> FastAPI:
     async def correction_stats() -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT count(*)::int AS total,
                    sum(CASE WHEN not_a_fish THEN 1 ELSE 0 END)::int AS not_a_fish,
@@ -1920,7 +1930,7 @@ def build_app() -> FastAPI:
     async def alerts_active(user=Depends(optional_user)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT id, name, severity, message, details, first_seen, last_seen,
                    acknowledged_by, acknowledged_at
@@ -1951,7 +1961,7 @@ def build_app() -> FastAPI:
     async def ack_alert(alert_id: int, user=Depends(require_role("admin"))) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -1987,7 +1997,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT hour, sum(sightings)::int AS sightings
               FROM species_sightings_hourly_mat
@@ -2018,7 +2028,7 @@ def build_app() -> FastAPI:
         client builds the multi-line chart."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             WITH top AS (
               SELECT species_id, MIN(name) AS name,
@@ -2071,7 +2081,7 @@ def build_app() -> FastAPI:
         the client overlay fish activity against any water parameter."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             WITH s AS (
               SELECT hour, SUM(sightings)::int AS sightings
@@ -2134,7 +2144,7 @@ def build_app() -> FastAPI:
         solar, or cloud cover."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             WITH s AS (
               SELECT hour, SUM(sightings)::int AS sightings
@@ -2213,7 +2223,7 @@ def build_app() -> FastAPI:
         Reads from the matview so it stays sub-100 ms."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT species_id,
                    MIN(name)                          AS name,
@@ -2263,7 +2273,7 @@ def build_app() -> FastAPI:
         on the Fish Explorer tab."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             WITH top AS (
               SELECT species_id, MIN(name) AS name, SUM(frame_count)::bigint AS total
@@ -2324,7 +2334,7 @@ def build_app() -> FastAPI:
         crops the dashboard can link to."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
 
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
@@ -2470,7 +2480,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_events(pool, hours, species_id, min_accuracy)
         return _csv_response(gen, _csv_filename("events", hours=hours, species=species_id))
 
@@ -2480,7 +2490,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_species_counts(pool, hours)
         return _csv_response(gen, _csv_filename("species_counts", hours=hours))
 
@@ -2491,7 +2501,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_water_quality(pool, hours, deployment)
         return _csv_response(
             gen, _csv_filename("water_quality", hours=hours, deployment=deployment)
@@ -2508,7 +2518,7 @@ def build_app() -> FastAPI:
         dew point, UV index, weather code, METAR description)."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_weather(pool, hours, deployment)
         return _csv_response(gen, _csv_filename("weather", hours=hours, deployment=deployment))
 
@@ -2518,7 +2528,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_frame_stats(pool, hours)
         return _csv_response(gen, _csv_filename("frame_stats", hours=hours))
 
@@ -2528,7 +2538,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_saved_frames(pool, hours)
         return _csv_response(gen, _csv_filename("saved_frames", hours=hours))
 
@@ -2545,7 +2555,7 @@ def build_app() -> FastAPI:
             )
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_corrections(pool, hours, reviewer, include_identity=admin)
         return _csv_response(gen, _csv_filename("corrections", hours=hours, reviewer=reviewer))
 
@@ -2556,7 +2566,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_alerts(pool, include_resolved, include_identity=_is_admin(user))
         return _csv_response(
             gen, _csv_filename("alerts", scope="all" if include_resolved else "active")
@@ -2571,7 +2581,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_sightings(pool, hours, min_frames)
         return _csv_response(gen, _csv_filename("sightings", hours=hours))
 
@@ -2582,7 +2592,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_hourly_summary(pool, hours, deployment)
         return _csv_response(
             gen, _csv_filename("hourly_summary", hours=hours, deployment=deployment)
@@ -2595,7 +2605,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_tracks_timeline(pool, hours, min_frames)
         return _csv_response(gen, _csv_filename("tracks_timeline", hours=hours))
 
@@ -2606,7 +2616,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_topk_long(pool, hours, min_accuracy)
         return _csv_response(gen, _csv_filename("topk_long", hours=hours))
 
@@ -2614,7 +2624,7 @@ def build_app() -> FastAPI:
     async def export_labeled_corrections_csv(user=Depends(optional_user)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         gen = export_labeled_corrections(pool, include_identity=_is_admin(user))
         return _csv_response(gen, _csv_filename("labeled_corrections"))
 
@@ -2638,7 +2648,7 @@ def build_app() -> FastAPI:
             )
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         try:
             sql, params, cols = query_for(
                 resource,
@@ -2705,7 +2715,7 @@ def build_app() -> FastAPI:
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
 
         async with pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
@@ -2810,7 +2820,7 @@ def build_app() -> FastAPI:
         """Most recent provenance tuple seen in detection_events."""
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
-            return JSONResponse({"error": "database unavailable"}, status_code=503)
+            return db_unavailable()
         sql = """
             SELECT model_version, detector_sha256, classifier_sha256,
                    config_hash, pipeline_git_sha, max(ts) AS last_seen,
