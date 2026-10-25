@@ -12,6 +12,8 @@
 
 # ---- cpu --------------------------------------------------------------------
 FROM python:3.11-slim AS cpu
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -56,6 +58,8 @@ CMD ["python", "-m", "app.main"]
 
 # ---- cuda (default target) --------------------------------------------------
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS cuda
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \

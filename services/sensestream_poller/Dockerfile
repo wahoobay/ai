@@ -34,12 +34,16 @@ ENV PYTHONPATH=/app
 
 # ---- lambda: fetch + write ---------------------------------------------------
 FROM base AS lambda
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 RUN pip install awslambdaric==4.2.2 boto3==1.43.118
 ENTRYPOINT ["python", "-m", "awslambdaric"]
 CMD ["app.lambda_entry.fetch_handler"]
 
 # ---- service (default target) ----------------------------------------------
 FROM base AS service
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 ENV POLLER_HTTP_HOST=0.0.0.0 \
     POLLER_HTTP_PORT=8082
 EXPOSE 8082
