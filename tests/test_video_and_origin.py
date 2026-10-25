@@ -72,6 +72,33 @@ async def test_video_panel_is_the_worker_stream_when_there_is_one(rdb, review_as
     assert 'id="stream"' in html and 'id="bbox-toggle"' in html and "<iframe" not in html
 
 
+async def test_stream_urls_come_from_stream_base_url(rdb, review_assets, monkeypatch):
+    """Plan 4a: on AWS the browser fetches the MJPEG from CloudFront (/stream/*, the GPU host),
+    not through App Runner, which cuts requests at 120 s; the page says where."""
+    for key, value in review_assets["env"].items():
+        monkeypatch.setenv(key, value)
+    app = _app(
+        monkeypatch,
+        DATABASE_URL=TEST_DSN,
+        WORKER_URL="http://127.0.0.1:1",
+        STREAM_BASE_URL="/stream",
+    )
+    await make_user(rdb, "viewer3", role="viewer")
+    with TestClient(app) as client:
+        login(client, "viewer3")
+        html = client.get("/").text
+    assert 'src="/stream/stream.mjpeg"' in html and 'data-stream-base="/stream"' in html
+
+
+def test_app_js_builds_stream_urls_from_the_page_base():
+    from pathlib import Path
+
+    js = (
+        Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "static" / "app.js"
+    ).read_text()
+    assert "dataset.streamBase" in js and js.count('"/api/stream') == 0
+
+
 def test_autoplay_parameters_are_added_once_and_keep_what_is_there():
     from app.config import autoplay_embed
 

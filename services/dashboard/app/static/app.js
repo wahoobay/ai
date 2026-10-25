@@ -1,3 +1,6 @@
+// Where the live stream is fetched from: the page says (data-stream-base on <html>), the
+// dashboard's own /api proxy by default and CloudFront's /stream on AWS.
+const STREAM_BASE = document.documentElement.dataset.streamBase || "/api";
 const fmtMs = (x) => (x == null ? "—" : `${x.toFixed(0)} ms`);
 const fmtPct = (x) => (x == null ? "—" : `${(x * 100).toFixed(1)}%`);
 const short = (s) => (s ? s.slice(0, 40) : "");
@@ -1056,9 +1059,9 @@ function initBboxToggle() {
 
   function streamSrc(camId, showing) {
     if (camId === "pier_cam") {
-      return showing ? "/api/stream_pier.mjpeg" : "/api/stream_pier_raw.mjpeg";
+      return showing ? `${STREAM_BASE}/stream_pier.mjpeg` : `${STREAM_BASE}/stream_pier_raw.mjpeg`;
     }
-    return showing ? "/api/stream.mjpeg" : "/api/stream_raw.mjpeg";
+    return showing ? `${STREAM_BASE}/stream.mjpeg` : `${STREAM_BASE}/stream_raw.mjpeg`;
   }
 
   function apply(showing) {
@@ -2665,8 +2668,8 @@ function _setActiveCamera(camId) {
   const bboxBtn = document.getElementById("bbox-toggle");
   const bboxesOn = !bboxBtn?.classList.contains("off");
   const streamPath = camId === "pier_cam"
-    ? (bboxesOn ? "/api/stream_pier.mjpeg" : "/api/stream_pier_raw.mjpeg")
-    : (bboxesOn ? "/api/stream.mjpeg" : "/api/stream_raw.mjpeg");
+    ? (bboxesOn ? `${STREAM_BASE}/stream_pier.mjpeg` : `${STREAM_BASE}/stream_pier_raw.mjpeg`)
+    : (bboxesOn ? `${STREAM_BASE}/stream.mjpeg` : `${STREAM_BASE}/stream_raw.mjpeg`);
   if (img) img.src = streamPath;
   window._wbActiveCamera = camId;
   localStorage.setItem("wb_camera", camId);

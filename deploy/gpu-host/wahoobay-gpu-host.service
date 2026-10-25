@@ -1,0 +1,17 @@
+# Installed by the infra stack's user data to /etc/systemd/system/. Boots the stack after Docker is up;
+# a failed boot (camera secret empty, weights not yet reachable) is retried every 30 s.
+[Unit]
+Description=Wahoo Bay GPU host: the camera worker and the stream proxy
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/wahoobay/deploy/gpu-host/boot.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

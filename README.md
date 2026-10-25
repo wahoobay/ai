@@ -330,6 +330,7 @@ documents every variable; these are the ones that make a deployment a site.
 | `DATABASE_URL` or `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` | *required* | The database; the parts form is what the cloud injects |
 | `FRAMES_URL` | `file:///data/frames` | Frames, as `<location>/YYYY/MM/DD/HH/<name>.jpg` under here (`s3://…` on AWS) |
 | `MODELS_URL` | `file:///data/models` | Weights, as `<model>/<version>/` + `SHA256SUMS`; fetched at worker start |
+| `STREAM_BASE_URL` | `/api` | Where the browser fetches the MJPEG stream: the dashboard's own proxy, or `/stream` on AWS (CloudFront → the GPU host, since App Runner cuts requests at 120 s) |
 | `WORKER_URL` | (unset) | Unset or empty = no camera pipeline: live video is the embed, worker routes and alerts are off. The DGX launchers set `http://127.0.0.1:8081`; `make up-gpu` / `up-cpu` set the compose worker |
 | `LIVE_VIDEO_EMBED_URL` | empty | With no worker, the video panel shows this embed |
 | `FEATURE_REVIEW_TOOL` | `false` | The volunteer review tool (routes, pool task, admin link) |

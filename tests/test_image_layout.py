@@ -51,6 +51,13 @@ def test_paths_resolve_in_a_checkout():
     assert seed.REPO_SAMPLE == REPO / "data" / "sample"
 
 
+def test_worker_image_carries_boto3_for_s3_weights_and_frames():
+    # On the GPU host MODELS_URL and FRAMES_URL are s3://: fetch_models.py and the frame writer
+    # import boto3 through common.storage, so the worker image must have it (both targets).
+    requirements = (REPO / "services" / "worker" / "requirements.txt").read_text()
+    assert "boto3==" in requirements
+
+
 def test_dashboard_image_carries_boto3_for_s3_storage():
     # On AWS FRAMES_URL and SAMPLE_URL are s3:// and common.storage imports boto3 for them;
     # the dashboard image (service and lambda stages) must have it, or every thumbnail 500s.

@@ -1,0 +1,46 @@
+# The GPU host's stack (infra spec 2026-10-25 §4.1, Plan 4a): the camera worker on the host's GPU and
+# Caddy as the stream proxy CloudFront reaches. boot.sh writes .env next to this file from the stack's
+# /etc/wahoobay/host.env and the environment's secrets, then runs `docker compose up -d` here; compose
+# reads the same .env for the ${...} values below.
+services:
+  worker:
+    image: ${WB_ECR_REGISTRY}/ai-wahoobay-worker:${WB_IMAGE_TAG}
+    env_file: .env
+    ports:
+      - "8081:8081"   # the worker's API and MJPEG; the security group admits the dashboard, the Lambdas and Caddy only
+    volumes:
+      - /opt/wahoobay-data/models:/data/models   # weights fetched from MODELS_URL on first start, kept across restarts
+      - /opt/wahoobay-data/logs:/data/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: worker
+        awslogs-create-group: "true"
+
+  caddy:
+    image: caddy:2.8.4
+    ports:
+      - "8080:8080"   # CloudFront's VPC origin; refuses anything without the X-Origin-Verify header
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    env_file: .env    # ORIGIN_VERIFY_SECRET
+    depends_on:
+      - worker
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: caddy
+        awslogs-create-group: "true"

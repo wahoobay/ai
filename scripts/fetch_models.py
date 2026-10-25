@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -52,6 +53,12 @@ def fetch_model(models_url: str, dest: Path, model: str, version: str) -> int:
     if target.is_dir() and any(p.is_file() for p in target.rglob("*")):
         print(f"{model}: present in {target}, left alone")
         return 0
+    # Whole or not at all: files land in <model>.partial/ and the directory is renamed into place at the
+    # end, so a download interrupted by a deploy (the models volume persists on the GPU host) is redone,
+    # never mistaken for a complete model by the next start.
+    staging = dest / f"{model}.partial"
+    if staging.exists():
+        shutil.rmtree(staging)
     base = join(models_url, f"{model}/{version}")
     sums = open_read(join(base, "SHA256SUMS")).decode()
     written = 0
@@ -61,10 +68,13 @@ def fetch_model(models_url: str, dest: Path, model: str, version: str) -> int:
         actual = hashlib.sha256(data).hexdigest()
         if actual != digest:
             raise ValueError(f"{model}/{version}/{rel}: sha256 {actual} does not match SHA256SUMS")
-        path = target / rel
+        path = staging / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         written += 1
+    if target.exists():
+        shutil.rmtree(target)  # an empty or stale directory; a filled one returned above
+    staging.rename(target)
     print(f"{model}@{version}: {written} file(s) into {target}")
     return written
 
