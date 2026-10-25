@@ -77,8 +77,9 @@ def _isolate_network(monkeypatch):
     network: a Google Sheets poller; and the worker proxy routes dial
     WORKER_URL.
 
-    On this shared machine, WORKER_URL defaults to
-    localhost:8081 — the REAL production worker — and
+    On this shared machine a test that sets WORKER_URL to the DGX launcher's
+    value would reach the REAL production worker (the code itself has no
+    default worker since 2026-10-25), and
     SHEET_URL defaults to the production Google Sheet. Any test that
     builds the app without overriding these would issue live requests
     against production services and the production sheet: slow, rude to
