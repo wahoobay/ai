@@ -64,3 +64,20 @@ def test_seed_is_a_job(pg_url, tmp_path, monkeypatch):
     out = run_job("seed")
     assert out["ok"] is True and out["detail"]["saved_frames"] >= 40
     assert query(pg_url, "SELECT job, ok FROM job_runs") == [("seed", True)]
+
+
+def test_the_first_admin_comes_from_the_environment(pg_url):
+    # Plan 2b Task 4: on a fresh environment the seed job creates the first admin
+    # from ADMIN_PASSWORD (the app secret); never twice, never over an existing account.
+    import psycopg
+    from app.auth import verify_password
+    from app.seed import bootstrap_admin
+
+    alembic("upgrade", "head", url=pg_url)
+    with psycopg.connect(pg_url) as conn:
+        assert bootstrap_admin(conn, "a long enough passphrase", location_id="reef_b") is True
+        assert bootstrap_admin(conn, "another one", location_id="reef_b") is False
+        conn.commit()
+    rows = query(pg_url, "SELECT username, role, status, email, password_hash FROM users")
+    assert len(rows) == 1 and rows[0][:4] == ("admin", "admin", "active", "admin@reef_b.invalid")
+    assert verify_password("a long enough passphrase", rows[0][4])

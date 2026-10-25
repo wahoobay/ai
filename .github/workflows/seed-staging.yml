@@ -1,0 +1,35 @@
+name: seed-staging
+
+# Load the sample dataset into staging, never production: invokes staging's jobs
+# Lambda with {"job": "seed"}. The job leaves a database that already has
+# detections alone, and creates the first admin account from the app secret's
+# admin_password (ADMIN_PASSWORD on the Lambda) when the users table is empty.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.STAGING_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Invoke the seed job
+        env:
+          FUNCTIONS: ${{ vars.STAGING_FUNCTIONS }}
+        run: |
+          fn="$(tr ',' '\n' <<<"$FUNCTIONS" | grep -- '-jobs$')"
+          response="$(aws lambda invoke --function-name "$fn" --payload '{"job":"seed"}' \
+            --cli-binary-format raw-in-base64-out out.json)"
+          cat out.json; echo
+          if grep -q FunctionError <<<"$response" || ! grep -q '"ok": true' out.json; then
+            echo "::error::the seed job failed; see the output above"
+            exit 1
+          fi
