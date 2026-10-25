@@ -34,12 +34,18 @@ if [ "$1" = "login" ]; then cat >/dev/null; fi
 """
 FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_LOG"
-[ "${FAKE_CURL_FAILS:-0}" = "1" ] && exit 7
-n=$(cat "$FAKE_LOG.curl" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_LOG.curl"
-[ "$n" -ge 1 ]  # the worker answers on the second probe
+url="${@: -1}"
+case "$url" in
+  */readyz) [ "${FAKE_READYZ_FAILS:-0}" != "1" ] && echo '{"ready": true, "frame_id": 42}'; [ "${FAKE_READYZ_FAILS:-0}" != "1" ] ;;
+  *)
+    [ "${FAKE_CURL_FAILS:-0}" = "1" ] && exit 7
+    n=$(cat "$FAKE_LOG.curl" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_LOG.curl"
+    [ "$n" -ge 1 ] ;;  # the worker answers on the second probe
+esac
 """
 FAKE_GIT = r"""#!/usr/bin/env bash
 echo "git $*" >> "$FAKE_LOG"
+if [ "$1 $2" = "rev-parse --is-shallow-repository" ]; then echo "${FAKE_GIT_SHALLOW:-false}"; fi
 """
 HOST_ENV = """WB_ENV=staging
 WB_LOCATION_ID=wahoobay
@@ -100,13 +106,13 @@ def _boot(tmp_path: Path, reuse: bool = False, **extra: str):
     return proc, checkout / "deploy" / "gpu-host" / ".env", log
 
 
-def _update(tmp_path: Path, ref: str):
+def _update(tmp_path: Path, ref: str, **extra: str):
     checkout, log, env = _machine(tmp_path)
     proc = subprocess.run(
         ["bash", str(checkout / "deploy" / "gpu-host" / "update.sh"), ref],
         capture_output=True,
         text=True,
-        env=env,
+        env={**env, **extra},
         timeout=60,
     )
     return proc, log
@@ -115,8 +121,25 @@ def _update(tmp_path: Path, ref: str):
 def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     proc, env_file, log = _boot(tmp_path)
     assert proc.returncode == 0, proc.stderr
-    env = dict(line.split("=", 1) for line in env_file.read_text().splitlines() if "=" in line)
+    text = env_file.read_text()
+    assert (
+        "VIDEO_SOURCE='rtsp://u:p@cam/x'" in text
+    )  # single-quoted: compose must not interpolate a $ in a password
+    env = dict(
+        (k, v.strip("'"))
+        for k, v in (
+            line.split("=", 1)
+            for line in text.splitlines()
+            if "=" in line and not line.startswith("#")
+        )
+    )
     assert env["DATABASE_URL"] == "postgresql://ai:pw@db.local:5432/ai"
+    assert (
+        env["AWS_REGION"] == "us-east-1" and env["AWS_DEFAULT_REGION"] == "us-east-1"
+    )  # boto3 inside the container
+    assert (
+        env["CLASSIFIER_V2_COMPILE"] == "false"
+    )  # the cuda image has no compiler for triton; Phase 0 measures without it
     assert env["VIDEO_SOURCE"] == "rtsp://u:p@cam/x" and env["SOURCE_LABEL_PRIMARY"] == "seahivecam"
     assert env["FRAMES_URL"] == "s3://frames-bucket/" and env["MODELS_URL"] == "s3://models-bucket/"
     assert (
@@ -132,6 +155,14 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     calls = log.read_text()
     assert "docker login" in calls and "compose pull" in calls and "compose up -d" in calls
     assert calls.index("docker login") < calls.index("compose pull") < calls.index("compose up -d")
+    assert "camera: streaming" in proc.stdout  # /readyz answered
+
+
+def test_boot_reports_a_camera_that_sends_no_frames_but_still_succeeds(tmp_path):
+    proc, _, log = _boot(tmp_path, FAKE_READYZ_FAILS="1", BOOT_READY_TIMEOUT_S="1")
+    assert proc.returncode == 0, proc.stderr
+    assert "camera: no frame yet" in proc.stdout and "docker compose logs worker" in proc.stdout
+    assert "readyz" in log.read_text()
 
 
 def test_boot_fails_when_the_worker_never_becomes_healthy(tmp_path):
@@ -150,22 +181,68 @@ def test_update_checks_out_the_ref_then_boots(tmp_path):
     proc, log = _update(tmp_path, "abc123def456")
     assert proc.returncode == 0, proc.stderr
     calls = log.read_text()
-    assert "git fetch" in calls and "git checkout -q abc123def456" in calls
+    assert "git fetch -q origin" in calls and "git checkout -q abc123def456" in calls
     assert calls.index("git checkout") < calls.index("compose up -d")
+    assert "--unshallow" not in calls  # a full clone needs no deepening
 
 
-def test_caddy_verifies_the_origin_header_and_streams():
+def test_update_deepens_a_shallow_clone_so_older_commits_can_be_checked_out(tmp_path):
+    proc, log = _update(tmp_path, "abc123def456", FAKE_GIT_SHALLOW="true")
+    assert proc.returncode == 0, proc.stderr
+    calls = log.read_text()
+    assert "git fetch --unshallow" in calls and calls.index("--unshallow") < calls.index(
+        "git checkout"
+    )
+
+
+def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it():
+    """The review found the first version proxied /stream/* before checking the header (Caddy
+    orders directives globally) and logged the header's value on every 502. The header is now
+    part of the stream matcher itself, stripped before the proxy, and filtered from the logs."""
     caddy = (GPU_HOST / "Caddyfile").read_text()
+    assert ":8080" in caddy and "header X-Origin-Verify {$ORIGIN_VERIFY_SECRET}" in caddy
+    assert "request_header -X-Origin-Verify" in caddy and "X-Origin-Verify delete" in caddy
     assert (
-        ":8080" in caddy
-        and "X-Origin-Verify {$ORIGIN_VERIFY_SECRET}" in caddy
-        and "respond @bad 403" in caddy
-    )
-    assert (
-        "handle_path /stream/*" in caddy
-        and "reverse_proxy worker:8081" in caddy
+        "reverse_proxy worker:8081" in caddy
         and "flush_interval -1" in caddy
+        and "respond 403" in caddy
     )
+    if shutil.which("docker"):
+        import json
+
+        adapted = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{GPU_HOST / 'Caddyfile'}:/etc/caddy/Caddyfile:ro",
+                "-e",
+                "ORIGIN_VERIFY_SECRET=s3cret",
+                "caddy:2.8.4",
+                "caddy",
+                "adapt",
+                "--config",
+                "/etc/caddy/Caddyfile",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=True,
+        ).stdout
+        servers = json.loads(adapted)["apps"]["http"]["servers"]
+        stream_route = next(
+            r for srv in servers.values() for r in srv["routes"] if "/stream/*" in json.dumps(r)
+        )
+        matcher = json.dumps(stream_route["match"])
+        assert (
+            "X-Origin-Verify" in matcher and "s3cret" in matcher
+        )  # the header is part of the stream match itself
+        compact = json.dumps(servers).replace(" ", "")
+        assert '"delete":["X-Origin-Verify"]' in compact  # stripped before the worker sees it
+        assert '"filter":"delete"' in json.dumps(json.loads(adapted)).replace(
+            " ", ""
+        )  # and filtered from the logs
 
 
 def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp_path):

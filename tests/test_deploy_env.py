@@ -27,6 +27,9 @@ case "$1 $2" in
       echo '{"job": "migrate", "ok": true, "detail": {"revision": "0003"}}' > "$out"
       echo '{"StatusCode": 200}'
     fi ;;
+  "ssm get-parameter")
+    if [ "${FAKE_NO_GPU_PARAM:-0}" = "1" ]; then echo "An error occurred (ParameterNotFound) when calling the GetParameter operation" >&2; exit 254; fi
+    echo i-0param ;;
   "ssm send-command") echo cmd-1 ;;
   "ssm get-command-invocation")
     n=$(cat "$FAKE_SSM_COUNT" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_SSM_COUNT"
@@ -130,26 +133,46 @@ def test_an_app_runner_rollback_fails_the_deploy(tmp_path):
     assert not any(c.startswith("curl") for c in calls)
 
 
-def test_gpu_host_is_updated_to_the_sha_between_the_lambdas_and_the_migration(tmp_path):
+def test_gpu_host_is_updated_to_the_sha_after_the_migration_and_before_the_dashboard_wait(tmp_path):
     r, calls = _run(tmp_path, GPU_INSTANCE_ID="i-0abc")
     assert r.returncode == 0, r.stderr + r.stdout
     sends = [c for c in calls if c.startswith("ssm send-command")]
-    assert len(sends) == 1 and "--instance-ids i-0abc" in sends[0] and "update.sh abcdef123456" in sends[0]
-    first_ssm = next(i for i, c in enumerate(calls) if c.startswith("ssm "))
-    last_wait = max(i for i, c in enumerate(calls) if c.startswith("lambda wait"))
+    assert (
+        len(sends) == 1
+        and "--instance-ids i-0abc" in sends[0]
+        and "update.sh abcdef123456" in sends[0]
+    )
+    first_ssm = next(i for i, c in enumerate(calls) if c.startswith("ssm send-command"))
     invoke = next(i for i, c in enumerate(calls) if c.startswith("lambda invoke"))
-    assert last_wait < first_ssm < invoke
-    assert len([c for c in calls if c.startswith("ssm get-command-invocation")]) >= 2  # InProgress, then Success
-    assert "== 3/6 gpu host" in r.stdout
+    first_curl = next(i for i, c in enumerate(calls) if c.startswith("curl"))
+    assert (
+        invoke < first_ssm < first_curl
+    )  # the schema first, then the host's worker, then the dashboard is awaited
+    assert (
+        len([c for c in calls if c.startswith("ssm get-command-invocation")]) >= 2
+    )  # InProgress, then Success
+    assert "== 4/6 gpu host" in r.stdout
+    assert not any(
+        c.startswith("ssm get-parameter") for c in calls
+    )  # the variable names the host; no lookup
+
+
+def test_the_gpu_host_is_found_through_its_parameter_when_no_variable_names_it(tmp_path):
+    r, calls = _run(tmp_path)
+    assert r.returncode == 0, r.stderr + r.stdout
+    params = [c for c in calls if c.startswith("ssm get-parameter")]
+    assert len(params) == 1 and "/ai/wahoobay/staging/gpu-instance-id" in params[0]
+    assert any("--instance-ids i-0param" in c for c in calls if c.startswith("ssm send-command"))
 
 
 def test_no_gpu_host_means_the_step_is_skipped_not_failed(tmp_path):
-    r, calls = _run(tmp_path)
+    r, calls = _run(tmp_path, FAKE_NO_GPU_PARAM="1")
     assert r.returncode == 0, r.stderr + r.stdout
-    assert not any(c.startswith("ssm ") for c in calls) and "no GPU host" in r.stdout
+    assert not any(c.startswith("ssm send-command") for c in calls) and "no GPU host" in r.stdout
 
 
-def test_a_failed_host_update_fails_the_deploy_before_the_migration(tmp_path):
+def test_a_failed_host_update_fails_the_deploy_before_the_dashboard_is_awaited(tmp_path):
     r, calls = _run(tmp_path, GPU_INSTANCE_ID="i-0abc", FAKE_SSM_END="Failed")
     assert r.returncode != 0 and "Failed" in (r.stderr + r.stdout)
-    assert not any(c.startswith("lambda invoke") for c in calls) and not any(c.startswith("curl") for c in calls)
+    assert any(c.startswith("lambda invoke") for c in calls)  # the schema was migrated first
+    assert not any(c.startswith("curl") for c in calls)

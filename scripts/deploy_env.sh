@@ -7,10 +7,11 @@
 #    auto-deploys the dashboard when its tag moves);
 # 2. the four Lambdas (jobs, migrate, fetch, write) are updated to the
 #    <env>-lambda images and waited for;
-# 3. the GPU host, if the environment has one (GPU_INSTANCE_ID), checks out the
-#    build and restarts its worker through SSM Run Command (deploy/gpu-host/update.sh);
-# 4. the migrate Lambda runs ({"job": "migrate"}); a FunctionError stops here,
+# 3. the migrate Lambda runs ({"job": "migrate"}); a FunctionError stops here,
 #    before the dashboard rolls onto a schema it does not have;
+# 4. the GPU host, if the environment has one (GPU_INSTANCE_ID, or the parameter
+#    /ai/<location>/<env>/gpu-instance-id the stack writes), checks out the build
+#    and restarts its worker through SSM Run Command (deploy/gpu-host/update.sh);
 # 5. App Runner's new operation is awaited: SUCCEEDED, or FAILED /
 #    ROLLBACK_* fails the deploy (the previous revision keeps serving);
 # 6. smoke: https://HOSTNAME/healthz 200, /login is the sign-in page,
@@ -21,7 +22,7 @@
 # FunctionNames output), SERVICE_ARN (App Runner; the ServiceArn output),
 # HOSTNAME (the environment's public hostname), ECR_REGISTRY, AWS_REGION,
 # LOCATION_ID (default wahoobay), SERVICE_URL (optional), GPU_INSTANCE_ID
-# (optional; the stack's GpuInstanceId output), APPRUNNER_TIMEOUT_S (default
+# (optional override of the parameter lookup), APPRUNNER_TIMEOUT_S (default
 # 900), GPU_UPDATE_TIMEOUT_S (default 900), SLEEP_S (poll interval, default 15).
 set -euo pipefail
 
@@ -64,23 +65,48 @@ for fn in "${functions[@]}"; do
 done
 [ -n "$migrate_fn" ] || { echo "::error::no *-migrate function in FUNCTIONS" >&2; exit 1; }
 
-if [ -z "${GPU_INSTANCE_ID:-}" ]; then
-  echo "== 3/6 gpu host: no GPU host for ${env_name}; skipped"
+echo "== 3/6 migrate"
+out="$(mktemp)"
+response="$(aws lambda invoke --function-name "$migrate_fn" --payload '{"job":"migrate"}' \
+  --cli-binary-format raw-in-base64-out "$out")"
+if grep -q FunctionError <<<"$response"; then
+  echo "::error::migrate failed; the dashboard was not rolled. Lambda said: $(cat "$out")" >&2
+  exit 1
+fi
+cat "$out"; echo
+
+echo "== 4/6 gpu host"
+# The host is named by GPU_INSTANCE_ID, or found through the parameter the stack writes
+# (/ai/<location>/<env>/gpu-instance-id); no parameter means the environment has no host.
+gpu_instance_id="${GPU_INSTANCE_ID:-}"
+if [ -z "$gpu_instance_id" ]; then
+  param="/ai/${LOCATION_ID:-wahoobay}/${env_name}/gpu-instance-id"
+  param_err="$(mktemp)"
+  if value="$(aws ssm get-parameter --name "$param" --query 'Parameter.Value' --output text 2>"$param_err")"; then
+    gpu_instance_id="$value"
+  elif grep -q ParameterNotFound "$param_err"; then
+    gpu_instance_id=""
+  else
+    cat "$param_err" >&2; exit 1
+  fi
+fi
+if [ -z "$gpu_instance_id" ]; then
+  echo "gpu host: no GPU host for ${env_name}; skipped"
 else
-  echo "== 3/6 gpu host ${GPU_INSTANCE_ID}"
-  cmd_id="$(aws ssm send-command --instance-ids "$GPU_INSTANCE_ID" --document-name AWS-RunShellScript \
+  echo "gpu host: ${gpu_instance_id}"
+  cmd_id="$(aws ssm send-command --instance-ids "$gpu_instance_id" --document-name AWS-RunShellScript \
     --comment "ai ${env_name} ${sha}" \
     --parameters "commands=['/opt/wahoobay/deploy/gpu-host/update.sh ${sha}']" \
     --query 'Command.CommandId' --output text)"
   deadline=$(( $(date +%s) + ${GPU_UPDATE_TIMEOUT_S:-900} ))
   while :; do
-    ssm_status="$(aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$GPU_INSTANCE_ID" \
+    ssm_status="$(aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$gpu_instance_id" \
       --query 'Status' --output text 2>/dev/null || echo Pending)"
     case "$ssm_status" in
       Success) echo "gpu host: ${ssm_status}"; break ;;
       Failed|Cancelled|TimedOut|Cancelling)
-        echo "::error::gpu host update ${ssm_status}; the Lambdas were updated, the migration and the dashboard were not. Host said:" >&2
-        aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$GPU_INSTANCE_ID" \
+        echo "::error::gpu host update ${ssm_status}; the Lambdas and the schema are at ${sha}, the dashboard was not awaited. Host said:" >&2
+        aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$gpu_instance_id" \
           --query 'StandardErrorContent' --output text 2>/dev/null | tail -n 20 >&2 || true
         exit 1 ;;
       *) echo "gpu host: ${ssm_status} ..." ;;
@@ -92,16 +118,6 @@ else
     sleep "$sleep_s"
   done
 fi
-
-echo "== 4/6 migrate"
-out="$(mktemp)"
-response="$(aws lambda invoke --function-name "$migrate_fn" --payload '{"job":"migrate"}' \
-  --cli-binary-format raw-in-base64-out "$out")"
-if grep -q FunctionError <<<"$response"; then
-  echo "::error::migrate failed; the dashboard was not rolled. Lambda said: $(cat "$out")" >&2
-  exit 1
-fi
-cat "$out"; echo
 
 echo "== 5/6 app runner"
 deadline=$(( $(date +%s) + ${APPRUNNER_TIMEOUT_S:-900} ))

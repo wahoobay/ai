@@ -40,28 +40,36 @@ if [ -z "$video_source" ]; then
   exit 1
 fi
 
+# Single-quoted values: compose interpolates $ in unquoted .env values, and a camera password may contain one.
+# (A single quote inside a value must already be percent-encoded, as RTSP URLs require.)
+q() { printf "'%s'" "$1"; }
 umask 077
 tmp="$(mktemp .env.XXXXXX)"
-cat > "$tmp" <<EOF
+cat > "$tmp" <<ENVEOF
 # Written by boot.sh from /etc/wahoobay/host.env and the environment's secrets. Do not edit: rewritten at every boot.
-LOCATION_ID=${WB_LOCATION_ID}
-TZ=${WB_TZ}
-SENSESTREAM_DEPLOYMENT_URI=${WB_DEPLOYMENT_URI}
-DATABASE_URL=${database_url}
-VIDEO_SOURCE=${video_source}
-SOURCE_LABEL_PRIMARY=seahivecam
-FALLBACK_VIDEO_SOURCE=
-FRAMES_URL=s3://${WB_FRAMES_BUCKET}/
-MODELS_URL=s3://${WB_MODELS_BUCKET}/
-DEVICE=cuda:0
-WORKER_HTTP_HOST=0.0.0.0
-WORKER_HTTP_PORT=8081
-ORIGIN_VERIFY_SECRET=${origin_secret}
-WB_IMAGE_TAG=${WB_ENV}
-WB_ECR_REGISTRY=${WB_ECR_REGISTRY}
-WB_LOG_GROUP=${WB_LOG_GROUP}
-WB_REGION=${WB_REGION}
-EOF
+LOCATION_ID=$(q "$WB_LOCATION_ID")
+TZ=$(q "$WB_TZ")
+SENSESTREAM_DEPLOYMENT_URI=$(q "$WB_DEPLOYMENT_URI")
+DATABASE_URL=$(q "$database_url")
+VIDEO_SOURCE=$(q "$video_source")
+SOURCE_LABEL_PRIMARY='seahivecam'
+FALLBACK_VIDEO_SOURCE=''
+FRAMES_URL=$(q "s3://${WB_FRAMES_BUCKET}/")
+MODELS_URL=$(q "s3://${WB_MODELS_BUCKET}/")
+# boto3 inside the container: the region, and credentials from the instance role (IMDSv2, hop limit 2).
+AWS_REGION=$(q "$WB_REGION")
+AWS_DEFAULT_REGION=$(q "$WB_REGION")
+DEVICE='cuda:0'
+# The cuda image has no C compiler, which triton needs to compile the classifier; Phase 0 measures without it.
+CLASSIFIER_V2_COMPILE='false'
+WORKER_HTTP_HOST='0.0.0.0'
+WORKER_HTTP_PORT='8081'
+ORIGIN_VERIFY_SECRET=$(q "$origin_secret")
+WB_IMAGE_TAG=$(q "$WB_ENV")
+WB_ECR_REGISTRY=$(q "$WB_ECR_REGISTRY")
+WB_LOG_GROUP=$(q "$WB_LOG_GROUP")
+WB_REGION=$(q "$WB_REGION")
+ENVEOF
 mv -f "$tmp" .env
 chmod 600 .env
 echo "wrote .env for ${WB_LOCATION_ID}/${WB_ENV}"
@@ -85,3 +93,22 @@ until curl -sf -m 5 http://127.0.0.1:8081/healthz >/dev/null 2>&1; do
   sleep "$interval_s"
 done
 echo "worker healthy"
+
+# /healthz says the process is up; /readyz says a frame has arrived. A camera that is unreachable or refuses
+# its credentials is not a boot failure (the worker keeps retrying), but it must be visible here.
+ready_timeout_s="${BOOT_READY_TIMEOUT_S:-60}"
+ready_attempts=$(( ready_timeout_s / step ))
+[ "$ready_attempts" -ge 1 ] || ready_attempts=1
+n=0
+while :; do
+  if body="$(curl -sf -m 5 http://127.0.0.1:8081/readyz 2>/dev/null)"; then
+    echo "camera: streaming (${body})"
+    break
+  fi
+  n=$((n + 1))
+  if [ "$n" -ge "$ready_attempts" ]; then
+    echo "camera: no frame yet after ${ready_timeout_s}s; the worker keeps retrying the source. See: docker compose logs worker"
+    break
+  fi
+  sleep "$interval_s"
+done

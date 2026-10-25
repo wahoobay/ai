@@ -202,7 +202,6 @@ jobs:
       SERVICE_ARN: ${{ vars.STAGING_SERVICE_ARN }}
       HOSTNAME: ${{ vars.STAGING_HOSTNAME }}
       SERVICE_URL: ${{ vars.STAGING_SERVICE_URL }}
-      GPU_INSTANCE_ID: ${{ vars.STAGING_GPU_INSTANCE_ID }}  # empty until the environment has a GPU host (the stack's GpuInstanceId output)
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4

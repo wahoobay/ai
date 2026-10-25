@@ -6,6 +6,10 @@ set -euo pipefail
 ref="${1:?usage: update.sh <git ref>}"
 checkout="${WB_CHECKOUT:-/opt/wahoobay}"
 cd "$checkout"
-git fetch -q origin
+if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+  git fetch --unshallow -q origin   # older commits (a rollback) must be reachable
+else
+  git fetch -q origin
+fi
 git checkout -q "$ref"
 exec "$checkout/deploy/gpu-host/boot.sh"

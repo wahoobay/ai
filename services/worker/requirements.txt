@@ -31,3 +31,5 @@ pyyaml==6.0.3
 
 # --- persistence -----------------------------------------------------------
 psycopg[binary,pool]==3.3.3
+# S3 for MODELS_URL and FRAMES_URL on AWS (common.storage imports it lazily); same pin as the dashboard.
+boto3==1.43.118
