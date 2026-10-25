@@ -33,21 +33,22 @@ help:
 # ----- containerised stack ----------------------------------------------
 
 up: migrate
-	$(COMPOSE) --profile web up -d
+	$(COMPOSE) --profile web up -d --build
 
 up-gpu: migrate
-	$(COMPOSE) --profile web --profile gpu up -d
+	$(COMPOSE) --profile web --profile gpu up -d --build
 
 up-cpu: migrate
-	$(COMPOSE) --profile web --profile cpu up -d
+	$(COMPOSE) --profile web --profile cpu up -d --build
 
+# --build everywhere: after a pull the images must follow the code, not the cache.
 migrate:
-	$(COMPOSE) --profile web run --rm migrate
+	$(COMPOSE) --profile web run --rm --build migrate
 
 # The dashboard image runs the seed against the compose database; the sample and
 # the frames directory are mounted in, so the frames land where the dashboard reads them.
 seed:
-	$(COMPOSE) --profile web run --rm -v ./data/sample:/data/sample:ro -v ./frames:/data/frames dashboard python -m app.seed --source file:///data/sample
+	$(COMPOSE) --profile web run --rm --build -v ./data/sample:/data/sample:ro -v ./frames:/data/frames dashboard python -m app.seed --source file:///data/sample
 
 down:
 	$(COMPOSE) $(ALL_PROFILES) down
