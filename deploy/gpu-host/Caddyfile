@@ -1,0 +1,20 @@
+# The stream proxy on the GPU host. CloudFront's VPC origin reaches this on 8080 and adds the
+# X-Origin-Verify header only it knows (the same one the dashboard requires); anything without it
+# is refused. /stream/* goes to the worker with the prefix stripped, unbuffered, so an MJPEG
+# stream flows frame by frame for as long as the viewer watches.
+{
+	auto_https off
+}
+
+:8080 {
+	@bad not header X-Origin-Verify {$ORIGIN_VERIFY_SECRET}
+	respond @bad 403
+
+	handle_path /stream/* {
+		reverse_proxy worker:8081 {
+			flush_interval -1
+		}
+	}
+
+	respond 404
+}
