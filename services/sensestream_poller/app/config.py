@@ -43,7 +43,9 @@ def database_url_from_env(env: Mapping[str, str] = os.environ) -> str:
     return f"postgresql://{auth}@{env['DB_HOST']}:{port}/{env['DB_NAME']}"
 
 
-def settings(env: Mapping[str, str] = os.environ) -> Settings:
+def settings(env: Mapping[str, str] = os.environ, *, require_database: bool = True) -> Settings:
+    """The fetch side (the fetch Lambda) has no database: require_database=False
+    leaves database_url empty instead of refusing to start."""
     deployment_uri = env.get("SENSESTREAM_DEPLOYMENT_URI", "").strip()
     if not deployment_uri:
         raise RuntimeError(
@@ -56,5 +58,7 @@ def settings(env: Mapping[str, str] = os.environ) -> Settings:
         weather_deployment_uri=env.get("SENSESTREAM_WEATHER_DEPLOYMENT_URI", "").strip()
         or deployment_uri,
         tz=env.get("TZ", "UTC").strip() or "UTC",
-        database_url=database_url_from_env(env),
+        database_url=database_url_from_env(env)
+        if require_database
+        else env.get("DATABASE_URL", ""),
     )

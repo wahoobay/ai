@@ -24,7 +24,15 @@ Every POLL_INTERVAL_S the poller tries three data sources in order:
 
   3. **Synthetic stub generator** (``scripts/gen_synthetic_sensor_data.py``).
      Last-resort fallback so the dashboard's water-quality and weather
-     panels keep showing data when both live paths are unreachable.
+     panels keep showing data when both live paths are unreachable -- only
+     when SENSESTREAM_SYNTHETIC=true (local demos); a real site never
+     fabricates readings.
+
+The poller is two halves. *Fetch* asks the sources and produces rows; *write*
+upserts them. Locally (compose, the DGX) one process does both, every
+POLL_INTERVAL_S (``Poller.run``). On AWS the fetch Lambda sends the rows to
+SQS as ``{"kind": "sensor" | "weather", "location_id", "rows"}`` messages
+(``fetch_once``) and the write Lambda drains the queue (``lambda_entry``).
 
 Storage: all rows land in ``sensor_readings`` / ``weather_readings`` with
 ``source='live'`` (Wahoo Bay API or direct SenseStream) or
@@ -115,6 +123,8 @@ class Config:
     wahoobay_site_sonde: int  # /api/v1/sitedata site id for the EXO2 sonde
     wahoobay_site_weather: int  # /api/v1/sitedata site id for the weather station
     wahoobay_enabled: bool
+    synthetic_enabled: bool  # write synthetic readings when no live source answers (local demos)
+    location_id: str  # stamped on every row this poller writes
     open_meteo_url: str  # base URL for Open-Meteo forecast layer
     nws_metar_station: str  # ICAO station id for NWS text observations
     nws_user_agent: str  # required by api.weather.gov (rejects empty UAs)
@@ -126,8 +136,8 @@ class Config:
     log_level: str
 
     @classmethod
-    def from_env(cls) -> Config:
-        site = settings()
+    def from_env(cls, *, require_database: bool = True) -> Config:
+        site = settings(require_database=require_database)
         return cls(
             base_url=_env("SENSESTREAM_BASE_URL", "https://api.sensestream.org").rstrip("/"),
             auth_token=_env("SENSESTREAM_AUTH_TOKEN", ""),
@@ -150,6 +160,9 @@ class Config:
             wahoobay_site_weather=_int("WAHOOBAY_SITE_WEATHER", 1),
             wahoobay_enabled=_env("WAHOOBAY_API_ENABLED", "1").lower()
             not in ("0", "false", "no", ""),
+            synthetic_enabled=_env("SENSESTREAM_SYNTHETIC", "false").strip().lower()
+            in ("1", "true", "yes"),
+            location_id=site.location_id,
             open_meteo_url=_env("OPEN_METEO_URL", "https://api.open-meteo.com").rstrip("/"),
             nws_metar_station=_env("NWS_METAR_STATION", "KPMP"),
             nws_user_agent=_env("NWS_USER_AGENT", "wahoobay-dashboard (scoopnisker@gmail.com)"),
@@ -511,9 +524,179 @@ class PollerStats:
     last_data_source: str = ""  # "wahoobay" | "sensestream" | "synthetic"
 
 
+# ---------------------------------------------------------------------------
+# Sinks: where fetched rows go. The fetch side never sees the database.
+# ---------------------------------------------------------------------------
+
+SENSOR_COLUMNS = (
+    "water_temp_c",
+    "ph",
+    "do_pct",
+    "chlorophyll_rfu",
+    "phycoerythrin_rfu",
+    "turbidity_fnu",
+    "spcond_ms_cm",
+)
+WEATHER_COLUMNS = (
+    "bar_press_hpa",
+    "wind_dir_avg_deg",
+    "wind_dir_min_deg",
+    "wind_dir_max_deg",
+    "wind_speed_avg_ms",
+    "wind_speed_min_ms",
+    "wind_speed_max_ms",
+    "air_temp_c",
+    "rel_humidity_pct",
+    "rain_accum_mm",
+    "rain_dur_frac_hr",
+    "rain_int_mm_hr",
+    "rain_peak_int_mm_hr",
+    "hail_accum",
+    "hail_dur",
+    "hail_int",
+    "hail_peak_int",
+    "water_level_mm",
+    "solar_rad_wm2",
+    "cloud_cover_pct",
+    "dew_point_c",
+    "forecast_humidity_pct",
+    "precip_intensity_mm_hr",
+    "precip_prob_pct",
+    "press_sea_level_hpa",
+    "press_surface_hpa",
+    "temp_apparent_c",
+    "uv_index",
+    "weather_code",
+    "weather_description",
+)
+ROWS_PER_MESSAGE = 200  # about 1 KB a row; SQS takes 256 KB a message
+STATUS_NAMES = {"sensor": "sensestream", "weather": "weather"}  # poller_status rows per kind
+
+POLLER_STATUS_SQL = """
+    INSERT INTO poller_status (name, last_ok, last_error, updated_at)
+    VALUES (%(name)s, CASE WHEN %(ok)s THEN NOW() END, %(error)s, NOW())
+    ON CONFLICT (name) DO UPDATE SET
+        last_ok    = CASE WHEN %(ok)s THEN NOW() ELSE poller_status.last_ok END,
+        last_error = %(error)s,
+        updated_at = NOW()
+"""
+
+
+def rows_to_dicts(
+    rows: Iterable[tuple[datetime, dict]], *, deployment_uri: str, source: str
+) -> list[dict]:
+    """(ts, values) pairs as plain JSON-able rows: the message and the write side's shape."""
+    return [
+        {"ts": ts.isoformat(), "deployment_uri": deployment_uri, "source": source, **values}
+        for ts, values in rows
+    ]
+
+
+def _ts(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def write_readings(
+    conn: psycopg.Connection, kind: str, rows: list[dict], *, location_id: str
+) -> int:
+    """Upsert plain rows into sensor_readings or weather_readings, stamped with the
+    location. Idempotent: (deployment_uri, ts) is unique, a sensor row seen
+    twice is skipped, a weather row seen twice only fills columns it has."""
+    if not rows:
+        return 0
+    if kind == "sensor":
+        cols = ("ts", "deployment_uri", *SENSOR_COLUMNS, "source", "location_id")
+        sql = (
+            f"INSERT INTO sensor_readings ({', '.join(cols)}) "
+            f"VALUES ({', '.join(['%s'] * len(cols))}) "
+            "ON CONFLICT (deployment_uri, ts) DO NOTHING"
+        )
+        value_cols = SENSOR_COLUMNS
+    elif kind == "weather":
+        cols = ("ts", "deployment_uri", *WEATHER_COLUMNS, "source", "location_id")
+        update = ", ".join(
+            f"{c} = COALESCE(EXCLUDED.{c}, weather_readings.{c})" for c in WEATHER_COLUMNS
+        )
+        sql = (
+            f"INSERT INTO weather_readings ({', '.join(cols)}) "
+            f"VALUES ({', '.join(['%s'] * len(cols))}) "
+            f"ON CONFLICT (deployment_uri, ts) DO UPDATE SET {update}"
+        )
+        value_cols = WEATHER_COLUMNS
+    else:
+        raise ValueError(f"unknown reading kind {kind!r} (sensor or weather)")
+    payload = [
+        (
+            _ts(row["ts"]),
+            row["deployment_uri"],
+            *(row.get(c) for c in value_cols),
+            row.get("source", "live"),
+            location_id,
+        )
+        for row in rows
+    ]
+    with conn.cursor() as cur:
+        cur.executemany(sql, payload)
+    return len(payload)
+
+
+class CollectSink:
+    """The fetch side: rows become messages for the write side; nothing is written."""
+
+    def __init__(self, location_id: str) -> None:
+        self.location_id = location_id
+        self.messages: list[dict] = []
+
+    def write(self, kind: str, rows: list[dict]) -> int:
+        for i in range(0, len(rows), ROWS_PER_MESSAGE):
+            self.messages.append(
+                {
+                    "kind": kind,
+                    "location_id": self.location_id,
+                    "rows": rows[i : i + ROWS_PER_MESSAGE],
+                }
+            )
+        return len(rows)
+
+    def record_status(self, name: str, *, ok: bool, error: str = "") -> None:
+        pass  # the write side reports status, once rows have landed
+
+
+class DatabaseSink:
+    """The write side: upserts, stamps location_id, reports poller_status."""
+
+    def __init__(self, database_url: str, *, location_id: str) -> None:
+        self.database_url = database_url
+        self.location_id = location_id
+
+    def write(self, kind: str, rows: list[dict]) -> int:
+        with psycopg.connect(self.database_url) as conn:
+            n = write_readings(conn, kind, rows, location_id=self.location_id)
+            conn.commit()
+        return n
+
+    def record_status(self, name: str, *, ok: bool, error: str = "") -> None:
+        with psycopg.connect(self.database_url) as conn:
+            conn.execute(POLLER_STATUS_SQL, {"name": name, "ok": ok, "error": error[:500]})
+            conn.commit()
+
+
 class Poller:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(
+        self,
+        cfg: Config,
+        sink: CollectSink | DatabaseSink | None = None,
+        *,
+        initial_backfill: bool = True,
+    ) -> None:
         self.cfg = cfg
+        self.sink = sink or DatabaseSink(cfg.database_url, location_id=cfg.location_id)
+        # The local loop backfills initial_backfill_days on its first tick; a
+        # fetch Lambda is a fresh process every time and must not.
+        self.initial_backfill = initial_backfill
         self.stats = PollerStats(
             token_configured=bool(cfg.auth_token),
             wahoobay_enabled=cfg.wahoobay_enabled and bool(cfg.wahoobay_api_url),
@@ -540,10 +723,7 @@ class Poller:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             while not self._stop.is_set():
                 start = time.monotonic()
-                try:
-                    await self._tick(client)
-                except Exception:
-                    log.exception("poller tick failed")
+                await self.run_once(client)
                 elapsed = time.monotonic() - start
                 delay = max(1.0, self.cfg.poll_interval_s - elapsed)
                 try:
@@ -555,10 +735,36 @@ class Poller:
     def stop(self) -> None:
         self._stop.set()
 
+    async def run_once(self, client: httpx.AsyncClient) -> None:
+        """One poll: the sources through their fallback chain, rows to the sink,
+        then poller_status for the alert rule (ok only when a live source answered)."""
+        error = ""
+        try:
+            await self._tick(client)
+        except Exception as e:  # noqa: BLE001 - the loop must survive any tick
+            log.exception("poller tick failed")
+            error = f"{type(e).__name__}: {e}"
+        live = self.stats.last_data_source in ("wahoobay", "sensestream", "sensestream_auth")
+        ok = live and not error
+        detail = error or self.stats.wahoobay_last_error or self.stats.last_error
+        if not ok and not detail:
+            detail = (
+                f"no live source answered (data_source={self.stats.last_data_source or 'none'})"
+            )
+        for name in STATUS_NAMES.values():
+            try:
+                self.sink.record_status(name, ok=ok, error="" if ok else detail)
+            except Exception:  # noqa: BLE001
+                log.exception("poller status write failed")
+
     async def _tick(self, client: httpx.AsyncClient) -> None:
         cfg = self.cfg
         end = datetime.now(UTC).replace(microsecond=0, second=0)
-        first_run = self.stats.total_inserted == 0 and self.stats.weather_inserted_total == 0
+        first_run = (
+            self.initial_backfill
+            and self.stats.total_inserted == 0
+            and self.stats.weather_inserted_total == 0
+        )
         start = end - (
             timedelta(days=cfg.initial_backfill_days)
             if first_run
@@ -614,6 +820,13 @@ class Poller:
             return
 
         # Last resort: synthetic stub generator (no live source reachable).
+        if not cfg.synthetic_enabled:
+            log.warning(
+                "no live source produced rows and SENSESTREAM_SYNTHETIC is not true: "
+                "nothing written this tick"
+            )
+            self.stats.last_data_source = "none"
+            return
         await asyncio.get_running_loop().run_in_executor(None, self._upsert_synthetic_window)
         self.stats.last_data_source = "synthetic"
 
@@ -1177,75 +1390,14 @@ class Poller:
         source: str | None = None,
         uri: str | None = None,
     ) -> int:
+        """Sonde rows to the sink (the database locally, messages on the fetch side)."""
         cfg = self.cfg
-        src = source if source is not None else cfg.source_tag
-        deploy_uri = uri if uri is not None else cfg.deployment_uri
-        payload = []
-        for ts, values in rows:
-            payload.append(
-                (
-                    ts,
-                    deploy_uri,
-                    values.get("water_temp_c"),
-                    values.get("ph"),
-                    values.get("do_pct"),
-                    values.get("chlorophyll_rfu"),
-                    values.get("phycoerythrin_rfu"),
-                    values.get("turbidity_fnu"),
-                    values.get("spcond_ms_cm"),
-                    src,
-                )
-            )
-        if not payload:
-            return 0
-        with psycopg.connect(cfg.database_url) as conn, conn.cursor() as cur:
-            cur.executemany(
-                """
-                INSERT INTO sensor_readings
-                (ts, deployment_uri, water_temp_c, ph, do_pct,
-                 chlorophyll_rfu, phycoerythrin_rfu, turbidity_fnu,
-                 spcond_ms_cm, source)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (deployment_uri, ts) DO NOTHING
-                """,
-                payload,
-            )
-            conn.commit()
-        return len(payload)
-
-    # Column order in the INSERT must match this tuple exactly.
-    _WEATHER_INSERT_COLS = (
-        "bar_press_hpa",
-        "wind_dir_avg_deg",
-        "wind_dir_min_deg",
-        "wind_dir_max_deg",
-        "wind_speed_avg_ms",
-        "wind_speed_min_ms",
-        "wind_speed_max_ms",
-        "air_temp_c",
-        "rel_humidity_pct",
-        "rain_accum_mm",
-        "rain_dur_frac_hr",
-        "rain_int_mm_hr",
-        "rain_peak_int_mm_hr",
-        "hail_accum",
-        "hail_dur",
-        "hail_int",
-        "hail_peak_int",
-        "water_level_mm",
-        "solar_rad_wm2",
-        "cloud_cover_pct",
-        "dew_point_c",
-        "forecast_humidity_pct",
-        "precip_intensity_mm_hr",
-        "precip_prob_pct",
-        "press_sea_level_hpa",
-        "press_surface_hpa",
-        "temp_apparent_c",
-        "uv_index",
-        "weather_code",
-        "weather_description",
-    )
+        dict_rows = rows_to_dicts(
+            rows,
+            deployment_uri=uri if uri is not None else cfg.deployment_uri,
+            source=source if source is not None else cfg.source_tag,
+        )
+        return self.sink.write("sensor", dict_rows) if dict_rows else 0
 
     def _upsert_weather(
         self,
@@ -1253,38 +1405,31 @@ class Poller:
         source: str | None = None,
         uri: str | None = None,
     ) -> int:
+        """Weather rows to the sink."""
         cfg = self.cfg
-        src = source if source is not None else cfg.source_tag
-        deploy_uri = uri if uri is not None else cfg.weather_deployment_uri
-        payload = []
-        for ts, values in rows:
-            row = [ts, deploy_uri]
-            row.extend(values.get(c) for c in self._WEATHER_INSERT_COLS)
-            row.append(src)
-            payload.append(tuple(row))
-        if not payload:
-            return 0
-        col_list = ", ".join(("ts", "deployment_uri", *self._WEATHER_INSERT_COLS, "source"))
-        placeholders = ",".join(["%s"] * (2 + len(self._WEATHER_INSERT_COLS) + 1))
-        # On conflict, fill in any missing columns from the new payload (e.g.,
-        # back-filling forecast values onto rows the station wrote earlier).
-        # COALESCE preserves the existing value when the new one is NULL so a
-        # forecast-only update can't wipe a station-only column.
-        update_clause = ", ".join(
-            f"{c} = COALESCE(EXCLUDED.{c}, weather_readings.{c})" for c in self._WEATHER_INSERT_COLS
+        dict_rows = rows_to_dicts(
+            rows,
+            deployment_uri=uri if uri is not None else cfg.weather_deployment_uri,
+            source=source if source is not None else cfg.source_tag,
         )
-        sql = (
-            f"INSERT INTO weather_readings ({col_list}) "
-            f"VALUES ({placeholders}) "
-            f"ON CONFLICT (deployment_uri, ts) DO UPDATE SET {update_clause}"
-        )
-        with psycopg.connect(cfg.database_url) as conn, conn.cursor() as cur:
-            cur.executemany(sql, payload)
-            conn.commit()
-        return len(payload)
+        return self.sink.write("weather", dict_rows) if dict_rows else 0
 
 
-# helper referenced inside run()
+async def fetch_once(
+    cfg: Config, client: httpx.AsyncClient | None = None, *, initial_backfill: bool = False
+) -> list[dict]:
+    """One poll of every source as messages for the write side. Nothing is written
+    and no database is needed: this is the fetch Lambda's whole job."""
+    sink = CollectSink(cfg.location_id)
+    poller = Poller(cfg, sink=sink, initial_backfill=initial_backfill)
+    if client is None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as own:
+            await poller.run_once(own)
+    else:
+        await poller.run_once(client)
+    return sink.messages
+
+
 def _token_configured_effective(self: Config) -> bool:
     return bool(self.auth_token)
 

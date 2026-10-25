@@ -24,6 +24,8 @@ export WAHOOBAY_API_URL="${WAHOOBAY_API_URL:-https://api.wahoobay.net}"
 export WAHOOBAY_API_ENABLED="${WAHOOBAY_API_ENABLED:-1}"
 export SENSESTREAM_BASE_URL="${SENSESTREAM_BASE_URL:-https://api.sensestream.org}"
 export SENSESTREAM_DEPLOYMENT_URI="${SENSESTREAM_DEPLOYMENT_URI:-wahoo_2}"
+# The DGX demo keeps its synthetic last-resort fallback; the code's own default is off.
+export SENSESTREAM_SYNTHETIC="${SENSESTREAM_SYNTHETIC:-true}"
 export SENSESTREAM_POLL_INTERVAL_S="${SENSESTREAM_POLL_INTERVAL_S:-300}"
 export POLLER_HTTP_PORT="${POLLER_HTTP_PORT:-8082}"
 
