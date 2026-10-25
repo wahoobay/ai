@@ -111,7 +111,6 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
       WORKER_URL: http://worker:8081
-      POLLER_URL: http://sensestream-poller:8082
       # The image listens on 8080 (what App Runner expects); the host keeps
       # the familiar 18080 through the port mapping below.
       DASHBOARD_PORT: "8080"

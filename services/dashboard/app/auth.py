@@ -331,7 +331,9 @@ def make_require_role(cfg, state):
         async def dependency(request: Request, response: Response) -> CurrentUser:
             pool = state.get("pool")
             if pool is None:
-                raise HTTPException(status_code=503, detail="database unavailable")
+                raise HTTPException(
+                    status_code=503, detail="database unavailable", headers={"Retry-After": "5"}
+                )
             raw_token = request.cookies.get(COOKIE_NAME, "")
             user = await load_session(pool, raw_token)
             if user is None:

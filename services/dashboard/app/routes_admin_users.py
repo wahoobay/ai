@@ -75,7 +75,9 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
     def _pool():
         pool = state.get("pool")
         if pool is None:
-            raise HTTPException(status_code=503, detail="database unavailable")
+            raise HTTPException(
+                status_code=503, detail="database unavailable", headers={"Retry-After": "5"}
+            )
         return pool
 
     async def _audit(conn, actor_id, action, target_id, detail=None):

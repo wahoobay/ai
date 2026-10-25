@@ -1,9 +1,13 @@
 # syntax=docker/dockerfile:1.7
 #
-# Dashboard container: FastAPI + Jinja2 templates + Postgres pool +
-# matview refresher + SLO checker. Stateless beyond the in-memory
-# stale-while-revalidate cache.
-FROM python:3.11-slim
+# Dashboard image, two targets from one base:
+#   service (default)  FastAPI + Jinja2 templates + Postgres pool; stateless per
+#                      request. App Runner runs it on port 8080.
+#   lambda             the same code behind the Lambda runtime interface client:
+#                      app.lambda_entry.handler runs the jobs (matview refresh,
+#                      alert rules) and the migrations. Built with
+#                      `--target lambda`, tagged <env>-lambda.
+FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -28,8 +32,17 @@ COPY db /app/db
 # the image so the dashboard works without bind-mounts.
 COPY data/camera_metadata.json /data/camera_metadata.json
 
-ENV PYTHONPATH=/app \
-    DASHBOARD_HOST=0.0.0.0 \
+ENV PYTHONPATH=/app
+
+# ---- lambda: jobs + migrate -------------------------------------------------
+FROM base AS lambda
+RUN pip install awslambdaric==4.2.2
+ENTRYPOINT ["python", "-m", "awslambdaric"]
+CMD ["app.lambda_entry.handler"]
+
+# ---- service (default target) ----------------------------------------------
+FROM base AS service
+ENV DASHBOARD_HOST=0.0.0.0 \
     DASHBOARD_PORT=8080
 EXPOSE 8080
 
