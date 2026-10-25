@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50035.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    45,
+    133,
+    56,
+    29
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    54,
+    150,
+    68,
+    15
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    244,
+    96,
+    66,
+    39
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    129,
+    162,
+    67,
+    14
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    107,
+    5,
+    61,
+    38
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    227,
+    20,
+    63,
+    32
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    232,
+    140,
+    50,
+    18
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    5,
+    12,
+    58,
+    18
+   ],
+   "category": "Pomacanthus paru"
+  }
+ ]
+}

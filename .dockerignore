@@ -38,7 +38,13 @@ dist/
 # because they're explicit COPY paths, not wildcards.)
 data/test_videos/
 data/synthetic/
+data/sample/
 data/models/*.zip
+# bulk downloads that live beside the small catalogues in assets/
+assets/community_clips/
+assets/inat_photos/
+assets/inat_manifest.json
+assets/*.docx
 
 # runtime artifacts
 pgdata/

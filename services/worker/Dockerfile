@@ -1,13 +1,61 @@
 # syntax=docker/dockerfile:1.7
 #
-# Worker container: detector + classifier + persistence + RTSP ingest.
-# Runs on the host's GPU (`docker run --gpus`); the FrameTap thread reads
-# the source while a separate inference subprocess does inference.
-#
-# No weights in the image: the entrypoint fetches them from MODELS_URL
-# (file:///data/models, s3://... on AWS) into /data/models at start, unless
-# they are already there -- a bind-mounted host data/models wins.
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Worker image: detector + classifier + persistence + RTSP ingest. Two flavours:
+#   cuda (default)  nvidia/cuda 12.4 runtime + cu124 torch; production on a GPU host
+#                   (`docker run --gpus`, compose profile gpu).
+#   cpu             python:3.11-slim + CPU torch; development on a laptop and CI
+#                   (`--target cpu`, compose profile cpu). Slow, same code.
+# No weights in either: the entrypoint fetches them from MODELS_URL (file:///data/models,
+# s3://... on AWS) into /data/models at start, unless they are already there -- a
+# bind-mounted host data/models wins. Both classifier backends (v2, the DINOv2
+# default; fishial, the legacy bundle) are fetched, so reverting stays an env-var flip.
+
+# ---- cpu --------------------------------------------------------------------
+FROM python:3.11-slim AS cpu
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# ffmpeg (RTSP/H.264 decode) + libGL/glib (opencv-headless still wants them).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 ffmpeg ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY services/worker/requirements-cpu.txt services/worker/requirements.txt /app/
+RUN pip install -r /app/requirements-cpu.txt && pip install -r /app/requirements.txt
+
+COPY services/common /app/common
+COPY scripts/fetch_models.py /app/fetch_models.py
+COPY services/worker/entrypoint.sh /app/entrypoint.sh
+COPY services/worker/app /app/app
+
+ENV PYTHONPATH=/app \
+    WORKER_HTTP_PORT=8081 \
+    CLASSIFIER_BACKEND=v2 \
+    DETECTOR_PATH=/data/models/detector_v26/model.pt \
+    CLASSIFIER_PATH=/data/models/classifier_v0_10_2/model.pt \
+    CLASSIFIER_INFERENCE_MODULE_DIR=/data/models/classifier_v0_10_2 \
+    CLASSIFIER_V2_CHECKPOINT=/data/models/classifier_v2/checkpoint_best.pt \
+    CLASSIFIER_V2_CLASSES_JSON=/data/models/classifier_v2/classes.json \
+    EVENTS_LOG_DIR=/data/logs/events \
+    FRAMES_URL=file:///data/frames \
+    MODELS_URL=file:///data/models \
+    MODELS_DIR=/data/models \
+    DEVICE=cpu \
+    CLASSIFIER_AUTOCAST=off \
+    CLASSIFIER_V2_COMPILE=false
+
+EXPOSE 8081
+HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8081/healthz || exit 1
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["python", "-m", "app.main"]
+
+# ---- cuda (default target) --------------------------------------------------
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS cuda
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -37,14 +85,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Always invoke pip via `python -m pip` so it uses our 3.11 interpreter
-# (and finds cp311 wheels). requirements.txt declares its own
+# (and finds cp311 wheels). requirements-cuda.txt declares its own
 # --extra-index-url for the CUDA 12.4 torch wheels.
-COPY services/worker/requirements.txt /app/requirements.txt
-RUN python -m pip install --no-cache-dir -r /app/requirements.txt
+COPY services/worker/requirements-cuda.txt services/worker/requirements.txt /app/
+RUN python -m pip install --no-cache-dir -r /app/requirements-cuda.txt -r /app/requirements.txt
 
-# Application code last so dev rebuilds skip the slow layers above. Both
-# classifier backends (v2, the DINOv2 default; fishial, the legacy bundle) are
-# fetched at start, so reverting stays a single env-var flip.
+# Application code last so dev rebuilds skip the slow layers above.
 COPY services/common /app/common
 COPY scripts/fetch_models.py /app/fetch_models.py
 COPY services/worker/entrypoint.sh /app/entrypoint.sh

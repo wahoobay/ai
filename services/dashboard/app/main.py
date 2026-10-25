@@ -110,6 +110,9 @@ class CorrectionIn(BaseModel):
 log = logging.getLogger("wahoobay.dashboard")
 
 BASE_DIR = Path(__file__).resolve().parent
+# The repository root in a checkout (this file lives in services/dashboard/app);
+# /app in the image, where the Dockerfile copies assets/ and db/ beside app/.
+REPO_ROOT = BASE_DIR.parents[2] if BASE_DIR.parents[1].name == "services" else BASE_DIR.parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
@@ -304,7 +307,7 @@ class DashboardCfg:
             "true",
             "yes",
         }
-        repo_root = Path(__file__).resolve().parents[3]
+        repo_root = REPO_ROOT
         # The rollback switch: the usual spellings of "off" all work;
         # anything else, or unset, leaves the pool on.
         self.review_pool_enabled = _env("REVIEW_POOL_ENABLED", "true").strip().lower() not in {
@@ -408,9 +411,7 @@ def build_app() -> FastAPI:
         # sheet via scripts/build_celebrities.py. Indexed by slug so
         # the correction POST + the GET endpoints can look up O(1).
         try:
-            celeb_doc = json.loads(
-                (BASE_DIR.parent.parent.parent / "assets" / "celebrities.json").read_text()
-            )
+            celeb_doc = json.loads((REPO_ROOT / "assets" / "celebrities.json").read_text())
             celebs = celeb_doc.get("celebrities") or []
             state["celebrities"] = celebs
             state["celebrities_by_id"] = {c["id"]: c for c in celebs}
@@ -431,9 +432,7 @@ def build_app() -> FastAPI:
         async def _reload_catalogues() -> dict:
             stats: dict = {"celebrities": 0, "manifest_names": 0}
             try:
-                doc = json.loads(
-                    (BASE_DIR.parent.parent.parent / "assets" / "celebrities.json").read_text()
-                )
+                doc = json.loads((REPO_ROOT / "assets" / "celebrities.json").read_text())
                 celebs = doc.get("celebrities") or []
                 state["celebrities"] = celebs
                 state["celebrities_by_id"] = {c["id"]: c for c in celebs}
@@ -465,8 +464,8 @@ def build_app() -> FastAPI:
         if cfg.sheet_url and cfg.sheet_poll_interval_s > 0:
             sheet_poller = SheetPoller(
                 sheet_url=cfg.sheet_url,
-                xlsx_path=BASE_DIR.parent.parent.parent / "assets" / "species.xlsx",
-                repo_root=BASE_DIR.parent.parent.parent,
+                xlsx_path=REPO_ROOT / "assets" / "species.xlsx",
+                repo_root=REPO_ROOT,
                 interval_s=cfg.sheet_poll_interval_s,
                 http_client=client,
                 refresh_fn=lambda: _reload_catalogues(),

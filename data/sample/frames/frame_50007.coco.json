@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50007.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    16,
+    71,
+    28,
+    23
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    39,
+    133,
+    55,
+    36
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    203,
+    116,
+    68,
+    38
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    144,
+    87,
+    48,
+    27
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    55,
+    62,
+    32,
+    35
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    186,
+    51,
+    68,
+    39
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    213,
+    37,
+    36,
+    32
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    164,
+    65,
+    42,
+    27
+   ],
+   "category": "Stegastes partitus"
+  }
+ ]
+}

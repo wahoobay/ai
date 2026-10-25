@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50140.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    90,
+    8,
+    58,
+    30
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    240,
+    38,
+    34,
+    33
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    7,
+    122,
+    63,
+    15
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    165,
+    69,
+    36,
+    23
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    218,
+    62,
+    46,
+    19
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    9,
+    20,
+    49,
+    16
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    225,
+    147,
+    55,
+    16
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    205,
+    72,
+    44,
+    14
+   ],
+   "category": "Pomacanthus paru"
+  }
+ ]
+}

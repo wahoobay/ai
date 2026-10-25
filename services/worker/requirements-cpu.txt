@@ -1,0 +1,5 @@
+# torch for the CPU image (`--target cpu`: a laptop, CI), installed before requirements.txt.
+# The CPU index serves 2.4.1+cpu on x86_64 and plain 2.4.1 on arm64; ==2.4.1 matches both.
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+torchvision==0.19.1

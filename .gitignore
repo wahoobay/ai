@@ -37,6 +37,8 @@ data/baseline_runs/
 
 # Runtime artifacts
 frames/
+# the committed sample's drawn frames (data/sample/frames) are not runtime artifacts
+!data/sample/frames/
 logs/
 pgdata/
 *.pid

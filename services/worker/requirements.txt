@@ -1,12 +1,9 @@
-# Runtime deps for the inference worker.
+# Runtime deps for the inference worker, torch aside: torch/torchvision come
+# from requirements-cuda.txt (the CUDA 12.4 wheel index; the default image) or
+# requirements-cpu.txt (the CPU wheel index; `--target cpu`), installed first.
 # Versions pinned to what the DGX conda env runs successfully (2026-05-05).
-# torch/torchvision come from PyTorch's CUDA 12.4 wheel index.
-
---extra-index-url https://download.pytorch.org/whl/cu124
 
 # --- inference -------------------------------------------------------------
-torch==2.4.1+cu124
-torchvision==0.19.1+cu124
 ultralytics==8.4.37
 
 # --- vendored Fishial classifier deps (mounted under /data/models) ---------

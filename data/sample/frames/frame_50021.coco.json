@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50021.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    106,
+    76,
+    60,
+    38
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    178,
+    117,
+    65,
+    36
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    78,
+    117,
+    57,
+    15
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    159,
+    99,
+    34,
+    32
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    229,
+    159,
+    50,
+    18
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    52,
+    44,
+    68,
+    24
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    92,
+    56,
+    59,
+    33
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    184,
+    55,
+    64,
+    20
+   ],
+   "category": "Holacanthus bermudensis"
+  }
+ ]
+}

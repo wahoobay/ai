@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50196.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    224,
+    129,
+    37,
+    36
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    44,
+    43,
+    67,
+    17
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    257,
+    47,
+    59,
+    35
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    12,
+    53,
+    63,
+    19
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    289,
+    78,
+    24,
+    27
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    156,
+    12,
+    36,
+    26
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    208,
+    135,
+    54,
+    25
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    90,
+    93,
+    30,
+    15
+   ],
+   "category": "Abudefduf saxatilis"
+  }
+ ]
+}

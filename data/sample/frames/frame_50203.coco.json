@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50203.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    199,
+    27,
+    64,
+    33
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    225,
+    85,
+    51,
+    37
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    42,
+    154,
+    55,
+    20
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    281,
+    61,
+    37,
+    18
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    87,
+    128,
+    46,
+    27
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    111,
+    87,
+    55,
+    33
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    144,
+    115,
+    58,
+    15
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    11,
+    85,
+    44,
+    22
+   ],
+   "category": "Lutjanus griseus"
+  }
+ ]
+}

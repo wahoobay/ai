@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50161.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    172,
+    129,
+    38,
+    24
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    223,
+    21,
+    60,
+    21
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    115,
+    90,
+    27,
+    25
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    253,
+    8,
+    38,
+    27
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    221,
+    66,
+    51,
+    37
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    2,
+    22,
+    29,
+    27
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    224,
+    115,
+    42,
+    35
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    196,
+    155,
+    49,
+    16
+   ],
+   "category": "Sparisoma viride"
+  }
+ ]
+}

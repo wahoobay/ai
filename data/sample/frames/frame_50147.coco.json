@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50147.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    270,
+    109,
+    47,
+    20
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    92,
+    94,
+    68,
+    30
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    17,
+    113,
+    24,
+    18
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    21,
+    103,
+    32,
+    24
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    262,
+    72,
+    46,
+    19
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    117,
+    45,
+    69,
+    21
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    249,
+    53,
+    58,
+    32
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    109,
+    36,
+    68,
+    15
+   ],
+   "category": "Abudefduf saxatilis"
+  }
+ ]
+}

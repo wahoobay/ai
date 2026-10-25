@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50245.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    192,
+    133,
+    68,
+    31
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    138,
+    6,
+    59,
+    28
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    85,
+    11,
+    59,
+    27
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    29,
+    22,
+    66,
+    35
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    118,
+    59,
+    49,
+    27
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    63,
+    80,
+    60,
+    26
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    57,
+    20,
+    44,
+    32
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    33,
+    87,
+    27,
+    32
+   ],
+   "category": "Holacanthus bermudensis"
+  }
+ ]
+}

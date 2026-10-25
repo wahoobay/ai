@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50105.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    154,
+    144,
+    25,
+    21
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    50,
+    59,
+    31,
+    15
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    93,
+    58,
+    57,
+    32
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    94,
+    13,
+    64,
+    22
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    45,
+    136,
+    46,
+    21
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    288,
+    25,
+    29,
+    36
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    67,
+    149,
+    46,
+    21
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    241,
+    153,
+    54,
+    26
+   ],
+   "category": "Abudefduf saxatilis"
+  }
+ ]
+}

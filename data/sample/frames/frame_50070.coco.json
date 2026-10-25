@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50070.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    42,
+    50,
+    47,
+    16
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    209,
+    101,
+    69,
+    21
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    105,
+    132,
+    32,
+    33
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    76,
+    81,
+    36,
+    37
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    233,
+    113,
+    66,
+    34
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    42,
+    12,
+    69,
+    26
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    191,
+    97,
+    60,
+    23
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    8,
+    25,
+    55,
+    34
+   ],
+   "category": "Holacanthus bermudensis"
+  }
+ ]
+}

@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50000.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    5,
+    72,
+    60,
+    33
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    38,
+    107,
+    49,
+    22
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    151,
+    5,
+    57,
+    30
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    68,
+    58,
+    26,
+    33
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    233,
+    77,
+    57,
+    22
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    19,
+    69,
+    64,
+    39
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    217,
+    65,
+    66,
+    16
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    159,
+    108,
+    35,
+    28
+   ],
+   "category": "Abudefduf saxatilis"
+  }
+ ]
+}

@@ -148,8 +148,10 @@ _MANIFEST_NAMES: dict[str, str] = {}
 
 
 def _repo_root() -> Path:
-    # services/dashboard/app/common_names.py → repo root is three parents up.
-    return Path(__file__).resolve().parents[3]
+    # services/dashboard/app/common_names.py: the repo root is three parents up in a
+    # checkout; in the image (/app/app/...) it is /app, where assets/ sits beside app/.
+    here = Path(__file__).resolve()
+    return here.parents[3] if here.parents[2].name == "services" else here.parents[1]
 
 
 def _ingest_manifest(path: Path, b_key: str, c_key: str) -> int:

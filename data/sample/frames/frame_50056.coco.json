@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50056.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    73,
+    108,
+    28,
+    37
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    74,
+    129,
+    29,
+    30
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    249,
+    129,
+    45,
+    15
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    26,
+    5,
+    59,
+    23
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    56,
+    24,
+    60,
+    35
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    147,
+    54,
+    68,
+    31
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    190,
+    54,
+    53,
+    35
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    126,
+    2,
+    60,
+    37
+   ],
+   "category": "Haemulon flavolineatum"
+  }
+ ]
+}

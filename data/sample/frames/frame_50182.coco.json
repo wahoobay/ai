@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50182.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    112,
+    100,
+    52,
+    29
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    160,
+    88,
+    46,
+    18
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    106,
+    148,
+    26,
+    20
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    33,
+    43,
+    51,
+    36
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    177,
+    39,
+    40,
+    37
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    125,
+    43,
+    57,
+    36
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    9,
+    27,
+    50,
+    23
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    55,
+    4,
+    57,
+    16
+   ],
+   "category": "Pomacanthus paru"
+  }
+ ]
+}
