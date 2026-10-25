@@ -39,6 +39,22 @@ async def test_video_panel_is_the_embed_when_no_worker(rdb, review_assets, monke
     assert 'id="stream"' not in html and 'id="bbox-toggle"' not in html
 
 
+async def test_no_worker_url_at_all_means_no_worker(rdb, review_assets, monkeypatch):
+    """Staging's first look: App Runner gave the dashboard no WORKER_URL and the page
+    showed a dead MJPEG panel instead of the embed, because the code's default was a
+    worker on localhost. A site without a configured worker has no worker."""
+    for key, value in review_assets["env"].items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("WORKER_URL", raising=False)
+    app = _app(monkeypatch, DATABASE_URL=TEST_DSN, LIVE_VIDEO_EMBED_URL=EMBED)
+    assert not any(r.path.startswith("/api/stream") for r in app.routes)
+    await make_user(rdb, "viewer2", role="viewer")
+    with TestClient(app) as client:
+        login(client, "viewer2")
+        html = client.get("/").text
+    assert "<iframe" in html and 'id="bbox-toggle"' not in html
+
+
 async def test_video_panel_is_the_worker_stream_when_there_is_one(rdb, review_assets, monkeypatch):
     for key, value in review_assets["env"].items():
         monkeypatch.setenv(key, value)

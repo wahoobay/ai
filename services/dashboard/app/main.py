@@ -232,7 +232,10 @@ class DashboardCfg:
         self.negative_regions_path = site.negative_regions_path
         self.export_prefix = site.export_prefix
         self.database_url = site.database_url
-        self.worker_url = _env("WORKER_URL", "http://localhost:8081").rstrip("/")
+        # No default: a site has a camera pipeline only when its launcher says so (the DGX
+        # launchers and the compose worker profiles set it). Unset or empty means the live
+        # panel is the embed and the worker routes and alert rules are off.
+        self.worker_url = _env("WORKER_URL", "").rstrip("/")
         # Pier-cam worker — same code, different camera + GPU. Optional; if
         # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
         # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
