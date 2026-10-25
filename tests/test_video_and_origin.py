@@ -77,7 +77,12 @@ async def test_stream_urls_come_from_stream_base_url(rdb, review_assets, monkeyp
     not through App Runner, which cuts requests at 120 s; the page says where."""
     for key, value in review_assets["env"].items():
         monkeypatch.setenv(key, value)
-    app = _app(monkeypatch, DATABASE_URL=TEST_DSN, WORKER_URL="http://127.0.0.1:1", STREAM_BASE_URL="/stream")
+    app = _app(
+        monkeypatch,
+        DATABASE_URL=TEST_DSN,
+        WORKER_URL="http://127.0.0.1:1",
+        STREAM_BASE_URL="/stream",
+    )
     await make_user(rdb, "viewer3", role="viewer")
     with TestClient(app) as client:
         login(client, "viewer3")
@@ -88,7 +93,9 @@ async def test_stream_urls_come_from_stream_base_url(rdb, review_assets, monkeyp
 def test_app_js_builds_stream_urls_from_the_page_base():
     from pathlib import Path
 
-    js = (Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "static" / "app.js").read_text()
+    js = (
+        Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "static" / "app.js"
+    ).read_text()
     assert "dataset.streamBase" in js and js.count('"/api/stream') == 0
 
 
