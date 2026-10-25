@@ -11,7 +11,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "deploy_env.sh"
-FAKE_AWS = r'''#!/usr/bin/env bash
+FAKE_AWS = r"""#!/usr/bin/env bash
 echo "$*" >> "$FAKE_AWS_LOG"
 case "$1 $2" in
   "ecr batch-get-image") echo '{"schemaVersion": 2}' ;;
@@ -36,8 +36,8 @@ case "$1 $2" in
     else echo -e "op-new\tDEPLOY_SERVICE\t${FAKE_APPRUNNER_END:-SUCCEEDED}"; fi ;;
   *) echo "unexpected: aws $*" >&2; exit 1 ;;
 esac
-'''
-FAKE_CURL = r'''#!/usr/bin/env bash
+"""
+FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_AWS_LOG"
 url="${@: -1}"
 if [[ "$*" == *'%{http_code}'* ]]; then
@@ -45,7 +45,7 @@ if [[ "$*" == *'%{http_code}'* ]]; then
 elif [[ "$url" == */login ]]; then echo "<html><title>Sign in</title></html>"
 elif [[ "$url" == */robots.txt ]]; then printf 'User-agent: *\nDisallow: /\n'
 else echo ""; fi
-'''
+"""
 
 
 def _run(tmp_path: Path, env_name: str = "staging", **extra: str):
@@ -71,7 +71,9 @@ def _run(tmp_path: Path, env_name: str = "staging", **extra: str):
         "SLEEP_S": "0",
         **extra,
     }
-    r = subprocess.run(["bash", str(SCRIPT), env_name, "abcdef123456"], env=env, capture_output=True, text=True)
+    r = subprocess.run(
+        ["bash", str(SCRIPT), env_name, "abcdef123456"], env=env, capture_output=True, text=True
+    )
     return r, log.read_text().splitlines()
 
 
@@ -80,7 +82,10 @@ def test_a_deploy_promotes_updates_migrates_waits_and_smokes(tmp_path):
     assert r.returncode == 0, r.stderr + r.stdout
     assert len([c for c in calls if c.startswith("ecr put-image")]) == 6
     updates = [c for c in calls if c.startswith("lambda update-function-code")]
-    uris = {c.split("--function-name ")[1].split()[0]: c.split("--image-uri ")[1].split()[0] for c in updates}
+    uris = {
+        c.split("--function-name ")[1].split()[0]: c.split("--image-uri ")[1].split()[0]
+        for c in updates
+    }
     assert uris == {
         "ai-wahoobay-staging-jobs": "226594054743.dkr.ecr.us-east-1.amazonaws.com/ai-wahoobay-dashboard:staging-lambda",
         "ai-wahoobay-staging-migrate": "226594054743.dkr.ecr.us-east-1.amazonaws.com/ai-wahoobay-dashboard:staging-lambda",
@@ -89,20 +94,28 @@ def test_a_deploy_promotes_updates_migrates_waits_and_smokes(tmp_path):
     }
     assert len([c for c in calls if c.startswith("lambda wait function-updated")]) == 4
     invokes = [c for c in calls if c.startswith("lambda invoke")]
-    assert len(invokes) == 1 and "ai-wahoobay-staging-migrate" in invokes[0] and '{"job":"migrate"}' in invokes[0]
+    assert (
+        len(invokes) == 1
+        and "ai-wahoobay-staging-migrate" in invokes[0]
+        and '{"job":"migrate"}' in invokes[0]
+    )
     # The App Runner wait outlasted the previous operation and saw the new one succeed.
     assert len([c for c in calls if c.startswith("apprunner list-operations")]) >= 4
     curls = [c for c in calls if c.startswith("curl")]
     assert any("staging-ai.wahoobay.net/healthz" in c for c in curls)
     assert any("staging-ai.wahoobay.net/login" in c for c in curls)
     assert any("staging-ai.wahoobay.net/robots.txt" in c for c in curls)
-    assert any("awsapprunner.com" in c for c in curls)  # the direct URL must answer 403 (origin check)
+    assert any(
+        "awsapprunner.com" in c for c in curls
+    )  # the direct URL must answer 403 (origin check)
 
 
 def test_a_failing_migration_stops_the_deploy_before_the_dashboard_rolls(tmp_path):
     r, calls = _run(tmp_path, FAKE_MIGRATE_FAIL="1")
     assert r.returncode != 0 and "migrate" in (r.stderr + r.stdout)
-    assert len([c for c in calls if c.startswith("apprunner list-operations")]) <= 1  # only the "before" lookup
+    assert (
+        len([c for c in calls if c.startswith("apprunner list-operations")]) <= 1
+    )  # only the "before" lookup
     assert not any(c.startswith("curl") for c in calls)
 
 

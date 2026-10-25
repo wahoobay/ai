@@ -9,6 +9,8 @@ are written under FRAMES_URL by key (saved_frames.image_path records it),
 readings are tagged with this site's deployment, every row carries this site's
 LOCATION_ID, and the materialized views are refreshed so the page shows it at
 once. A database that already has detection_events is left alone unless forced.
+With ADMIN_PASSWORD set (the app secret, on a fresh environment) the first admin
+account is created first, whatever the data decides.
 """
 
 from __future__ import annotations
@@ -61,6 +63,23 @@ def _dt(value: str) -> datetime:
     return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
 
+def bootstrap_admin(conn: psycopg.Connection, password: str, *, location_id: str) -> bool:
+    """The first admin account, on an empty users table (a fresh environment: the
+    seed job, ADMIN_PASSWORD from the app secret). Username `admin`, active and
+    approved. Never twice and never over an existing account; True when created."""
+    from .auth import hash_password
+
+    (existing,) = conn.execute("SELECT count(*) FROM users").fetchone()
+    if existing:
+        return False
+    conn.execute(
+        "INSERT INTO users (username, display_name, email, password_hash, role, status, email_verified_at, approved_at) "
+        "VALUES ('admin', 'Administrator', %s, %s, 'admin', 'active', NOW(), NOW())",
+        (f"admin@{location_id}.invalid", hash_password(password)),
+    )
+    return True
+
+
 def seed(
     database_url: str,
     source: str,
@@ -70,8 +89,14 @@ def seed(
     deployment_uri: str = "sample",
     now: datetime | None = None,
     force: bool = False,
+    admin_password: str | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
+    admin_created: bool | None = None
+    if admin_password:
+        with psycopg.connect(database_url) as conn:
+            admin_created = bootstrap_admin(conn, admin_password, location_id=location_id)
+            conn.commit()
     data = {table: _rows(source, table) for table in TABLES}
     newest = max(
         _dt(r["ts"])
@@ -83,7 +108,10 @@ def seed(
     with psycopg.connect(database_url) as conn:
         (existing,) = conn.execute("SELECT count(*) FROM detection_events").fetchone()
         if existing and not force:
-            return {"skipped": "the database already has detection_events"}
+            skipped: dict[str, Any] = {"skipped": "the database already has detection_events"}
+            if admin_created is not None:
+                skipped["admin_created"] = admin_created
+            return skipped
         with conn.cursor() as cur:
             frames_payload = []
             for row in data["saved_frames"]:
@@ -197,6 +225,8 @@ def seed(
             cur.execute("REFRESH MATERIALIZED VIEW species_sightings_mat")
             cur.execute("REFRESH MATERIALIZED VIEW species_sightings_hourly_mat")
         conn.commit()
+    if admin_created is not None:
+        counts["admin_created"] = admin_created
     return counts
 
 
@@ -217,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         frames_url=frames_url(),
         deployment_uri=site.deployment_uri,
         force=args.force,
+        admin_password=os.environ.get("ADMIN_PASSWORD") or None,
     )
     print(json.dumps(out, default=str))
     return 0

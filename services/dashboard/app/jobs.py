@@ -79,6 +79,7 @@ async def seed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
         location_id=site.location_id,
         frames_url=frames_url(),
         deployment_uri=site.deployment_uri,
+        admin_password=os.environ.get("ADMIN_PASSWORD") or None,
     )
 
 

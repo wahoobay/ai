@@ -363,6 +363,10 @@ worker stamps on its rows.
   `ai-prod-<date>-<sha7>` records it.
 - **Rollback** is the same dispatch with the previous SHA; ECR keeps the last
   twenty builds of each image.
+- **Seeding staging:** Actions → `seed-staging` invokes the jobs Lambda with
+  `{"job": "seed"}`: the sample dataset from the models bucket's `sample/`
+  prefix, and the first admin account from the app secret's `admin_password`.
+  Never offered for production.
 - The variables (`STAGING_*`, `PROD_*`: role ARN, function names, App Runner
   service ARN, hostname, service URL) come from the `AiStack` outputs; the
   infra repository's README ("AI stacks") says how to set them. The DGX is not

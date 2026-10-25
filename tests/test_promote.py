@@ -10,7 +10,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "promote.sh"
-FAKE_AWS = r'''#!/usr/bin/env bash
+FAKE_AWS = r"""#!/usr/bin/env bash
 # Records every call. batch-get-image answers with a manifest; put-image obeys FAKE_PUT_MODE.
 echo "$*" >> "$FAKE_AWS_LOG"
 case "$2" in
@@ -23,10 +23,12 @@ case "$2" in
     echo '{"image": {}}' ;;
   *) echo "unexpected: aws $*" >&2; exit 1 ;;
 esac
-'''
+"""
 
 
-def _run(tmp_path: Path, env_name: str, sha: str, mode: str = "ok") -> tuple[subprocess.CompletedProcess, list[str]]:
+def _run(
+    tmp_path: Path, env_name: str, sha: str, mode: str = "ok"
+) -> tuple[subprocess.CompletedProcess, list[str]]:
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     (bindir / "aws").write_text(FAKE_AWS)
@@ -41,7 +43,9 @@ def _run(tmp_path: Path, env_name: str, sha: str, mode: str = "ok") -> tuple[sub
         "AWS_REGION": "us-east-1",
         "LOCATION_ID": "wahoobay",
     }
-    r = subprocess.run(["bash", str(SCRIPT), env_name, sha], env=env, capture_output=True, text=True)
+    r = subprocess.run(
+        ["bash", str(SCRIPT), env_name, sha], env=env, capture_output=True, text=True
+    )
     return r, log.read_text().splitlines()
 
 
@@ -51,7 +55,9 @@ def _tag_pairs(calls: list[str]) -> set[tuple[str, str]]:
         if not call.startswith("ecr put-image"):
             continue
         parts = call.split()
-        pairs.add((parts[parts.index("--repository-name") + 1], parts[parts.index("--image-tag") + 1]))
+        pairs.add(
+            (parts[parts.index("--repository-name") + 1], parts[parts.index("--image-tag") + 1])
+        )
     return pairs
 
 
