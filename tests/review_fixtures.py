@@ -4,6 +4,7 @@ tests/conftest.py imports the fixtures so every test module can use
 them; test modules import the helpers directly. Nothing here imports
 the dashboard's review modules at import time, because conftest imports
 this file before those modules exist (Task 1 lands before Task 4)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -37,50 +38,118 @@ TRUNCATE_SQL = """
 # is a Species Log entry WoRMS cannot resolve; French Angelfish has two
 # life stages; one Species Log row has no binomial at all.
 SPECIES_MANIFEST = [
-    {"binomial": "Seriola zonata", "common_name": "Banded Rudderfish",
-     "life_stage": "unknown", "family": "Carangidae"},
-    {"binomial": "Pomacanthus paru", "common_name": "Adult French Angelfish",
-     "life_stage": "adult", "family": "Pomacanthidae"},
-    {"binomial": "Pomacanthus paru", "common_name": "Juvenile French Angelfish",
-     "life_stage": "juvenile", "family": "Pomacanthidae"},
-    {"binomial": "Pomatomus saltarix", "common_name": "Bluefish",
-     "life_stage": "unknown", "family": "Pomatomidae"},
-    {"binomial": "Acanthurus coeruleus", "common_name": "Blue Tang",
-     "life_stage": "unknown", "family": "Acanthuridae"},
-    {"binomial": "Anilocra ./Renocila", "common_name": "Fish louse",
-     "life_stage": "unknown", "family": "Cymothoidae"},
+    {
+        "binomial": "Seriola zonata",
+        "common_name": "Banded Rudderfish",
+        "life_stage": "unknown",
+        "family": "Carangidae",
+    },
+    {
+        "binomial": "Pomacanthus paru",
+        "common_name": "Adult French Angelfish",
+        "life_stage": "adult",
+        "family": "Pomacanthidae",
+    },
+    {
+        "binomial": "Pomacanthus paru",
+        "common_name": "Juvenile French Angelfish",
+        "life_stage": "juvenile",
+        "family": "Pomacanthidae",
+    },
+    {
+        "binomial": "Pomatomus saltarix",
+        "common_name": "Bluefish",
+        "life_stage": "unknown",
+        "family": "Pomatomidae",
+    },
+    {
+        "binomial": "Acanthurus coeruleus",
+        "common_name": "Blue Tang",
+        "life_stage": "unknown",
+        "family": "Acanthuridae",
+    },
+    {
+        "binomial": "Anilocra ./Renocila",
+        "common_name": "Fish louse",
+        "life_stage": "unknown",
+        "family": "Cymothoidae",
+    },
     {"binomial": None, "common_name": "TBC", "life_stage": "unknown", "family": None},
 ]
-CLASSES = ["Acanthurus_coeruleus", "Neopomacentrus_cyanomos", "Pomacanthus_paru",
-           "Pomatomus_saltarix", "Seriola_zonata"]
+CLASSES = [
+    "Acanthurus_coeruleus",
+    "Neopomacentrus_cyanomos",
+    "Pomacanthus_paru",
+    "Pomatomus_saltarix",
+    "Seriola_zonata",
+]
 # raw_name, aphia_id, accepted_name, rank, match_type, family
 TAXONOMY = [
     ("Acanthurus coeruleus", 900001, "Acanthurus coeruleus", "Species", "exact", "Acanthuridae"),
-    ("Neopomacentrus cyanomos", 900002, "Neopomacentrus cyanomos", "Species", "exact",
-     "Pomacentridae"),
+    (
+        "Neopomacentrus cyanomos",
+        900002,
+        "Neopomacentrus cyanomos",
+        "Species",
+        "exact",
+        "Pomacentridae",
+    ),
     ("Pomacanthus paru", 900003, "Pomacanthus paru", "Species", "exact", "Pomacanthidae"),
     ("Pomatomus saltarix", 900004, "Pomatomus saltatrix", "Species", "phonetic", "Pomatomidae"),
     ("Seriola zonata", 900005, "Seriola zonata", "Species", "exact", "Carangidae"),
 ]
-TAXONOMY_FIELDS = ["raw_name", "aphia_id", "accepted_name", "authority", "rank", "match_type",
-                   "status", "species", "genus", "family", "order", "class", "phylum",
-                   "kingdom", "lowest"]
-INAT = [
-    {"binomial": "Seriola zonata", "photo_id": 11, "common_name": "Banded Rudderfish",
-     "license": "cc-by-nc", "attribution": "(c) tester, some rights reserved (CC BY-NC)",
-     "local_path": "assets/inat_photos/Seriola_zonata/11.jpg"},
-    {"binomial": "Acanthurus coeruleus", "photo_id": 12, "common_name": "Blue Tang",
-     "license": "cc-by", "attribution": "(c) elsewhere", "local_path": "../outside/12.jpg"},
-    {"binomial": "Neopomacentrus cyanomos", "photo_id": 13, "common_name": "Regal Demoiselle",
-     "license": "cc0", "attribution": "(c) tester2",
-     "local_path": "assets/inat_photos/Neopomacentrus_cyanomos/13.jpg"},
+TAXONOMY_FIELDS = [
+    "raw_name",
+    "aphia_id",
+    "accepted_name",
+    "authority",
+    "rank",
+    "match_type",
+    "status",
+    "species",
+    "genus",
+    "family",
+    "order",
+    "class",
+    "phylum",
+    "kingdom",
+    "lowest",
 ]
-CELEBRITIES = {"celebrities": [
-    {"id": "bobby", "nickname": "Bobby", "binomial": "Acanthurus coeruleus"}]}
-BASELINE = ([{"label": "Seriola zonata", "source_kind": "drive:video"}] * 3
-            + [{"label": "Pomatomus saltarix", "source_kind": "inat:image"}]
-            + [{"label": "Acanthurus coeruleus", "source_kind": "inat:image"}] * 10
-            + [{"label": "Seriola zonata", "source_kind": "review:video"}])
+INAT = [
+    {
+        "binomial": "Seriola zonata",
+        "photo_id": 11,
+        "common_name": "Banded Rudderfish",
+        "license": "cc-by-nc",
+        "attribution": "(c) tester, some rights reserved (CC BY-NC)",
+        "local_path": "assets/inat_photos/Seriola_zonata/11.jpg",
+    },
+    {
+        "binomial": "Acanthurus coeruleus",
+        "photo_id": 12,
+        "common_name": "Blue Tang",
+        "license": "cc-by",
+        "attribution": "(c) elsewhere",
+        "local_path": "../outside/12.jpg",
+    },
+    {
+        "binomial": "Neopomacentrus cyanomos",
+        "photo_id": 13,
+        "common_name": "Regal Demoiselle",
+        "license": "cc0",
+        "attribution": "(c) tester2",
+        "local_path": "assets/inat_photos/Neopomacentrus_cyanomos/13.jpg",
+    },
+]
+CELEBRITIES = {
+    "celebrities": [{"id": "bobby", "nickname": "Bobby", "binomial": "Acanthurus coeruleus"}]
+}
+BASELINE = (
+    [{"label": "Seriola zonata", "source_kind": "drive:video"}] * 3
+    + [{"label": "Pomatomus saltarix", "source_kind": "inat:image"}]
+    + [{"label": "Acanthurus coeruleus", "source_kind": "inat:image"}] * 10
+    + [{"label": "Seriola zonata", "source_kind": "review:video"}]
+)
 
 
 def jpeg(path: Path, color=(30, 60, 90), size=(1280, 720)) -> str:
@@ -104,10 +173,22 @@ def write_review_assets(root: Path) -> dict:
         w.writeheader()
         for raw, aphia, accepted, rank, match, family in TAXONOMY:
             genus, _, epithet = accepted.partition(" ")
-            w.writerow({"raw_name": raw, "aphia_id": aphia, "accepted_name": accepted,
-                        "authority": "Tester, 1900", "rank": rank, "match_type": match,
-                        "status": "accepted", "species": epithet, "genus": genus,
-                        "family": family, "kingdom": "Animalia", "lowest": "species"})
+            w.writerow(
+                {
+                    "raw_name": raw,
+                    "aphia_id": aphia,
+                    "accepted_name": accepted,
+                    "authority": "Tester, 1900",
+                    "rank": rank,
+                    "match_type": match,
+                    "status": "accepted",
+                    "species": epithet,
+                    "genus": genus,
+                    "family": family,
+                    "kingdom": "Animalia",
+                    "lowest": "species",
+                }
+            )
     jpeg(assets / "inat_photos" / "Seriola_zonata" / "11.jpg", (200, 180, 40), (64, 48))
     jpeg(assets / "inat_photos" / "Neopomacentrus_cyanomos" / "13.jpg", (40, 40, 200), (64, 48))
     classes = root / "classes.json"
@@ -127,8 +208,7 @@ def write_review_assets(root: Path) -> dict:
         # after applying this dict, so its explicit value wins.
         "REVIEW_SPOTCHECK_RATE": "0",
     }
-    return {"root": root, "assets": assets, "classes": classes, "baseline": baseline,
-            "env": env}
+    return {"root": root, "assets": assets, "classes": classes, "baseline": baseline, "env": env}
 
 
 def catalogue_paths(info: dict):
@@ -136,9 +216,13 @@ def catalogue_paths(info: dict):
 
     a = info["assets"]
     return CataloguePaths(
-        species_manifest=a / "species_manifest.json", classes_json=info["classes"],
-        taxonomy_csv=a / "taxonomy.csv", inat_manifest=a / "inat_manifest.json",
-        celebrities_json=a / "celebrities.json", photo_root=info["root"])
+        species_manifest=a / "species_manifest.json",
+        classes_json=info["classes"],
+        taxonomy_csv=a / "taxonomy.csv",
+        inat_manifest=a / "inat_manifest.json",
+        celebrities_json=a / "celebrities.json",
+        photo_root=info["root"],
+    )
 
 
 @pytest.fixture
@@ -173,8 +257,18 @@ def rclient(rdb, review_assets, monkeypatch):
         yield client
 
 
-async def seed_frame(db, tmp_path, *, ts=T0, source="seahivecam", frame_id=1000, boxes=(),
-                     save=True, color=(30, 60, 90), num_fish=None) -> dict:
+async def seed_frame(
+    db,
+    tmp_path,
+    *,
+    ts=T0,
+    source="seahivecam",
+    frame_id=1000,
+    boxes=(),
+    save=True,
+    color=(30, 60, 90),
+    num_fish=None,
+) -> dict:
     """Insert one frame and its detections. Each box is a dict with `bbox`
     and optionally `species` (a classifier class name, spaces not
     underscores, as the worker writes it), `p`, `det_conf`, `track_id`.
@@ -190,8 +284,15 @@ async def seed_frame(db, tmp_path, *, ts=T0, source="seahivecam", frame_id=1000,
                 """INSERT INTO saved_frames (ts, frame_id, source_name, reason, image_path,
                                              coco_path, num_fish)
                    VALUES (%s, %s, %s, 'interesting:high_conf', %s, %s, %s) RETURNING id""",
-                (ts, frame_id, source, image, image + ".coco.json",
-                 len(boxes) if num_fish is None else num_fish))
+                (
+                    ts,
+                    frame_id,
+                    source,
+                    image,
+                    image + ".coco.json",
+                    len(boxes) if num_fish is None else num_fish,
+                ),
+            )
             saved_frame_id = (await cur.fetchone())[0]
         event_ids = []
         for b in boxes:
@@ -203,11 +304,29 @@ async def seed_frame(db, tmp_path, *, ts=T0, source="seahivecam", frame_id=1000,
                                                  best_name, best_species_id, best_accuracy,
                                                  track_id)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                (ts, frame_id, source, b.get("det_conf", 0.8), list(b["bbox"]), Jsonb(topk),
-                 species, species, p, b.get("track_id")))
+                (
+                    ts,
+                    frame_id,
+                    source,
+                    b.get("det_conf", 0.8),
+                    list(b["bbox"]),
+                    Jsonb(topk),
+                    species,
+                    species,
+                    p,
+                    b.get("track_id"),
+                ),
+            )
             event_ids.append((await cur.fetchone())[0])
-    return {"saved_frame_id": saved_frame_id, "event_ids": event_ids, "image_path": image,
-            "ts": ts, "frame_id": frame_id, "source": source, "boxes": boxes}
+    return {
+        "saved_frame_id": saved_frame_id,
+        "event_ids": event_ids,
+        "image_path": image,
+        "ts": ts,
+        "frame_id": frame_id,
+        "source": source,
+        "boxes": boxes,
+    }
 
 
 async def make_user(db, username, role="reviewer", status="active") -> int:
@@ -217,30 +336,58 @@ async def make_user(db, username, role="reviewer", status="active") -> int:
         cur = await conn.execute(
             """INSERT INTO users (username, display_name, email, password_hash, role, status)
                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (username, username.title(), f"{username}@example.org", hash_password(PASSWORD),
-             role, status))
+            (
+                username,
+                username.title(),
+                f"{username}@example.org",
+                hash_password(PASSWORD),
+                role,
+                status,
+            ),
+        )
         return (await cur.fetchone())[0]
 
 
 def login(client, username) -> None:
     client.cookies.clear()
-    r = client.post("/api/auth/login", json={"username": username, "password": PASSWORD},
-                    headers=CSRF)
+    r = client.post(
+        "/api/auth/login", json={"username": username, "password": PASSWORD}, headers=CSRF
+    )
     assert r.status_code == 200, r.text
 
 
 def as_user(uid, *, role="reviewer", session_id=None, name="Rev"):
     from app.auth import CurrentUser
 
-    return CurrentUser(id=uid, username=name.lower(), display_name=name, role=role,
-                       status="active", session_id=session_id,
-                       last_seen_at=datetime.now(UTC))
+    return CurrentUser(
+        id=uid,
+        username=name.lower(),
+        display_name=name,
+        role=role,
+        status="active",
+        session_id=session_id,
+        last_seen_at=datetime.now(UTC),
+    )
 
 
-async def add_item(db, frame, index=0, *, lane="check", pass_=1, predicted=None,
-                   predicted_p=None, route=None, hints=None, status="open",
-                   claimed_by=None, claimed_until=None, exclude_user_id=None,
-                   first_correction_id=None, added_at=None) -> int:
+async def add_item(
+    db,
+    frame,
+    index=0,
+    *,
+    lane="check",
+    pass_=1,
+    predicted=None,
+    predicted_p=None,
+    route=None,
+    hints=None,
+    status="open",
+    claimed_by=None,
+    claimed_until=None,
+    exclude_user_id=None,
+    first_correction_id=None,
+    added_at=None,
+) -> int:
     from psycopg.types.json import Jsonb
 
     async with db.connection() as conn:
@@ -252,17 +399,47 @@ async def add_item(db, frame, index=0, *, lane="check", pass_=1, predicted=None,
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                        COALESCE(%s, now()))
                RETURNING id""",
-            (frame["event_ids"][index], pass_, lane, frame["saved_frame_id"], frame["source"],
-             frame["ts"], list(frame["boxes"][index]["bbox"]), predicted, predicted_p,
-             Jsonb(hints) if hints is not None else None, route, status, claimed_by,
-             claimed_until, exclude_user_id, first_correction_id, added_at))
+            (
+                frame["event_ids"][index],
+                pass_,
+                lane,
+                frame["saved_frame_id"],
+                frame["source"],
+                frame["ts"],
+                list(frame["boxes"][index]["bbox"]),
+                predicted,
+                predicted_p,
+                Jsonb(hints) if hints is not None else None,
+                route,
+                status,
+                claimed_by,
+                claimed_until,
+                exclude_user_id,
+                first_correction_id,
+                added_at,
+            ),
+        )
         return (await cur.fetchone())[0]
 
 
-async def add_verdict(db, event_id, user_id, *, name=None, not_a_fish=False,
-                      unidentifiable=False, item_id=None, session_id=None,
-                      is_adjudication=False, confidence="certain", label_source=None,
-                      bbox=None, created_at=None, notes=None, reviewer=None) -> int:
+async def add_verdict(
+    db,
+    event_id,
+    user_id,
+    *,
+    name=None,
+    not_a_fish=False,
+    unidentifiable=False,
+    item_id=None,
+    session_id=None,
+    is_adjudication=False,
+    confidence="certain",
+    label_source=None,
+    bbox=None,
+    created_at=None,
+    notes=None,
+    reviewer=None,
+) -> int:
     async with db.connection() as conn:
         cur = await conn.execute(
             """INSERT INTO detection_corrections
@@ -272,8 +449,24 @@ async def add_verdict(db, event_id, user_id, *, name=None, not_a_fish=False,
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                        COALESCE(%s, now()))
                RETURNING id""",
-            (event_id, name, name, not_a_fish, unidentifiable, item_id, user_id, session_id,
-             is_adjudication, confidence, label_source, bbox, reviewer, notes, created_at))
+            (
+                event_id,
+                name,
+                name,
+                not_a_fish,
+                unidentifiable,
+                item_id,
+                user_id,
+                session_id,
+                is_adjudication,
+                confidence,
+                label_source,
+                bbox,
+                reviewer,
+                notes,
+                created_at,
+            ),
+        )
         return (await cur.fetchone())[0]
 
 
@@ -293,7 +486,8 @@ async def wait_until_blocked(db, *, timeout_s: float = 5.0) -> None:
             cur = await conn.execute(
                 """SELECT count(*) FROM pg_stat_activity
                     WHERE datname = current_database()
-                      AND cardinality(pg_blocking_pids(pid)) > 0""")
+                      AND cardinality(pg_blocking_pids(pid)) > 0"""
+            )
             found = (await cur.fetchone())[0]
             await conn.rollback()
             if found:

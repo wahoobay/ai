@@ -17,6 +17,7 @@ training folder that species lives in, because folders keep the
 original spelling. CatalogueStore rebuilds the catalogue whenever one of
 the files changes, so a sheet edit reaches the page without a restart.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,11 +49,16 @@ class CataloguePaths:
     taxonomy_csv: Path
     inat_manifest: Path
     celebrities_json: Path
-    photo_root: Path                # iNat `local_path` values are relative to this
+    photo_root: Path  # iNat `local_path` values are relative to this
 
     def watched(self) -> tuple[Path, ...]:
-        return (self.species_manifest, self.classes_json, self.taxonomy_csv,
-                self.inat_manifest, self.celebrities_json)
+        return (
+            self.species_manifest,
+            self.classes_json,
+            self.taxonomy_csv,
+            self.inat_manifest,
+            self.celebrities_json,
+        )
 
 
 @dataclass
@@ -78,8 +84,9 @@ class CatalogueEntry:
 
 
 class Catalogue:
-    def __init__(self, entries, accepted_by_raw: dict[str, str],
-                 celebrities_by_id: dict[str, dict]) -> None:
+    def __init__(
+        self, entries, accepted_by_raw: dict[str, str], celebrities_by_id: dict[str, dict]
+    ) -> None:
         self.entries = sorted(entries, key=lambda e: ((e.common_name or e.name).lower(), e.key))
         self._accepted = dict(accepted_by_raw)
         self._by_key = {e.key: e for e in self.entries}
@@ -112,8 +119,9 @@ class Catalogue:
         return next((e.class_dir for e in self._by_name.get(name, []) if e.class_dir), None)
 
     def common_name(self, name: str | None) -> str | None:
-        return next((e.common_name for e in self._by_name.get(name or "", [])
-                     if e.common_name), None)
+        return next(
+            (e.common_name for e in self._by_name.get(name or "", []) if e.common_name), None
+        )
 
     def celebrity_ids(self, name: str | None) -> set[str]:
         return {c for e in self._by_name.get(name or "", []) for c in e.celebrity_ids}
@@ -125,18 +133,31 @@ class Catalogue:
     def to_json(self) -> list[dict]:
         out = []
         for e in self.entries:
-            out.append({
-                "key": e.key, "name": e.name, "life_stage": e.life_stage,
-                "common": e.common_name, "aphia_id": e.aphia_id, "rank": e.rank,
-                "family": e.family, "resolved": e.resolved,
-                "in_species_log": e.in_species_log, "in_classifier": e.in_classifier,
-                "photo_url": (f"/api/review/species/{slug(e.name)}/photo.jpg"
-                              if e.photo_path else None),
-                "photo_credit": e.photo_credit,
-                "celebrities": [
-                    {"id": c, "nickname": (self.celebrities_by_id.get(c) or {}).get("nickname") or c}
-                    for c in e.celebrity_ids],
-            })
+            out.append(
+                {
+                    "key": e.key,
+                    "name": e.name,
+                    "life_stage": e.life_stage,
+                    "common": e.common_name,
+                    "aphia_id": e.aphia_id,
+                    "rank": e.rank,
+                    "family": e.family,
+                    "resolved": e.resolved,
+                    "in_species_log": e.in_species_log,
+                    "in_classifier": e.in_classifier,
+                    "photo_url": (
+                        f"/api/review/species/{slug(e.name)}/photo.jpg" if e.photo_path else None
+                    ),
+                    "photo_credit": e.photo_credit,
+                    "celebrities": [
+                        {
+                            "id": c,
+                            "nickname": (self.celebrities_by_id.get(c) or {}).get("nickname") or c,
+                        }
+                        for c in e.celebrity_ids
+                    ],
+                }
+            )
         return out
 
 
@@ -158,8 +179,9 @@ def _read_taxonomy(path: Path) -> dict[str, dict]:
 
 def load_catalogue(paths: CataloguePaths) -> Catalogue:
     taxonomy = _read_taxonomy(paths.taxonomy_csv)
-    accepted_by_raw = {raw: row["accepted_name"] for raw, row in taxonomy.items()
-                       if row.get("accepted_name")}
+    accepted_by_raw = {
+        raw: row["accepted_name"] for raw, row in taxonomy.items() if row.get("accepted_name")
+    }
     entries: dict[str, CatalogueEntry] = {}
 
     def entry_for(raw: str, stage: str | None) -> CatalogueEntry:
@@ -199,8 +221,10 @@ def load_catalogue(paths: CataloguePaths) -> Catalogue:
 
     root = paths.photo_root.resolve()
     photos: dict[str, dict] = {}
-    for p in sorted(_read_json(paths.inat_manifest, []),
-                    key=lambda r: (str(r.get("binomial")), r.get("photo_id") or 0)):
+    for p in sorted(
+        _read_json(paths.inat_manifest, []),
+        key=lambda r: (str(r.get("binomial")), r.get("photo_id") or 0),
+    ):
         raw, local = p.get("binomial"), p.get("local_path")
         if not raw or not local:
             continue
@@ -210,8 +234,11 @@ def load_catalogue(paths: CataloguePaths) -> Catalogue:
         path = (root / local).resolve()
         if not path.is_relative_to(root) or not path.is_file():
             continue
-        photos[name] = {"path": path, "credit": p.get("attribution"),
-                        "common": p.get("common_name")}
+        photos[name] = {
+            "path": path,
+            "credit": p.get("attribution"),
+            "common": p.get("common_name"),
+        }
     for e in entries.values():
         ph = photos.get(e.name)
         if ph:

@@ -4,6 +4,7 @@ Detector: ultralytics YOLO on model.pt (v26 nano).
 Classifier: Fishial TorchScript bundle loaded via their FishInferenceEngine
 (vendored at runtime by adding CLASSIFIER_INFERENCE_MODULE_DIR to sys.path).
 """
+
 from __future__ import annotations
 
 import logging
@@ -62,9 +63,12 @@ class FishialPipeline:
         # warm up
         dummy = np.zeros((cfg.det_imgsz, cfg.det_imgsz, 3), dtype=np.uint8)
         self.detector.predict(
-            source=dummy, imgsz=cfg.det_imgsz,
-            conf=cfg.det_conf_threshold, iou=cfg.det_iou_threshold,
-            device=self.device, verbose=False,
+            source=dummy,
+            imgsz=cfg.det_imgsz,
+            conf=cfg.det_conf_threshold,
+            iou=cfg.det_iou_threshold,
+            device=self.device,
+            verbose=False,
         )
         log.info("Detector loaded: %s on %s", cfg.detector_path, self.device)
 
@@ -89,7 +93,9 @@ class FishialPipeline:
         ac_dtype = self._autocast_dtype()
         if ac_dtype is not None:
             self.classifier.model = _AutocastForward(
-                self.classifier.model, self.device, ac_dtype,
+                self.classifier.model,
+                self.device,
+                ac_dtype,
             )
             log.info("Classifier autocast: enabled (%s)", ac_dtype)
         else:
@@ -164,19 +170,26 @@ class FishialPipeline:
                 for p in fr.top_k:
                     if p.accuracy < self.cfg.min_accept_accuracy:
                         continue
-                    topk.append(Prediction(
-                        name=p.name,
-                        species_id=p.species_id,
-                        accuracy=float(p.accuracy),
-                    ))
-            out.append(FishDetection(
-                bbox=(int(x1), int(y1), int(x2), int(y2)),
-                det_conf=float(conf),
-                topk=topk,  # empty if det_conf < min_classify_det_conf
-            ))
+                    topk.append(
+                        Prediction(
+                            name=p.name,
+                            species_id=p.species_id,
+                            accuracy=float(p.accuracy),
+                        )
+                    )
+            out.append(
+                FishDetection(
+                    bbox=(int(x1), int(y1), int(x2), int(y2)),
+                    det_conf=float(conf),
+                    topk=topk,  # empty if det_conf < min_classify_det_conf
+                )
+            )
 
         log.debug(
             "frame: %d fish (%d classified, det=%.1fms, cls=%.1fms)",
-            len(out), len(keep_idx), (t1 - t0) * 1000, (t2 - t1) * 1000,
+            len(out),
+            len(keep_idx),
+            (t1 - t0) * 1000,
+            (t2 - t1) * 1000,
         )
         return out

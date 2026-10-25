@@ -30,6 +30,7 @@ species edges, eventually augmented with kingdom/phylum/class/order from
 WoRMS or GBIF). Trinomial entries (rare; e.g. subspecies) are recorded as
 ``genus`` + ``species`` + ``subspecies``.
 """
+
 from __future__ import annotations
 
 import csv
@@ -59,13 +60,13 @@ CLASSIFIER_LABELS = REPO_ROOT / "data" / "models" / "labels.json"
 # training the option to treat them as the same class with augmentation, or
 # as separate sub-classes.
 LIFE_STAGE_PATTERNS = [
-    (re.compile(r"^juvenile\b",     re.I), "juvenile"),
-    (re.compile(r"^juvi\b",         re.I), "juvenile"),
-    (re.compile(r"\bjuvi[^a-z]?",    re.I), "juvenile"),
+    (re.compile(r"^juvenile\b", re.I), "juvenile"),
+    (re.compile(r"^juvi\b", re.I), "juvenile"),
+    (re.compile(r"\bjuvi[^a-z]?", re.I), "juvenile"),
     (re.compile(r"^intermediate\b", re.I), "intermediate"),
-    (re.compile(r"^sub-?adult\b",   re.I), "subadult"),
-    (re.compile(r"^adult\b",        re.I), "adult"),
-    (re.compile(r"^hybrid\b",       re.I), "hybrid"),
+    (re.compile(r"^sub-?adult\b", re.I), "subadult"),
+    (re.compile(r"^adult\b", re.I), "adult"),
+    (re.compile(r"^hybrid\b", re.I), "hybrid"),
 ]
 
 
@@ -75,23 +76,23 @@ class ManifestRecord:
     genus: str | None
     species: str | None
     subspecies: str | None
-    binomial: str | None             # "Genus species" (or just "Genus" if species unknown)
+    binomial: str | None  # "Genus species" (or just "Genus" if species unknown)
     common_name: str
-    life_stage: str                  # juvenile | intermediate | adult | hybrid | unknown
-    first_seen: str | None           # ISO date "YYYY-MM-DD" or None
+    life_stage: str  # juvenile | intermediate | adult | hybrid | unknown
+    first_seen: str | None  # ISO date "YYYY-MM-DD" or None
     cam_wahoo: bool
     cam_pier: bool
     drive_id: str | None
     drive_url: str | None
     source_sheet: str
     source_row: int
-    raw_sci_name: str                # exactly what the volunteer typed, for audit
+    raw_sci_name: str  # exactly what the volunteer typed, for audit
     # Display-ready label used as the on-screen / dataset-review annotation.
     # Plain-text and HTML variants so non-renderer consumers (CSV, terminal,
     # JSON tools) still read cleanly while the dashboard / annotation UI
     # gets the italicised binomial via display_label_html.
-    display_label: str               # e.g. "Blue Angelfish (H. bermudensis)"
-    display_label_html: str          # e.g. "Blue Angelfish <i>(H. bermudensis)</i>"
+    display_label: str  # e.g. "Blue Angelfish (H. bermudensis)"
+    display_label_html: str  # e.g. "Blue Angelfish <i>(H. bermudensis)</i>"
 
 
 # ---------- parsing helpers ----------
@@ -151,7 +152,9 @@ def iso_date(v) -> str | None:
 
 
 def format_display_label(
-    common: str | None, genus: str | None, species: str | None,
+    common: str | None,
+    genus: str | None,
+    species: str | None,
 ) -> tuple[str, str]:
     """Produce the dataset annotation string for a record.
 
@@ -206,7 +209,7 @@ def load_pier_cam_flags(wb) -> dict[str, dict[str, bool]]:
         pier = s.cell(row, 6).value
         wahoo = s.cell(row, 7).value
         flags[binomial] = {
-            "cam_pier":  bool(pier and str(pier).strip().lower() in ("x", "yes", "1")),
+            "cam_pier": bool(pier and str(pier).strip().lower() in ("x", "yes", "1")),
             "cam_wahoo": bool(wahoo and str(wahoo).strip().lower() in ("x", "yes", "1")),
         }
     return flags
@@ -241,25 +244,29 @@ def extract_records(wb) -> list[ManifestRecord]:
         cams = pier_flags.get(binomial or "", {})
         display_text, display_html = format_display_label(common, genus, species)
 
-        records.append(ManifestRecord(
-            family=str(fam).strip() if fam else None,
-            genus=genus,
-            species=species,
-            subspecies=subspecies,
-            binomial=binomial,
-            common_name=common.strip(),
-            life_stage=parse_life_stage(common),
-            first_seen=iso_date(first_seen),
-            cam_wahoo=bool(cams.get("cam_wahoo", True)),  # default: assume Wahoo cam if not in Pier sheet
-            cam_pier=bool(cams.get("cam_pier", False)),
-            drive_id=drive_id,
-            drive_url=url if drive_id else None,
-            source_sheet="Species Log",
-            source_row=row,
-            raw_sci_name=sci.strip(),
-            display_label=display_text,
-            display_label_html=display_html,
-        ))
+        records.append(
+            ManifestRecord(
+                family=str(fam).strip() if fam else None,
+                genus=genus,
+                species=species,
+                subspecies=subspecies,
+                binomial=binomial,
+                common_name=common.strip(),
+                life_stage=parse_life_stage(common),
+                first_seen=iso_date(first_seen),
+                cam_wahoo=bool(
+                    cams.get("cam_wahoo", True)
+                ),  # default: assume Wahoo cam if not in Pier sheet
+                cam_pier=bool(cams.get("cam_pier", False)),
+                drive_id=drive_id,
+                drive_url=url if drive_id else None,
+                source_sheet="Species Log",
+                source_row=row,
+                raw_sci_name=sci.strip(),
+                display_label=display_text,
+                display_label_html=display_html,
+            )
+        )
     return records
 
 

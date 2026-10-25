@@ -20,6 +20,7 @@ Usage:
 If output is omitted it writes alongside the input with the same
 stem and a .pdf extension.
 """
+
 from __future__ import annotations
 
 import re
@@ -32,20 +33,18 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
     Image,
     PageTemplate,
-    PageBreak,
     Paragraph,
     Preformatted,
     Spacer,
     Table,
     TableStyle,
 )
-from reportlab.lib.utils import ImageReader
-
 
 # ---------------------------------------------------------------------------
 # Styles
@@ -55,67 +54,126 @@ _BASE = getSampleStyleSheet()
 
 # Body — slightly bigger leading than reportlab's default so paragraphs breathe.
 BODY = ParagraphStyle(
-    "body", parent=_BASE["BodyText"],
-    fontName="Helvetica", fontSize=10, leading=14,
-    spaceBefore=2, spaceAfter=6, alignment=TA_LEFT,
+    "body",
+    parent=_BASE["BodyText"],
+    fontName="Helvetica",
+    fontSize=10,
+    leading=14,
+    spaceBefore=2,
+    spaceAfter=6,
+    alignment=TA_LEFT,
 )
 
 # Heading hierarchy. We want H1 to be visually unmistakable so the
 # top-of-page bookmark navigation lines up with the structure.
-H1 = ParagraphStyle("h1", parent=_BASE["Heading1"],
-                    fontName="Helvetica-Bold", fontSize=22, leading=26,
-                    spaceBefore=18, spaceAfter=10, textColor=colors.HexColor("#0b2c44"))
-H2 = ParagraphStyle("h2", parent=_BASE["Heading2"],
-                    fontName="Helvetica-Bold", fontSize=16, leading=20,
-                    spaceBefore=16, spaceAfter=8, textColor=colors.HexColor("#0b2c44"))
-H3 = ParagraphStyle("h3", parent=_BASE["Heading3"],
-                    fontName="Helvetica-Bold", fontSize=13, leading=17,
-                    spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1f3b4f"))
-H4 = ParagraphStyle("h4", parent=_BASE["Heading4"],
-                    fontName="Helvetica-Bold", fontSize=11, leading=15,
-                    spaceBefore=10, spaceAfter=4, textColor=colors.HexColor("#1f3b4f"))
-H5 = ParagraphStyle("h5", parent=_BASE["Heading5"],
-                    fontName="Helvetica-Bold", fontSize=10, leading=13,
-                    spaceBefore=8, spaceAfter=2, textColor=colors.HexColor("#1f3b4f"))
+H1 = ParagraphStyle(
+    "h1",
+    parent=_BASE["Heading1"],
+    fontName="Helvetica-Bold",
+    fontSize=22,
+    leading=26,
+    spaceBefore=18,
+    spaceAfter=10,
+    textColor=colors.HexColor("#0b2c44"),
+)
+H2 = ParagraphStyle(
+    "h2",
+    parent=_BASE["Heading2"],
+    fontName="Helvetica-Bold",
+    fontSize=16,
+    leading=20,
+    spaceBefore=16,
+    spaceAfter=8,
+    textColor=colors.HexColor("#0b2c44"),
+)
+H3 = ParagraphStyle(
+    "h3",
+    parent=_BASE["Heading3"],
+    fontName="Helvetica-Bold",
+    fontSize=13,
+    leading=17,
+    spaceBefore=12,
+    spaceAfter=6,
+    textColor=colors.HexColor("#1f3b4f"),
+)
+H4 = ParagraphStyle(
+    "h4",
+    parent=_BASE["Heading4"],
+    fontName="Helvetica-Bold",
+    fontSize=11,
+    leading=15,
+    spaceBefore=10,
+    spaceAfter=4,
+    textColor=colors.HexColor("#1f3b4f"),
+)
+H5 = ParagraphStyle(
+    "h5",
+    parent=_BASE["Heading5"],
+    fontName="Helvetica-Bold",
+    fontSize=10,
+    leading=13,
+    spaceBefore=8,
+    spaceAfter=2,
+    textColor=colors.HexColor("#1f3b4f"),
+)
 H6 = H5
 HEADINGS = {1: H1, 2: H2, 3: H3, 4: H4, 5: H5, 6: H6}
 
 # Code (block + inline). Courier so tabs/columns align.
 CODE_BLOCK = ParagraphStyle(
-    "code_block", parent=_BASE["Code"],
-    fontName="Courier", fontSize=8, leading=10,
-    leftIndent=14, rightIndent=14,
+    "code_block",
+    parent=_BASE["Code"],
+    fontName="Courier",
+    fontSize=8,
+    leading=10,
+    leftIndent=14,
+    rightIndent=14,
     backColor=colors.HexColor("#f3f4f6"),
     borderColor=colors.HexColor("#dcdfe3"),
-    borderWidth=0.5, borderPadding=6,
-    spaceBefore=4, spaceAfter=8,
+    borderWidth=0.5,
+    borderPadding=6,
+    spaceBefore=4,
+    spaceAfter=8,
 )
 
 # Blockquote — left rule + indent.
 QUOTE = ParagraphStyle(
-    "quote", parent=BODY,
-    leftIndent=16, rightIndent=8,
+    "quote",
+    parent=BODY,
+    leftIndent=16,
+    rightIndent=8,
     borderColor=colors.HexColor("#7fbf5f"),
     borderPadding=6,
     backColor=colors.HexColor("#f3faef"),
-    fontSize=10, leading=14,
-    spaceBefore=4, spaceAfter=8,
+    fontSize=10,
+    leading=14,
+    spaceBefore=4,
+    spaceAfter=8,
 )
 
 LIST_ITEM = ParagraphStyle(
-    "li", parent=BODY,
-    leftIndent=18, bulletIndent=4,
-    spaceBefore=0, spaceAfter=2,
+    "li",
+    parent=BODY,
+    leftIndent=18,
+    bulletIndent=4,
+    spaceBefore=0,
+    spaceAfter=2,
 )
 
 TABLE_HEADER_STYLE = ParagraphStyle(
-    "th", parent=BODY,
-    fontName="Helvetica-Bold", fontSize=9, leading=11,
+    "th",
+    parent=BODY,
+    fontName="Helvetica-Bold",
+    fontSize=9,
+    leading=11,
     textColor=colors.white,
 )
 TABLE_CELL_STYLE = ParagraphStyle(
-    "td", parent=BODY,
-    fontName="Helvetica", fontSize=9, leading=11,
+    "td",
+    parent=BODY,
+    fontName="Helvetica",
+    fontSize=9,
+    leading=11,
 )
 
 
@@ -124,11 +182,11 @@ TABLE_CELL_STYLE = ParagraphStyle(
 # ---------------------------------------------------------------------------
 
 _INLINE_CODE = re.compile(r"`([^`]+)`")
-_BOLD       = re.compile(r"\*\*([^*]+)\*\*")
-_ITALIC     = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
-_LINK       = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-_HTML_ESC   = re.compile(r"[&<>]")
-_ESC_MAP    = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
+_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_ITALIC = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
+_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_HTML_ESC = re.compile(r"[&<>]")
+_ESC_MAP = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
 
 
 def _esc(s: str) -> str:
@@ -147,13 +205,11 @@ def render_inline(s: str) -> str:
     last = 0
     for m in _INLINE_CODE.finditer(s):
         # Escape + format the text between code spans.
-        parts.append(_format_non_code(s[last:m.start()]))
+        parts.append(_format_non_code(s[last : m.start()]))
         # Code spans: monospace + tinted background. reportlab supports
         # <font face="..."> and <font backColor="...">.
         code = _esc(m.group(1))
-        parts.append(
-            f'<font face="Courier" size="9" color="#b2492a">{code}</font>'
-        )
+        parts.append(f'<font face="Courier" size="9" color="#b2492a">{code}</font>')
         last = m.end()
     parts.append(_format_non_code(s[last:]))
     return "".join(parts)
@@ -185,15 +241,15 @@ def _format_non_code(s: str) -> str:
 _md_lib_loaded = md_lib.Markdown(extensions=["tables", "fenced_code"])
 
 
-_HEADING   = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
-_HR        = re.compile(r"^-{3,}\s*$|^\*{3,}\s*$|^_{3,}\s*$")
-_FENCE     = re.compile(r"^```(\w*)\s*$")
-_BLOCKQ    = re.compile(r"^>\s?(.*)$")
-_OL_ITEM   = re.compile(r"^\s*(\d+)\.\s+(.*)$")
-_UL_ITEM   = re.compile(r"^\s*[-*]\s+(.*)$")
-_PIPE_ROW  = re.compile(r"^\s*\|.*\|\s*$")
-_PIPE_SEP  = re.compile(r"^\s*\|?\s*:?-{2,}\:?\s*(\|\s*:?-{2,}\:?\s*)+\|?\s*$")
-_IMAGE     = re.compile(r"^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$")
+_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+_HR = re.compile(r"^-{3,}\s*$|^\*{3,}\s*$|^_{3,}\s*$")
+_FENCE = re.compile(r"^```(\w*)\s*$")
+_BLOCKQ = re.compile(r"^>\s?(.*)$")
+_OL_ITEM = re.compile(r"^\s*(\d+)\.\s+(.*)$")
+_UL_ITEM = re.compile(r"^\s*[-*]\s+(.*)$")
+_PIPE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_PIPE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}\:?\s*(\|\s*:?-{2,}\:?\s*)+\|?\s*$")
+_IMAGE = re.compile(r"^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$")
 
 
 def parse_blocks(text: str, base_dir: Path) -> list:
@@ -222,18 +278,25 @@ def parse_blocks(text: str, base_dir: Path) -> list:
                 flowables.append(Spacer(1, 4))
                 flowables.append(Image(str(img_path), width=disp_w, height=disp_h))
                 if alt:
-                    flowables.append(Paragraph(
-                        f"<i>{render_inline(alt)}</i>",
-                        ParagraphStyle("caption", parent=BODY,
-                                       fontSize=8.5, textColor=colors.HexColor("#5a6477"),
-                                       alignment=1, spaceBefore=2, spaceAfter=8),
-                    ))
+                    flowables.append(
+                        Paragraph(
+                            f"<i>{render_inline(alt)}</i>",
+                            ParagraphStyle(
+                                "caption",
+                                parent=BODY,
+                                fontSize=8.5,
+                                textColor=colors.HexColor("#5a6477"),
+                                alignment=1,
+                                spaceBefore=2,
+                                spaceAfter=8,
+                            ),
+                        )
+                    )
                 else:
                     flowables.append(Spacer(1, 6))
             else:
                 # File missing — emit a visible placeholder so the issue surfaces.
-                flowables.append(Paragraph(
-                    f"<i>[image missing: {render_inline(src)}]</i>", BODY))
+                flowables.append(Paragraph(f"<i>[image missing: {render_inline(src)}]</i>", BODY))
             i += 1
             continue
 
@@ -266,11 +329,15 @@ def parse_blocks(text: str, base_dir: Path) -> list:
         if _HR.match(line):
             flowables.append(Spacer(1, 4))
             flowables.append(
-                Table([[""]],
-                      colWidths=[6.5 * inch],
-                      style=TableStyle([
-                          ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#cfd2d6")),
-                      ]))
+                Table(
+                    [[""]],
+                    colWidths=[6.5 * inch],
+                    style=TableStyle(
+                        [
+                            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#cfd2d6")),
+                        ]
+                    ),
+                )
             )
             flowables.append(Spacer(1, 4))
             i += 1
@@ -301,22 +368,26 @@ def parse_blocks(text: str, base_dir: Path) -> list:
         if _OL_ITEM.match(line):
             items, i = _collect_list(lines, i, _OL_ITEM)
             for n, item in enumerate(items, start=1):
-                flowables.append(Paragraph(
-                    render_inline(item),
-                    LIST_ITEM,
-                    bulletText=f"{n}.",
-                ))
+                flowables.append(
+                    Paragraph(
+                        render_inline(item),
+                        LIST_ITEM,
+                        bulletText=f"{n}.",
+                    )
+                )
             continue
 
         # Unordered list
         if _UL_ITEM.match(line):
             items, i = _collect_list(lines, i, _UL_ITEM)
             for item in items:
-                flowables.append(Paragraph(
-                    render_inline(item),
-                    LIST_ITEM,
-                    bulletText="•",
-                ))
+                flowables.append(
+                    Paragraph(
+                        render_inline(item),
+                        LIST_ITEM,
+                        bulletText="•",
+                    )
+                )
             continue
 
         # Blank line — separator only
@@ -338,9 +409,14 @@ def parse_blocks(text: str, base_dir: Path) -> list:
 def _looks_special(line: str) -> bool:
     """Lines that should NOT be glued onto the previous paragraph."""
     return bool(
-        _HEADING.match(line) or _FENCE.match(line) or _BLOCKQ.match(line)
-        or _PIPE_ROW.match(line) or _UL_ITEM.match(line) or _OL_ITEM.match(line)
-        or _HR.match(line) or _IMAGE.match(line)
+        _HEADING.match(line)
+        or _FENCE.match(line)
+        or _BLOCKQ.match(line)
+        or _PIPE_ROW.match(line)
+        or _UL_ITEM.match(line)
+        or _OL_ITEM.match(line)
+        or _HR.match(line)
+        or _IMAGE.match(line)
     )
 
 
@@ -374,28 +450,30 @@ def _make_table(header: list[str], rows: list[list[str]]) -> Table:
     """Build a reportlab Table. Equal-width columns; wraps long cell text."""
     n_cols = max(len(header), max((len(r) for r in rows), default=len(header)))
     col_w = (6.5 * inch) / n_cols  # 8.5" page - 1" margins each side = 6.5"
+
     # Pad ragged rows
     def _pad(r):
         return r + [""] * (n_cols - len(r))
-    data = [
-        [Paragraph(render_inline(c), TABLE_HEADER_STYLE) for c in _pad(header)]
-    ] + [
-        [Paragraph(render_inline(c), TABLE_CELL_STYLE) for c in _pad(r)]
-        for r in rows
+
+    data = [[Paragraph(render_inline(c), TABLE_HEADER_STYLE) for c in _pad(header)]] + [
+        [Paragraph(render_inline(c), TABLE_CELL_STYLE) for c in _pad(r)] for r in rows
     ]
     tbl = Table(data, colWidths=[col_w] * n_cols, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2d4a63")),
-        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-            [colors.white, colors.HexColor("#f7f8fa")]),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cfd2d6")),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING",  (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING",   (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING",(0, 0), (-1, -1), 3),
-    ]))
+    tbl.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2d4a63")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f8fa")]),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cfd2d6")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
     return tbl
 
 
@@ -403,13 +481,17 @@ def _make_table(header: list[str], rows: list[list[str]]) -> Table:
 # Page template (footer with page number + source filename)
 # ---------------------------------------------------------------------------
 
+
 def _make_doc(out_path: Path, title: str, source_label: str) -> BaseDocTemplate:
     doc = BaseDocTemplate(
         str(out_path),
         pagesize=letter,
-        leftMargin=1 * inch, rightMargin=1 * inch,
-        topMargin=0.85 * inch, bottomMargin=0.85 * inch,
-        title=title, author="Wahoo Bay project",
+        leftMargin=1 * inch,
+        rightMargin=1 * inch,
+        topMargin=0.85 * inch,
+        bottomMargin=0.85 * inch,
+        title=title,
+        author="Wahoo Bay project",
         subject=source_label,
     )
 
@@ -421,25 +503,27 @@ def _make_doc(out_path: Path, title: str, source_label: str) -> BaseDocTemplate:
         canvas.drawString(1 * inch, 0.5 * inch, source_label)
         # right = page N
         canvas.drawRightString(
-            letter[0] - 1 * inch, 0.5 * inch,
+            letter[0] - 1 * inch,
+            0.5 * inch,
             f"page {_doc.page}",
         )
         canvas.restoreState()
 
     frame = Frame(
-        doc.leftMargin, doc.bottomMargin,
-        doc.width, doc.height,
+        doc.leftMargin,
+        doc.bottomMargin,
+        doc.width,
+        doc.height,
         id="body",
     )
-    doc.addPageTemplates([
-        PageTemplate(id="main", frames=[frame], onPage=_draw_footer)
-    ])
+    doc.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=_draw_footer)])
     return doc
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def md_to_pdf(input_path: Path, output_path: Path) -> None:
     text = input_path.read_text(encoding="utf-8")
@@ -464,10 +548,7 @@ def main() -> None:
     in_path = Path(sys.argv[1]).resolve()
     if not in_path.exists():
         sys.exit(f"input not found: {in_path}")
-    out_path = (
-        Path(sys.argv[2]).resolve() if len(sys.argv) == 3
-        else in_path.with_suffix(".pdf")
-    )
+    out_path = Path(sys.argv[2]).resolve() if len(sys.argv) == 3 else in_path.with_suffix(".pdf")
     md_to_pdf(in_path, out_path)
 
 

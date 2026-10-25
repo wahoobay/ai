@@ -2,6 +2,7 @@
 the dashboard's header, the palette picker and light/dark toggle, and each
 table in a card (owner's request 2026-09-28). Static checks plus one render
 of the page: there is no browser harness in this repo."""
+
 from __future__ import annotations
 
 import re
@@ -21,13 +22,14 @@ def _rule(css: str, selector: str) -> str:
 
 
 def _script() -> str:
-    return PAGE[PAGE.index("<script>"):PAGE.index("</script>", PAGE.index("<script>"))]
+    return PAGE[PAGE.index("<script>") : PAGE.index("</script>", PAGE.index("<script>"))]
 
 
 def test_the_page_has_the_sites_header_with_a_way_back():
-    header = PAGE[PAGE.index("<header"):PAGE.index("</header>")]
-    assert re.search(r'<header class="auth-top">\s*<h1><a href="/">Wahoo Bay · Live Fish ID</a>',
-                     PAGE)
+    header = PAGE[PAGE.index("<header") : PAGE.index("</header>")]
+    assert re.search(
+        r'<header class="auth-top">\s*<h1><a href="/">Wahoo Bay · Live Fish ID</a>', PAGE
+    )
     assert 'href="/"' in header and 'href="/review"' in header
     assert "{{ me }}" in header
 
@@ -48,7 +50,7 @@ def test_data_is_set_as_text_and_times_are_eastern():
     assert "innerHTML" not in script
     assert "replaceChildren(" in script
     assert "fmtET(" in script
-    head = PAGE[:PAGE.index("</head>")]
+    head = PAGE[: PAGE.index("</head>")]
     assert "/static/time-et.js?v={{ asset_version }}" in head
 
 

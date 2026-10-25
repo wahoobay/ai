@@ -1,4 +1,5 @@
 """scripts/dev/remap_legacy_corrections.py (follow-up spec A1b)."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -31,8 +32,9 @@ UUID_SPECIES_ID = "a3f1e9c0-3b2a-4c9d-8f10-1e2d3c4b5a6f"
 
 
 async def _world(rdb, tmp_path):
-    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10 + 100 * i, 10, 90 + 100 * i, 90]}
-                                               for i in range(7)])
+    f = await seed_frame(
+        rdb, tmp_path, boxes=[{"bbox": [10 + 100 * i, 10, 90 + 100 * i, 90]} for i in range(7)]
+    )
     e = f["event_ids"]
     uid = await make_user(rdb, "one")
     ids = {
@@ -40,12 +42,12 @@ async def _world(rdb, tmp_path):
         "same": await add_verdict(rdb, e[1], None, name="Seriola zonata"),
         "lost": await add_verdict(rdb, e[2], None, name="Mystery fish"),
         # a review-tool row records its label source: never touched
-        "tool": await add_verdict(rdb, e[3], uid, name="Pomatomus saltarix",
-                                  label_source="search"),
+        "tool": await add_verdict(rdb, e[3], uid, name="Pomatomus saltarix", label_source="search"),
         # an adjudication records no label source either, but isn't an
         # old-form row -- the remap must not touch it (ruling T3b)
-        "adjudication": await add_verdict(rdb, e[4], uid, name="Pomatomus saltarix",
-                                          is_adjudication=True),
+        "adjudication": await add_verdict(
+            rdb, e[4], uid, name="Pomatomus saltarix", is_adjudication=True
+        ),
     }
     # Already-accepted names whose corrected_species_id holds something the
     # remap must never read or write (ruling T3a): a NULL id, and a
@@ -53,11 +55,15 @@ async def _world(rdb, tmp_path):
     async with rdb.connection() as conn:
         cur = await conn.execute(
             """INSERT INTO detection_corrections (event_id, corrected_name, corrected_species_id)
-               VALUES (%s, 'Seriola zonata', NULL) RETURNING id""", (e[5],))
+               VALUES (%s, 'Seriola zonata', NULL) RETURNING id""",
+            (e[5],),
+        )
         ids["null_species_id"] = (await cur.fetchone())[0]
         cur = await conn.execute(
             """INSERT INTO detection_corrections (event_id, corrected_name, corrected_species_id)
-               VALUES (%s, 'Seriola zonata', %s) RETURNING id""", (e[6], UUID_SPECIES_ID))
+               VALUES (%s, 'Seriola zonata', %s) RETURNING id""",
+            (e[6], UUID_SPECIES_ID),
+        )
         ids["uuid_species_id"] = (await cur.fetchone())[0]
     return ids
 
@@ -65,7 +71,8 @@ async def _world(rdb, tmp_path):
 async def _names(rdb):
     async with rdb.connection() as conn:
         cur = await conn.execute(
-            "SELECT id, corrected_name, corrected_species_id FROM detection_corrections")
+            "SELECT id, corrected_name, corrected_species_id FROM detection_corrections"
+        )
         return {r[0]: r[1:] for r in await cur.fetchall()}
 
 
@@ -85,7 +92,8 @@ async def test_a_dry_run_lists_the_changes_and_changes_nothing(rdb, tmp_path, re
 
 
 async def test_apply_maps_corrected_name_and_leaves_the_species_id_alone(
-        rdb, tmp_path, review_assets):
+    rdb, tmp_path, review_assets
+):
     ids = await _world(rdb, tmp_path)
     cat = CatalogueStore(catalogue_paths(review_assets)).get()
     mod = _script()
@@ -103,8 +111,7 @@ async def test_apply_maps_corrected_name_and_leaves_the_species_id_alone(
     assert names[ids["uuid_species_id"]] == ("Seriola zonata", UUID_SPECIES_ID)
 
 
-async def test_the_command_line_prints_a_dry_run(rdb, tmp_path, review_assets, monkeypatch,
-                                                 capsys):
+async def test_the_command_line_prints_a_dry_run(rdb, tmp_path, review_assets, monkeypatch, capsys):
     await _world(rdb, tmp_path)
     for key, value in review_assets["env"].items():
         monkeypatch.setenv(key, value)

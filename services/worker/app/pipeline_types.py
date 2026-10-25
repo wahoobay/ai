@@ -3,6 +3,7 @@ so both backends (fishial.py, classifier_v2.py) can use the same types
 without one having to import the other — that keeps backend selection
 clean and means downstream consumers (smoother, persistence, overlay)
 don't care which backend produced the detections."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

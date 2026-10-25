@@ -3,6 +3,7 @@
 There is no browser harness in this repo. Most page checks are textual:
 function_body() finds one function's source. Where timing matters,
 run_node() runs the real script under node with a minimal DOM stub."""
+
 from __future__ import annotations
 
 import json
@@ -35,7 +36,7 @@ def braces_from(text: str, open_index: int) -> str:
         elif text[j] == "}":
             depth -= 1
             if depth == 0:
-                return text[open_index:j + 1]
+                return text[open_index : j + 1]
     raise AssertionError("unbalanced braces")
 
 
@@ -53,7 +54,7 @@ def function_body(text: str, name: str) -> str:
 def function_source(text: str, name: str) -> str:
     """The whole declaration, `function name(...) { ... }`, ready to run."""
     m = _declaration(text, name)
-    return text[m.start():m.end() - 1] + braces_from(text, m.end() - 1)
+    return text[m.start() : m.end() - 1] + braces_from(text, m.end() - 1)
 
 
 DOM_STUB = r"""
@@ -75,9 +76,14 @@ def run_node(sources: list[str], body: str, tmp_path: Path):
     as soon as the value is printed, so page timers (toasts) don't hold the
     run open."""
     script = tmp_path / "page-test.js"
-    script.write_text(DOM_STUB + "\n".join(sources) + "\n(async () => {\n" + body
-                      + "\n})().then(\n  (v) => { console.log(JSON.stringify(v)); process.exit(0); },"
-                      "\n  (e) => { console.error(e); process.exit(1); });\n")
+    script.write_text(
+        DOM_STUB
+        + "\n".join(sources)
+        + "\n(async () => {\n"
+        + body
+        + "\n})().then(\n  (v) => { console.log(JSON.stringify(v)); process.exit(0); },"
+        "\n  (e) => { console.error(e); process.exit(1); });\n"
+    )
     r = subprocess.run([NODE, str(script)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout.strip().splitlines()[-1])

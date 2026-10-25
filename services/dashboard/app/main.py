@@ -34,6 +34,7 @@ provisioning and the `DASHBOARD_*` auth knobs.
 See `docs/architecture.md` for the process model and
 `docs/operations.md` for the runtime knobs.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -103,6 +104,7 @@ class CorrectionIn(BaseModel):
     # picks the detection up.
     celebrity_id: str | None = None
 
+
 log = logging.getLogger("wahoobay.dashboard")
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -171,6 +173,7 @@ def _annotate_frame(
     dashboard's accent color.
     """
     from PIL import ImageDraw, ImageFont
+
     x1, y1, x2, y2 = bbox
     with Image.open(image_path) as src:
         src.load()
@@ -293,8 +296,12 @@ class DashboardCfg:
         repo_root = Path(__file__).resolve().parents[3]
         # The rollback switch: the usual spellings of "off" all work;
         # anything else, or unset, leaves the pool on.
-        self.review_pool_enabled = (_env("REVIEW_POOL_ENABLED", "true").strip().lower()
-                                    not in {"0", "false", "no", "off"})
+        self.review_pool_enabled = _env("REVIEW_POOL_ENABLED", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         self.review_pool_interval_s = float(_env("REVIEW_POOL_TOPUP_INTERVAL_S", "300"))
         self.review_pool_max_probes = int(_env("REVIEW_POOL_MAX_PROBES", "200"))
         self.review_pool_max_run_s = float(_env("REVIEW_POOL_MAX_RUN_S", "30"))
@@ -309,14 +316,21 @@ class DashboardCfg:
         self.review_spotcheck_rate = float(_env("REVIEW_SPOTCHECK_RATE", "0.10"))
         self.review_spotcheck_serve_rate = float(_env("REVIEW_SPOTCHECK_SERVE_RATE", "0.10"))
         self.review_assets_dir = Path(_env("REVIEW_ASSETS_DIR", str(repo_root / "assets")))
-        self.review_taxonomy_csv = Path(_env(
-            "REVIEW_TAXONOMY_CSV", str(self.review_assets_dir / "taxonomy.csv")))
-        self.review_classes_json = Path(_env(
-            "CLASSIFIER_V2_CLASSES_JSON",
-            str(repo_root / "data" / "models" / "classifier_v2" / "classes.json")))
-        self.review_baseline_manifest = Path(_env(
-            "REVIEW_BASELINE_MANIFEST",
-            str(repo_root / "data" / "fine_tune" / "_dataset_manifest.json")))
+        self.review_taxonomy_csv = Path(
+            _env("REVIEW_TAXONOMY_CSV", str(self.review_assets_dir / "taxonomy.csv"))
+        )
+        self.review_classes_json = Path(
+            _env(
+                "CLASSIFIER_V2_CLASSES_JSON",
+                str(repo_root / "data" / "models" / "classifier_v2" / "classes.json"),
+            )
+        )
+        self.review_baseline_manifest = Path(
+            _env(
+                "REVIEW_BASELINE_MANIFEST",
+                str(repo_root / "data" / "fine_tune" / "_dataset_manifest.json"),
+            )
+        )
 
     def review_catalogue_paths(self):
         from .review_catalogue import CataloguePaths
@@ -328,7 +342,8 @@ class DashboardCfg:
             taxonomy_csv=self.review_taxonomy_csv,
             inat_manifest=a / "inat_manifest.json",
             celebrities_json=a / "celebrities.json",
-            photo_root=a.parent)
+            photo_root=a.parent,
+        )
 
 
 def build_app() -> FastAPI:
@@ -341,8 +356,9 @@ def build_app() -> FastAPI:
         client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
         state["client"] = client
         try:
-            pool = AsyncConnectionPool(cfg.database_url, min_size=1, max_size=cfg.db_pool_max,
-                                       open=False)
+            pool = AsyncConnectionPool(
+                cfg.database_url, min_size=1, max_size=cfg.db_pool_max, open=False
+            )
             await pool.open()
             state["pool"] = pool
             log.info("dashboard: postgres pool open")
@@ -355,7 +371,9 @@ def build_app() -> FastAPI:
         # sheet via scripts/build_celebrities.py. Indexed by slug so
         # the correction POST + the GET endpoints can look up O(1).
         try:
-            celeb_doc = json.loads((BASE_DIR.parent.parent.parent / "assets" / "celebrities.json").read_text())
+            celeb_doc = json.loads(
+                (BASE_DIR.parent.parent.parent / "assets" / "celebrities.json").read_text()
+            )
             celebs = celeb_doc.get("celebrities") or []
             state["celebrities"] = celebs
             state["celebrities_by_id"] = {c["id"]: c for c in celebs}
@@ -392,7 +410,8 @@ def build_app() -> FastAPI:
                 log.warning("reload_catalogues: manifest_names reload failed (%s)", e)
             log.info(
                 "reload_catalogues: celebrities=%d, manifest_names=%d",
-                stats["celebrities"], stats["manifest_names"],
+                stats["celebrities"],
+                stats["manifest_names"],
             )
             return stats
 
@@ -444,7 +463,8 @@ def build_app() -> FastAPI:
             sheet_task = asyncio.create_task(sheet_poller.run_forever(), name="sheet-poller")
             log.info(
                 "sheet poller: scheduled every %.1f h (url=%s)",
-                cfg.sheet_poll_interval_s / 3600, cfg.sheet_url,
+                cfg.sheet_poll_interval_s / 3600,
+                cfg.sheet_url,
             )
         else:
             log.info("sheet poller: disabled (SHEET_URL empty or interval=0)")
@@ -463,10 +483,12 @@ def build_app() -> FastAPI:
                     async with pool.connection() as conn:
                         await conn.execute(
                             "DELETE FROM user_sessions WHERE expires_at < NOW() "
-                            "OR (revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '30 days')")
+                            "OR (revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '30 days')"
+                        )
                         await conn.execute(
                             "DELETE FROM user_tokens WHERE expires_at < NOW() "
-                            "OR (used_at IS NOT NULL AND used_at < NOW() - INTERVAL '7 days')")
+                            "OR (used_at IS NOT NULL AND used_at < NOW() - INTERVAL '7 days')"
+                        )
                 except Exception:
                     log.exception("session prune failed")
 
@@ -482,11 +504,15 @@ def build_app() -> FastAPI:
         review_task: asyncio.Task | None = None
         if state.get("pool") is not None:
             state["review_pool"] = ReviewPool(
-                state["pool"], PoolSettings.from_cfg(cfg), state["review_catalogue"],
-                cfg.review_baseline_manifest)
+                state["pool"],
+                PoolSettings.from_cfg(cfg),
+                state["review_catalogue"],
+                cfg.review_baseline_manifest,
+            )
             if cfg.review_pool_enabled:
                 review_task = asyncio.create_task(
-                    state["review_pool"].run_forever(), name="review-pool")
+                    state["review_pool"].run_forever(), name="review-pool"
+                )
             else:
                 log.info("review pool: disabled (REVIEW_POOL_ENABLED=false)")
 
@@ -531,6 +557,7 @@ def build_app() -> FastAPI:
                 await state["pool"].close()
 
     from .auth import AWAITING_APPROVAL, is_open_path, make_require_role, require_csrf
+
     require_role = make_require_role(cfg, state)
     site_member = require_role("viewer", "reviewer", "admin")
 
@@ -546,21 +573,30 @@ def build_app() -> FastAPI:
         await site_member(request, response)
 
     # No interactive API docs: they would list every route to anyone.
-    app = FastAPI(title="Wahoo Bay dashboard", lifespan=lifespan,
-                  dependencies=[Depends(site_gate)],
-                  docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(
+        title="Wahoo Bay dashboard",
+        lifespan=lifespan,
+        dependencies=[Depends(site_gate)],
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     from .routes_auth import build_auth_router
+
     app.include_router(build_auth_router(cfg, state, TEMPLATES))
 
     from .routes_admin_users import build_admin_users_router
+
     app.include_router(build_admin_users_router(cfg, state, TEMPLATES))
 
     from .routes_review import build_review_router
+
     app.include_router(build_review_router(cfg, state, TEMPLATES))
 
     from .auth import effective_role, make_optional_user
+
     optional_user = make_optional_user(state)
 
     def _is_admin(user) -> bool:
@@ -586,19 +622,25 @@ def build_app() -> FastAPI:
             return JSONResponse({"detail": detail}, status_code=403)
         if detail == AWAITING_APPROVAL:
             return RedirectResponse("/waiting", status_code=302)
-        return TEMPLATES.TemplateResponse(request, "notice.html", {
-            "asset_version": _asset_version(),
-            "eyebrow": "No access",
-            "title": "This page isn't open to your account",
-            "message": "Ask an administrator if you need it.",
-            "home_link": True,
-        }, status_code=403)
+        return TEMPLATES.TemplateResponse(
+            request,
+            "notice.html",
+            {
+                "asset_version": _asset_version(),
+                "eyebrow": "No access",
+                "title": "This page isn't open to your account",
+                "message": "Ask an administrator if you need it.",
+                "home_link": True,
+            },
+            status_code=403,
+        )
 
     # Cache-bust static assets so a new dashboard build doesn't get hidden
     # behind a stale browser cache. We hash the JS+CSS+template mtimes at
     # request time and append it to <link>/<script> URLs.
     def _asset_version() -> str:
         from hashlib import md5
+
         h = md5()
         for p in (
             BASE_DIR / "static" / "app.js",
@@ -628,7 +670,8 @@ def build_app() -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(
-            request, "index.html",
+            request,
+            "index.html",
             {"worker_url": cfg.worker_url, "asset_version": _asset_version()},
         )
 
@@ -642,7 +685,9 @@ def build_app() -> FastAPI:
         try:
             r = await client.get(f"{cfg.worker_url}/live.json")
             if r.status_code != 200:
-                return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+                return Response(
+                    content=r.content, media_type="application/json", status_code=r.status_code
+                )
             try:
                 data = r.json()
             except Exception:
@@ -668,7 +713,9 @@ def build_app() -> FastAPI:
         client: httpx.AsyncClient = state["client"]
         try:
             r = await client.get(f"{cfg.worker_url}/stats")
-            return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+            return Response(
+                content=r.content, media_type="application/json", status_code=r.status_code
+            )
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
 
@@ -747,7 +794,9 @@ def build_app() -> FastAPI:
         try:
             r = await client.get(f"{cfg.worker_url_pier}/live.json")
             if r.status_code != 200:
-                return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+                return Response(
+                    content=r.content, media_type="application/json", status_code=r.status_code
+                )
             try:
                 data = r.json()
             except Exception:
@@ -767,7 +816,9 @@ def build_app() -> FastAPI:
         client: httpx.AsyncClient = state["client"]
         try:
             r = await client.get(f"{cfg.worker_url_pier}/stats")
-            return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+            return Response(
+                content=r.content, media_type="application/json", status_code=r.status_code
+            )
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502)
 
@@ -775,25 +826,29 @@ def build_app() -> FastAPI:
     async def cameras_list() -> Response:
         """List of configured cameras the dashboard can switch between.
         Drives the camera-toggle UI on the live stream."""
-        cams = [{
-            "id": "seahivecam",
-            "label": "SEAHIVECAM",
-            "stream": "/api/stream.mjpeg",
-            "stream_raw": "/api/stream_raw.mjpeg",
-            "snapshot": "/api/snapshot.jpg",
-            "live_json": "/api/live.json",
-            "stats": "/api/stats",
-        }]
+        cams = [
+            {
+                "id": "seahivecam",
+                "label": "SEAHIVECAM",
+                "stream": "/api/stream.mjpeg",
+                "stream_raw": "/api/stream_raw.mjpeg",
+                "snapshot": "/api/snapshot.jpg",
+                "live_json": "/api/live.json",
+                "stats": "/api/stats",
+            }
+        ]
         if cfg.worker_url_pier:
-            cams.append({
-                "id": "pier_cam",
-                "label": "Pier",
-                "stream": "/api/stream_pier.mjpeg",
-                "stream_raw": "/api/stream_pier_raw.mjpeg",
-                "snapshot": "/api/snapshot_pier.jpg",
-                "live_json": "/api/live_pier.json",
-                "stats": "/api/stats_pier",
-            })
+            cams.append(
+                {
+                    "id": "pier_cam",
+                    "label": "Pier",
+                    "stream": "/api/stream_pier.mjpeg",
+                    "stream_raw": "/api/stream_pier_raw.mjpeg",
+                    "snapshot": "/api/snapshot_pier.jpg",
+                    "live_json": "/api/live_pier.json",
+                    "stats": "/api/stats_pier",
+                }
+            )
         return JSONResponse({"cameras": cams})
 
     @app.get("/api/events")
@@ -818,8 +873,7 @@ def build_app() -> FastAPI:
         # Pass include_reviewed=true to see the full stream (e.g. for audits).
         if not include_reviewed:
             where.append(
-                "NOT EXISTS (SELECT 1 FROM detection_corrections dc "
-                "WHERE dc.event_id = de.id)"
+                "NOT EXISTS (SELECT 1 FROM detection_corrections dc " "WHERE dc.event_id = de.id)"
             )
         params.append(limit)
         # detection_events.image_path is legacy / always NULL — the worker
@@ -909,14 +963,20 @@ def build_app() -> FastAPI:
         bbox = row.get("bbox") or []
         if not image_path or len(bbox) != 4:
             return JSONResponse(
-                {"error": "no frame saved for this detection"}, status_code=404,
+                {"error": "no frame saved for this detection"},
+                status_code=404,
             )
         path = Path(image_path)
         if not path.exists():
             return JSONResponse({"error": "frame file missing on disk"}, status_code=404)
         try:
             img = await asyncio.get_running_loop().run_in_executor(
-                None, _crop_roi, path, bbox, pad, size,
+                None,
+                _crop_roi,
+                path,
+                bbox,
+                pad,
+                size,
             )
         except Exception as e:
             log.warning("ROI crop failed for event %s: %s", event_id, e)
@@ -977,7 +1037,8 @@ def build_app() -> FastAPI:
         bbox = row.get("bbox") or []
         if not image_path or len(bbox) != 4:
             return JSONResponse(
-                {"error": "no frame saved for this detection"}, status_code=404,
+                {"error": "no frame saved for this detection"},
+                status_code=404,
             )
         path = Path(image_path)
         if not path.exists():
@@ -991,11 +1052,19 @@ def build_app() -> FastAPI:
         try:
             if annotate:
                 img = await asyncio.get_running_loop().run_in_executor(
-                    None, _annotate_frame, path, bbox, label, size,
+                    None,
+                    _annotate_frame,
+                    path,
+                    bbox,
+                    label,
+                    size,
                 )
             else:
                 img = await asyncio.get_running_loop().run_in_executor(
-                    None, _resize_frame, path, size,
+                    None,
+                    _resize_frame,
+                    path,
+                    size,
                 )
         except Exception as e:
             log.warning("frame annotate failed for event %s: %s", event_id, e)
@@ -1070,8 +1139,13 @@ def build_app() -> FastAPI:
     # live SenseStream poller later)
     # ------------------------------------------------------------------
     SENSOR_COLUMNS = (
-        "water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
-        "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm",
+        "water_temp_c",
+        "ph",
+        "do_pct",
+        "chlorophyll_rfu",
+        "phycoerythrin_rfu",
+        "turbidity_fnu",
+        "spcond_ms_cm",
     )
 
     @app.get("/api/water_quality/latest")
@@ -1114,9 +1188,7 @@ def build_app() -> FastAPI:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         # bucket size in seconds
         bucket_s = max(60, (hours * 3600) // max_points)
-        aggs = ",\n              ".join(
-            f"avg({c})::real AS {c}" for c in SENSOR_COLUMNS
-        )
+        aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in SENSOR_COLUMNS)
         sql = f"""
             SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
                    {aggs}
@@ -1132,12 +1204,14 @@ def build_app() -> FastAPI:
                 rows = await cur.fetchall()
         for r in rows:
             r["bucket"] = r["bucket"].isoformat() if r.get("bucket") else None
-        return JSONResponse({
-            "deployment": deployment,
-            "hours": hours,
-            "bucket_seconds": bucket_s,
-            "series": rows,
-        })
+        return JSONResponse(
+            {
+                "deployment": deployment,
+                "hours": hours,
+                "bucket_seconds": bucket_s,
+                "series": rows,
+            }
+        )
 
     @app.get("/api/water_quality/summary")
     async def water_quality_summary(
@@ -1179,16 +1253,34 @@ def build_app() -> FastAPI:
     # ------------------------------------------------------------------
     WEATHER_COLUMNS = (
         "bar_press_hpa",
-        "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
-        "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
-        "air_temp_c", "rel_humidity_pct",
-        "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
-        "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
-        "water_level_mm", "solar_rad_wm2",
-        "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
-        "precip_intensity_mm_hr", "precip_prob_pct",
-        "press_sea_level_hpa", "press_surface_hpa",
-        "temp_apparent_c", "uv_index", "weather_code",
+        "wind_dir_avg_deg",
+        "wind_dir_min_deg",
+        "wind_dir_max_deg",
+        "wind_speed_avg_ms",
+        "wind_speed_min_ms",
+        "wind_speed_max_ms",
+        "air_temp_c",
+        "rel_humidity_pct",
+        "rain_accum_mm",
+        "rain_dur_frac_hr",
+        "rain_int_mm_hr",
+        "rain_peak_int_mm_hr",
+        "hail_accum",
+        "hail_dur",
+        "hail_int",
+        "hail_peak_int",
+        "water_level_mm",
+        "solar_rad_wm2",
+        "cloud_cover_pct",
+        "dew_point_c",
+        "forecast_humidity_pct",
+        "precip_intensity_mm_hr",
+        "precip_prob_pct",
+        "press_sea_level_hpa",
+        "press_surface_hpa",
+        "temp_apparent_c",
+        "uv_index",
+        "weather_code",
         "weather_description",
     )
 
@@ -1230,9 +1322,7 @@ def build_app() -> FastAPI:
         # averaged — we take the most-recent value per bucket via array_agg.
         categorical = {"weather_code", "weather_description"}
         numeric_cols = tuple(c for c in WEATHER_COLUMNS if c not in categorical)
-        aggs = ",\n              ".join(
-            f"avg({c})::real AS {c}" for c in numeric_cols
-        )
+        aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in numeric_cols)
         sql = f"""
             SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
                    {aggs},
@@ -1251,12 +1341,14 @@ def build_app() -> FastAPI:
                 rows = await cur.fetchall()
         for r in rows:
             r["bucket"] = r["bucket"].isoformat() if r.get("bucket") else None
-        return JSONResponse({
-            "deployment": deployment,
-            "hours": hours,
-            "bucket_seconds": bucket_s,
-            "series": rows,
-        })
+        return JSONResponse(
+            {
+                "deployment": deployment,
+                "hours": hours,
+                "bucket_seconds": bucket_s,
+                "series": rows,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Drift monitor (input drift on the video feed)
@@ -1346,13 +1438,15 @@ def build_app() -> FastAPI:
         for item in enriched:
             item["name"] = name_by_id.get(item["species_id"])
 
-        return JSONResponse({
-            "window_hours": hours,
-            "method": method,
-            "min_accuracy": min_accuracy,
-            "n_events": len(species_ids),
-            "items": enriched,
-        })
+        return JSONResponse(
+            {
+                "window_hours": hours,
+                "method": method,
+                "min_accuracy": min_accuracy,
+                "n_events": len(species_ids),
+                "items": enriched,
+            }
+        )
 
     @app.get("/api/frame_rate_ci")
     async def frame_rate_ci(hours: int = Query(24, ge=1, le=24 * 30)) -> Response:
@@ -1372,16 +1466,18 @@ def build_app() -> FastAPI:
                 row = await cur.fetchone() or (0, 0)
         n, k = int(row[0] or 0), int(row[1] or 0)
         ci = rate_ci(k, n)
-        return JSONResponse({"window_hours": hours, "trials": n, "successes": k, "ci": ci.as_dict()})
+        return JSONResponse(
+            {"window_hours": hours, "trials": n, "successes": k, "ci": ci.as_dict()}
+        )
 
     # ------------------------------------------------------------------
     # Human corrections
     # ------------------------------------------------------------------
 
-    @app.post("/api/corrections",
-              dependencies=[Depends(require_csrf)])
-    async def post_correction(body: CorrectionIn,
-                              user=Depends(require_role("reviewer", "admin"))) -> Response:
+    @app.post("/api/corrections", dependencies=[Depends(require_csrf)])
+    async def post_correction(
+        body: CorrectionIn, user=Depends(require_role("reviewer", "admin"))
+    ) -> Response:
         """The dashboard's older correction form, saved through the review
         tool's own rules (follow-up spec A1): submit_verdict's no-item path,
         never spot-checked (spec §8). The form gets the event lock, the
@@ -1397,20 +1493,37 @@ def build_app() -> FastAPI:
         try:
             verdict = legacy_verdict(body, catalogue=catalogue)
             async with pool.connection() as conn:
-                out = await submit_verdict(conn, user=user, body=verdict, catalogue=catalogue,
-                                           spot_rate=0.0, rng=random.Random())
+                out = await submit_verdict(
+                    conn,
+                    user=user,
+                    body=verdict,
+                    catalogue=catalogue,
+                    spot_rate=0.0,
+                    rng=random.Random(),
+                )
         except ValidationError as e:
-            return JSONResponse({"error": "; ".join(
-                f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())},
-                status_code=400)
+            return JSONResponse(
+                {
+                    "error": "; ".join(
+                        f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                        for err in e.errors()
+                    )
+                },
+                status_code=400,
+            )
         except ReviewError as e:
             return JSONResponse({"error": e.message}, status_code=e.status)
         pool_obj = state.get("review_pool")
         if pool_obj and out["first_pass"] and out["counts"] and not out["duplicate"]:
             pool_obj.note_verified(out["label"])
-        return JSONResponse({"id": out["id"], "event_id": body.event_id,
-                             "created_at": out["created_at"],
-                             "is_endorsement": body.is_endorsement})
+        return JSONResponse(
+            {
+                "id": out["id"],
+                "event_id": body.event_id,
+                "created_at": out["created_at"],
+                "is_endorsement": body.is_endorsement,
+            }
+        )
 
     @app.get("/api/corrections")
     async def list_corrections(
@@ -1421,7 +1534,8 @@ def build_app() -> FastAPI:
         admin = _is_admin(user)
         if reviewer and not admin:
             return JSONResponse(
-                {"error": "filtering by reviewer requires the admin role"}, status_code=403)
+                {"error": "filtering by reviewer requires the admin role"}, status_code=403
+            )
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1451,7 +1565,7 @@ def build_app() -> FastAPI:
                 rows = await cur.fetchall()
         for r in rows:
             r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
-            r["event_ts"]   = r["event_ts"].isoformat()   if r.get("event_ts")   else None
+            r["event_ts"] = r["event_ts"].isoformat() if r.get("event_ts") else None
         if not admin:
             # Spec §12.1: reviewer is an account's display name now.
             for r in rows:
@@ -1520,23 +1634,33 @@ def build_app() -> FastAPI:
                     for r in await cur.fetchall():
                         stats[r["celebrity_id"]] = {
                             "sightings": int(r["sightings"]),
-                            "last_tagged_at": r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None,
-                            "first_tagged_at": r["first_tagged_at"].isoformat() if r["first_tagged_at"] else None,
-                            "recent_event_id": int(r["recent_event_id"]) if r["recent_event_id"] is not None else None,
+                            "last_tagged_at": r["last_tagged_at"].isoformat()
+                            if r["last_tagged_at"]
+                            else None,
+                            "first_tagged_at": r["first_tagged_at"].isoformat()
+                            if r["first_tagged_at"]
+                            else None,
+                            "recent_event_id": int(r["recent_event_id"])
+                            if r["recent_event_id"] is not None
+                            else None,
                         }
         out = []
         for c in celebs:
             s = stats.get(c["id"], {})
             photo_event = s.get("recent_event_id")
-            out.append({
-                **c,
-                "common": common_name(c["binomial"]) if c.get("binomial") else None,
-                "sightings": s.get("sightings", 0),
-                "last_tagged_at": s.get("last_tagged_at"),
-                "first_tagged_at": s.get("first_tagged_at"),
-                "photo_event_id": photo_event,
-                "photo_url": f"/api/detections/{photo_event}/roi.jpg?size=320" if photo_event else None,
-            })
+            out.append(
+                {
+                    **c,
+                    "common": common_name(c["binomial"]) if c.get("binomial") else None,
+                    "sightings": s.get("sightings", 0),
+                    "last_tagged_at": s.get("last_tagged_at"),
+                    "first_tagged_at": s.get("first_tagged_at"),
+                    "photo_event_id": photo_event,
+                    "photo_url": f"/api/detections/{photo_event}/roi.jpg?size=320"
+                    if photo_event
+                    else None,
+                }
+            )
         return JSONResponse({"celebrities": out, "count": len(out)})
 
     @app.get("/api/celebrities/{celebrity_id}")
@@ -1552,7 +1676,9 @@ def build_app() -> FastAPI:
         celebs = state.get("celebrities_by_id") or {}
         c = celebs.get(celebrity_id)
         if c is None:
-            return JSONResponse({"error": f"unknown celebrity_id={celebrity_id!r}"}, status_code=404)
+            return JSONResponse(
+                {"error": f"unknown celebrity_id={celebrity_id!r}"}, status_code=404
+            )
         pool: AsyncConnectionPool | None = state.get("pool")
         sightings = 0
         gallery: list[dict] = []
@@ -1560,23 +1686,31 @@ def build_app() -> FastAPI:
         if pool is not None:
             async with pool.connection() as conn:
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT COUNT(DISTINCT event_id)::int   AS sightings,
                                MIN(created_at) AS first_tagged_at,
                                MAX(created_at) AS last_tagged_at
                           FROM detection_corrections
                          WHERE celebrity_id = %s
-                    """, (celebrity_id,))
+                    """,
+                        (celebrity_id,),
+                    )
                     r = await cur.fetchone()
                     if r:
                         sightings = int(r["sightings"] or 0)
-                        first_tagged_at = r["first_tagged_at"].isoformat() if r["first_tagged_at"] else None
-                        last_tagged_at = r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None
+                        first_tagged_at = (
+                            r["first_tagged_at"].isoformat() if r["first_tagged_at"] else None
+                        )
+                        last_tagged_at = (
+                            r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None
+                        )
                     # One entry per event -- its latest tag -- and, for the
                     # public, none while a spot-check on it is pending
                     # (follow-up D2, D3).
                     hide = "" if _is_admin(user) else f"AND {hide_pending_spot_checks('dc')}"
-                    await cur.execute(f"""
+                    await cur.execute(
+                        f"""
                         SELECT * FROM (
                             SELECT DISTINCT ON (dc.event_id)
                                    dc.event_id, dc.created_at, dc.reviewer, dc.confidence,
@@ -1589,35 +1723,45 @@ def build_app() -> FastAPI:
                         ) latest
                          ORDER BY created_at DESC
                          LIMIT %s
-                    """, (celebrity_id, gallery_limit))
+                    """,
+                        (celebrity_id, gallery_limit),
+                    )
                     for r in await cur.fetchall():
-                        gallery.append({
-                            "event_id": int(r["event_id"]),
-                            "tagged_at": r["created_at"].isoformat() if r["created_at"] else None,
-                            "reviewer": r["reviewer"],
-                            "confidence": r["confidence"],
-                            "corrected_name": r["corrected_name"],
-                            "event_ts": r["event_ts"].isoformat() if r["event_ts"] else None,
-                            "source_name": r["source_name"],
-                            "bbox": list(r["bbox"]) if r["bbox"] else None,
-                            "roi_url": f"/api/detections/{r['event_id']}/roi.jpg?size=240",
-                        })
+                        gallery.append(
+                            {
+                                "event_id": int(r["event_id"]),
+                                "tagged_at": r["created_at"].isoformat()
+                                if r["created_at"]
+                                else None,
+                                "reviewer": r["reviewer"],
+                                "confidence": r["confidence"],
+                                "corrected_name": r["corrected_name"],
+                                "event_ts": r["event_ts"].isoformat() if r["event_ts"] else None,
+                                "source_name": r["source_name"],
+                                "bbox": list(r["bbox"]) if r["bbox"] else None,
+                                "roi_url": f"/api/detections/{r['event_id']}/roi.jpg?size=240",
+                            }
+                        )
         if not _is_admin(user):
             # Spec §1/§12.1: reviewer is an account's display name now, and
             # this endpoint is public. Removed, not blanked.
             for g in gallery:
                 g.pop("reviewer", None)
         photo_event = gallery[0]["event_id"] if gallery else None
-        return JSONResponse({
-            **c,
-            "common": common_name(c["binomial"]) if c.get("binomial") else None,
-            "sightings": sightings,
-            "first_tagged_at": first_tagged_at,
-            "last_tagged_at": last_tagged_at,
-            "photo_event_id": photo_event,
-            "photo_url": f"/api/detections/{photo_event}/roi.jpg?size=640" if photo_event else None,
-            "gallery": gallery,
-        })
+        return JSONResponse(
+            {
+                **c,
+                "common": common_name(c["binomial"]) if c.get("binomial") else None,
+                "sightings": sightings,
+                "first_tagged_at": first_tagged_at,
+                "last_tagged_at": last_tagged_at,
+                "photo_event_id": photo_event,
+                "photo_url": f"/api/detections/{photo_event}/roi.jpg?size=640"
+                if photo_event
+                else None,
+                "gallery": gallery,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Per-camera no-fish-zone admin (polygon mask for false-positive
@@ -1635,7 +1779,8 @@ def build_app() -> FastAPI:
             html = (BASE_DIR / "templates" / "regions_admin.html").read_text()
         except FileNotFoundError:
             return JSONResponse(
-                {"error": "regions_admin.html missing on disk"}, status_code=500,
+                {"error": "regions_admin.html missing on disk"},
+                status_code=500,
             )
         return Response(content=html, media_type="text/html")
 
@@ -1647,7 +1792,8 @@ def build_app() -> FastAPI:
             data = {"sources": {}}
         except Exception as e:
             return JSONResponse(
-                {"error": f"failed to read regions config: {e}"}, status_code=500,
+                {"error": f"failed to read regions config: {e}"},
+                status_code=500,
             )
         return JSONResponse(data)
 
@@ -1673,12 +1819,14 @@ def build_app() -> FastAPI:
         for src, cfg_per_src in sources.items():
             if not isinstance(cfg_per_src, dict):
                 return JSONResponse(
-                    {"error": f"sources.{src} must be an object"}, status_code=400,
+                    {"error": f"sources.{src} must be an object"},
+                    status_code=400,
                 )
             regions = cfg_per_src.get("regions") or []
             if not isinstance(regions, list):
                 return JSONResponse(
-                    {"error": f"sources.{src}.regions must be a list"}, status_code=400,
+                    {"error": f"sources.{src}.regions must be a list"},
+                    status_code=400,
                 )
             for i, r in enumerate(regions):
                 if not isinstance(r, dict):
@@ -1723,7 +1871,8 @@ def build_app() -> FastAPI:
             tmp.replace(path)
         except Exception as e:
             return JSONResponse(
-                {"error": f"failed to write regions config: {e}"}, status_code=500,
+                {"error": f"failed to write regions config: {e}"},
+                status_code=500,
             )
         return JSONResponse({"ok": True, "saved": str(path)})
 
@@ -1781,8 +1930,7 @@ def build_app() -> FastAPI:
         return JSONResponse(rows)
 
     @app.post("/api/alerts/{alert_id}/ack", dependencies=[Depends(require_csrf)])
-    async def ack_alert(alert_id: int,
-                        user=Depends(require_role("admin"))) -> Response:
+    async def ack_alert(alert_id: int, user=Depends(require_role("admin"))) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1802,10 +1950,12 @@ def build_app() -> FastAPI:
 
     @app.get("/api/alerts/rules")
     async def alerts_rules() -> Response:
-        return JSONResponse([
-            {"name": r.name, "severity": r.severity, "description": r.description}
-            for r in SLO_RULES
-        ])
+        return JSONResponse(
+            [
+                {"name": r.name, "severity": r.severity, "description": r.description}
+                for r in SLO_RULES
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Chart endpoints (Trends view)
@@ -1831,13 +1981,14 @@ def build_app() -> FastAPI:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql, (hours,))
                 rows = await cur.fetchall()
-        return JSONResponse({
-            "hours": hours,
-            "series": [
-                {"hour": r["hour"].isoformat(), "sightings": r["sightings"]}
-                for r in rows
-            ],
-        })
+        return JSONResponse(
+            {
+                "hours": hours,
+                "series": [
+                    {"hour": r["hour"].isoformat(), "sightings": r["sightings"]} for r in rows
+                ],
+            }
+        )
 
     @app.get("/api/charts/top_species_timeseries")
     async def chart_top_species_timeseries(
@@ -1883,10 +2034,12 @@ def build_app() -> FastAPI:
                     "total": r["total"],
                     "points": [],
                 }
-            series[sid]["points"].append({
-                "hour": r["hour"].isoformat(),
-                "sightings": r["sightings"],
-            })
+            series[sid]["points"].append(
+                {
+                    "hour": r["hour"].isoformat(),
+                    "sightings": r["sightings"],
+                }
+            )
         # preserve "top" ordering by total desc
         ordered = sorted(series.values(), key=lambda s: s["total"], reverse=True)
         return JSONResponse({"hours": hours, "top_n": top_n, "species": ordered})
@@ -1933,23 +2086,25 @@ def build_app() -> FastAPI:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql, (hours, deployment, hours))
                 rows = await cur.fetchall()
-        return JSONResponse({
-            "hours": hours,
-            "deployment": deployment,
-            "series": [
-                {
-                    "hour": r["hour"].isoformat(),
-                    "sightings": r["sightings"],
-                    "water_temp_c": r["water_temp_c"],
-                    "ph": r["ph"],
-                    "do_pct": r["do_pct"],
-                    "turbidity_fnu": r["turbidity_fnu"],
-                    "chlorophyll_rfu": r["chlorophyll_rfu"],
-                    "spcond_ms_cm": r["spcond_ms_cm"],
-                }
-                for r in rows
-            ],
-        })
+        return JSONResponse(
+            {
+                "hours": hours,
+                "deployment": deployment,
+                "series": [
+                    {
+                        "hour": r["hour"].isoformat(),
+                        "sightings": r["sightings"],
+                        "water_temp_c": r["water_temp_c"],
+                        "ph": r["ph"],
+                        "do_pct": r["do_pct"],
+                        "turbidity_fnu": r["turbidity_fnu"],
+                        "chlorophyll_rfu": r["chlorophyll_rfu"],
+                        "spcond_ms_cm": r["spcond_ms_cm"],
+                    }
+                    for r in rows
+                ],
+            }
+        )
 
     @app.get("/api/charts/sightings_x_weather")
     async def chart_sightings_x_weather(
@@ -2000,27 +2155,29 @@ def build_app() -> FastAPI:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql, (hours, deployment, hours))
                 rows = await cur.fetchall()
-        return JSONResponse({
-            "hours": hours,
-            "deployment": deployment,
-            "series": [
-                {
-                    "hour": r["hour"].isoformat(),
-                    "sightings": r["sightings"],
-                    "air_temp_c": r["air_temp_c"],
-                    "wind_speed_avg_ms": r["wind_speed_avg_ms"],
-                    "rain_accum_mm": r["rain_accum_mm"],
-                    "rain_int_mm_hr": r["rain_int_mm_hr"],
-                    "rain_total_mm": r["rain_total_mm"],
-                    "bar_press_hpa": r["bar_press_hpa"],
-                    "solar_rad_wm2": r["solar_rad_wm2"],
-                    "cloud_cover_pct": r["cloud_cover_pct"],
-                    "rel_humidity_pct": r["rel_humidity_pct"],
-                    "uv_index": r["uv_index"],
-                }
-                for r in rows
-            ],
-        })
+        return JSONResponse(
+            {
+                "hours": hours,
+                "deployment": deployment,
+                "series": [
+                    {
+                        "hour": r["hour"].isoformat(),
+                        "sightings": r["sightings"],
+                        "air_temp_c": r["air_temp_c"],
+                        "wind_speed_avg_ms": r["wind_speed_avg_ms"],
+                        "rain_accum_mm": r["rain_accum_mm"],
+                        "rain_int_mm_hr": r["rain_int_mm_hr"],
+                        "rain_total_mm": r["rain_total_mm"],
+                        "bar_press_hpa": r["bar_press_hpa"],
+                        "solar_rad_wm2": r["solar_rad_wm2"],
+                        "cloud_cover_pct": r["cloud_cover_pct"],
+                        "rel_humidity_pct": r["rel_humidity_pct"],
+                        "uv_index": r["uv_index"],
+                    }
+                    for r in rows
+                ],
+            }
+        )
 
     # ------------------------------------------------------------------
     # Species explorer — list of species in the window + per-species
@@ -2062,18 +2219,20 @@ def build_app() -> FastAPI:
                 rows = await cur.fetchall()
         out = []
         for r in rows:
-            out.append({
-                "species_id": r["species_id"],
-                "latin": r["name"],
-                "common": common_name(r["name"]),
-                "sightings": r["sightings"],
-                "total_frames": int(r["total_frames"]) if r["total_frames"] is not None else 0,
-                "mean_accuracy": r["mean_accuracy"],
-                "peak_accuracy": r["peak_accuracy"],
-                "sources": r["sources"] or [],
-                "first_seen": r["first_seen"].isoformat() if r["first_seen"] else None,
-                "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
-            })
+            out.append(
+                {
+                    "species_id": r["species_id"],
+                    "latin": r["name"],
+                    "common": common_name(r["name"]),
+                    "sightings": r["sightings"],
+                    "total_frames": int(r["total_frames"]) if r["total_frames"] is not None else 0,
+                    "mean_accuracy": r["mean_accuracy"],
+                    "peak_accuracy": r["peak_accuracy"],
+                    "sources": r["sources"] or [],
+                    "first_seen": r["first_seen"].isoformat() if r["first_seen"] else None,
+                    "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+                }
+            )
         return JSONResponse({"hours": hours, "min_frames": min_frames, "species": out})
 
     @app.get("/api/species/habitat_matrix")
@@ -2129,11 +2288,13 @@ def build_app() -> FastAPI:
             by_species[sid]["counts"][r["source_name"]] = r["sightings"]
             if r["source_name"] not in sources:
                 sources.append(r["source_name"])
-        return JSONResponse({
-            "hours": hours,
-            "sources": sources,
-            "species": list(by_species.values()),
-        })
+        return JSONResponse(
+            {
+                "hours": hours,
+                "sources": sources,
+                "species": list(by_species.values()),
+            }
+        )
 
     @app.get("/api/species/{species_id}/profile")
     async def species_profile(
@@ -2235,30 +2396,34 @@ def build_app() -> FastAPI:
             if r["hod"] is not None:
                 hod[int(r["hod"])] = r["sightings"]
 
-        return JSONResponse({
-            "species_id": species_id,
-            "hours": hours,
-            "latin": summary.get("latin"),
-            "common": common_name(summary.get("latin") or ""),
-            "sightings": summary.get("sightings") or 0,
-            "total_frames": int(summary.get("total_frames") or 0),
-            "mean_accuracy": summary.get("mean_accuracy"),
-            "peak_accuracy": summary.get("peak_accuracy"),
-            "first_seen": summary["first_seen"].isoformat() if summary.get("first_seen") else None,
-            "last_seen": summary["last_seen"].isoformat() if summary.get("last_seen") else None,
-            "sources": summary.get("sources") or [],
-            "hour_of_day": [{"hour": h, "sightings": hod[h]} for h in range(24)],
-            "accuracy_bins": [{"bucket": r["bucket"], "n": r["n"]} for r in acc_rows],
-            "recent_frames": [
-                {
-                    "image_path": r["image_path"],
-                    "ts": r["ts"].isoformat() if r["ts"] else None,
-                    "source_name": r["source_name"],
-                    "num_fish": r["num_fish"],
-                }
-                for r in frame_rows
-            ],
-        })
+        return JSONResponse(
+            {
+                "species_id": species_id,
+                "hours": hours,
+                "latin": summary.get("latin"),
+                "common": common_name(summary.get("latin") or ""),
+                "sightings": summary.get("sightings") or 0,
+                "total_frames": int(summary.get("total_frames") or 0),
+                "mean_accuracy": summary.get("mean_accuracy"),
+                "peak_accuracy": summary.get("peak_accuracy"),
+                "first_seen": summary["first_seen"].isoformat()
+                if summary.get("first_seen")
+                else None,
+                "last_seen": summary["last_seen"].isoformat() if summary.get("last_seen") else None,
+                "sources": summary.get("sources") or [],
+                "hour_of_day": [{"hour": h, "sightings": hod[h]} for h in range(24)],
+                "accuracy_bins": [{"bucket": r["bucket"], "n": r["n"]} for r in acc_rows],
+                "recent_frames": [
+                    {
+                        "image_path": r["image_path"],
+                        "ts": r["ts"].isoformat() if r["ts"] else None,
+                        "source_name": r["source_name"],
+                        "num_fish": r["num_fish"],
+                    }
+                    for r in frame_rows
+                ],
+            }
+        )
 
     # ------------------------------------------------------------------
     # CSV exports
@@ -2310,7 +2475,9 @@ def build_app() -> FastAPI:
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_water_quality(pool, hours, deployment)
-        return _csv_response(gen, _csv_filename("water_quality", hours=hours, deployment=deployment))
+        return _csv_response(
+            gen, _csv_filename("water_quality", hours=hours, deployment=deployment)
+        )
 
     @app.get("/api/export/weather.csv")
     async def export_weather_csv(
@@ -2356,7 +2523,8 @@ def build_app() -> FastAPI:
         admin = _is_admin(user)
         if reviewer and not admin:
             return JSONResponse(
-                {"error": "filtering by reviewer requires the admin role"}, status_code=403)
+                {"error": "filtering by reviewer requires the admin role"}, status_code=403
+            )
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -2372,7 +2540,9 @@ def build_app() -> FastAPI:
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_alerts(pool, include_resolved, include_identity=_is_admin(user))
-        return _csv_response(gen, _csv_filename("alerts", scope="all" if include_resolved else "active"))
+        return _csv_response(
+            gen, _csv_filename("alerts", scope="all" if include_resolved else "active")
+        )
 
     # ----- biology-friendly + ML-friendly bonus exports ----------------------
 
@@ -2396,7 +2566,9 @@ def build_app() -> FastAPI:
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
         gen = export_hourly_summary(pool, hours, deployment)
-        return _csv_response(gen, _csv_filename("hourly_summary", hours=hours, deployment=deployment))
+        return _csv_response(
+            gen, _csv_filename("hourly_summary", hours=hours, deployment=deployment)
+        )
 
     @app.get("/api/export/tracks_timeline.csv")
     async def export_tracks_timeline_csv(
@@ -2589,32 +2761,33 @@ def build_app() -> FastAPI:
         ]
 
         hourly = [
-            {"hour": r["hour"].isoformat() if r["hour"] else None,
-             "sightings": r["sightings"]}
+            {"hour": r["hour"].isoformat() if r["hour"] else None, "sightings": r["sightings"]}
             for r in hour_rows
         ]
 
         wq = None
         if latest_wq:
             wq = {
-                "ts":            latest_wq["ts"].isoformat() if latest_wq["ts"] else None,
-                "source":        latest_wq["source"],
-                "water_temp_c":  latest_wq["water_temp_c"],
-                "ph":            latest_wq["ph"],
-                "do_pct":        latest_wq["do_pct"],
+                "ts": latest_wq["ts"].isoformat() if latest_wq["ts"] else None,
+                "source": latest_wq["source"],
+                "water_temp_c": latest_wq["water_temp_c"],
+                "ph": latest_wq["ph"],
+                "do_pct": latest_wq["do_pct"],
                 "turbidity_fnu": latest_wq["turbidity_fnu"],
             }
 
-        return JSONResponse({
-            "window_hours": hours,
-            "totals": {
-                "sightings": (totals or {}).get("sightings") or 0,
-                "unique_species": (totals or {}).get("unique_species") or 0,
-            },
-            "top_species": top_species,
-            "hourly_activity": hourly,
-            "water_quality": wq,
-        })
+        return JSONResponse(
+            {
+                "window_hours": hours,
+                "totals": {
+                    "sightings": (totals or {}).get("sightings") or 0,
+                    "unique_species": (totals or {}).get("unique_species") or 0,
+                },
+                "top_species": top_species,
+                "hourly_activity": hourly,
+                "water_quality": wq,
+            }
+        )
 
     @app.get("/api/provenance/current")
     async def provenance_current() -> Response:

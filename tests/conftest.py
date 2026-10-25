@@ -5,6 +5,7 @@ fixtures, specifically so isolation cannot be skipped by omission. See
 the fixture docstring below for what that protects against and why an
 autouse fixture — rather than something each test file has to remember
 to apply — is the fix."""
+
 from __future__ import annotations
 
 import os
@@ -29,8 +30,7 @@ if os.environ.get("TEST_DATABASE_URL"):
     if conninfo_to_dict(os.environ["TEST_DATABASE_URL"]).get("dbname") == "wahoobay":
         # These tests TRUNCATE tables. The production database is named
         # 'wahoobay'. Refuse outright instead of trusting every caller.
-        raise pytest.UsageError(
-            "TEST_DATABASE_URL points at the production database 'wahoobay'")
+        raise pytest.UsageError("TEST_DATABASE_URL points at the production database 'wahoobay'")
 
 from review_fixtures import rclient, rdb, review_assets  # noqa: E402,F401
 

@@ -13,6 +13,7 @@ configuration change, not a rewrite.
 
 A failing relay degrades to `manual` rather than raising — a dead mail
 server should not turn a password reset into a 500 for the user."""
+
 from __future__ import annotations
 
 import logging
@@ -42,7 +43,7 @@ def verify_email(link: str, hours: int = 24) -> tuple[str, str]:
         "Wahoo Bay Live Fish ID: we've received your account request",
         "Thanks for requesting an account for Wahoo Bay Live Fish ID.\n\n"
         "Your request is waiting for an administrator to approve it. Until "
-        "then, signing in shows a \"waiting for approval\" page.\n\n"
+        'then, signing in shows a "waiting for approval" page.\n\n'
         "Please confirm your email address in the meantime:\n\n"
         f"{link}\n\n"
         f"The link expires in {hours} hours. If you didn't request an account, "
@@ -53,10 +54,13 @@ def verify_email(link: str, hours: int = 24) -> tuple[str, str]:
 # What each role opens up, for the approval email.
 ROLE_ACCESS = {
     "viewer": "You can now see the live cameras, the fish they record and the data.",
-    "reviewer": ("You can now see the live cameras, the fish they record and the data, "
-                 "and help identify fish on the review site."),
-    "admin": ("You can now see everything on the site, including the review site, and "
-              "manage accounts."),
+    "reviewer": (
+        "You can now see the live cameras, the fish they record and the data, "
+        "and help identify fish on the review site."
+    ),
+    "admin": (
+        "You can now see everything on the site, including the review site, and " "manage accounts."
+    ),
 }
 
 
@@ -83,13 +87,9 @@ def collision_notice() -> tuple[str, str]:
 
 
 class Mailer:
-    def __init__(
-        self, backend: str, smtp: dict | None, from_addr: str, base_url: str
-    ) -> None:
+    def __init__(self, backend: str, smtp: dict | None, from_addr: str, base_url: str) -> None:
         if backend not in ("smtp", "manual"):
-            log.warning(
-                "mailer: unrecognized backend '%s'; falling back to manual", backend
-            )
+            log.warning("mailer: unrecognized backend '%s'; falling back to manual", backend)
             self.backend = "manual"
         else:
             self.backend = backend
@@ -120,9 +120,7 @@ class Mailer:
     def send(self, to: str, subject: str, body: str) -> str:
         """Returns the backend that actually handled the message."""
         if self.backend != "smtp":
-            log.info(
-                "mailer(manual): message for %s held for out-of-band delivery", to
-            )
+            log.info("mailer(manual): message for %s held for out-of-band delivery", to)
             return "manual"
         msg = EmailMessage()
         msg["From"] = self.from_addr
@@ -150,7 +148,5 @@ class Mailer:
                 s.send_message(msg)
             return "smtp"
         except Exception as e:
-            log.warning(
-                "mailer(smtp): delivery to %s failed (%s); holding for manual", to, e
-            )
+            log.warning("mailer(smtp): delivery to %s failed (%s); holding for manual", to, e)
             return "manual"

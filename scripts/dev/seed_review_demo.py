@@ -17,6 +17,7 @@ the pool topping up every 60 s. Stop it with Ctrl-C (or a plain `kill` of
 its PID). Running the test suite truncates the same database, so do not
 run both at once.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,8 +59,7 @@ def _target_dsn(dsn_file: Path) -> str:
 def seed(source_env: Path, target: str, n_frames: int) -> None:
     from app.auth import hash_password
 
-    cols = ("id", "ts", "frame_id", "source_name", "reason", "image_path", "coco_path",
-            "num_fish")
+    cols = ("id", "ts", "frame_id", "source_name", "reason", "image_path", "coco_path", "num_fish")
     # The source connection must be genuinely read-only, not merely asked
     # nicely: `read_only` has to be set before this connection runs any
     # statement at all (psycopg refuses to change it mid-transaction), so
@@ -74,15 +74,19 @@ def seed(source_env: Path, target: str, n_frames: int) -> None:
         status = src.execute("SHOW transaction_read_only").fetchone()[0]
         if status != "on":
             raise SystemExit(
-                f"refusing to read the source database: transaction_read_only={status!r}, not 'on'")
+                f"refusing to read the source database: transaction_read_only={status!r}, not 'on'"
+            )
         src.execute("SET statement_timeout = '60s'")
         lo, hi = src.execute("SELECT min(ts), max(ts) FROM saved_frames").fetchone()
         step = (hi - lo) / max(1, n_frames)
         frames, seen = [], set()
         for i in range(n_frames):
-            row = src.execute(f"""SELECT {', '.join(cols)} FROM saved_frames
+            row = src.execute(
+                f"""SELECT {', '.join(cols)} FROM saved_frames
                                    WHERE ts <= %s AND num_fish > 0
-                                   ORDER BY ts DESC LIMIT 1""", (lo + step * (i + 1),)).fetchone()
+                                   ORDER BY ts DESC LIMIT 1""",
+                (lo + step * (i + 1),),
+            ).fetchone()
             if row and row[0] not in seen:
                 seen.add(row[0])
                 frames.append(dict(zip(cols, row, strict=True)))
@@ -93,7 +97,8 @@ def seed(source_env: Path, target: str, n_frames: int) -> None:
                           best_species_id, best_accuracy, track_id
                      FROM detection_events
                     WHERE source_name = %s AND ts = %s AND frame_id = %s""",
-                (f["source_name"], f["ts"], f["frame_id"])).fetchall()
+                (f["source_name"], f["ts"], f["frame_id"]),
+            ).fetchall()
     print(f"sampled {len(frames)} frames with {len(events)} detections")
 
     passwords = {}
@@ -104,13 +109,16 @@ def seed(source_env: Path, target: str, n_frames: int) -> None:
         with dst.cursor() as cur:
             cur.executemany(
                 f"""INSERT INTO saved_frames ({', '.join(cols)})
-                    VALUES ({', '.join('%(' + c + ')s' for c in cols)})""", frames)
+                    VALUES ({', '.join('%(' + c + ')s' for c in cols)})""",
+                frames,
+            )
             cur.executemany(
                 """INSERT INTO detection_events (id, ts, frame_id, source_name, det_conf, bbox,
                                                  topk, best_name, best_species_id,
                                                  best_accuracy, track_id)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                [(*e[:6], Jsonb(e[6]), *e[7:]) for e in events])
+                [(*e[:6], Jsonb(e[6]), *e[7:]) for e in events],
+            )
         for username, role in (("demo_reviewer", "reviewer"), ("demo_admin", "admin")):
             passwords[username] = secrets.token_urlsafe(12)
             dst.execute(
@@ -119,8 +127,14 @@ def seed(source_env: Path, target: str, n_frames: int) -> None:
                    ON CONFLICT (username) DO UPDATE
                       SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
                           status = 'active', failed_logins = 0, locked_until = NULL""",
-                (username, username.replace("_", " ").title(), f"{username}@example.org",
-                 hash_password(passwords[username]), role))
+                (
+                    username,
+                    username.replace("_", " ").title(),
+                    f"{username}@example.org",
+                    hash_password(passwords[username]),
+                    role,
+                ),
+            )
         dst.commit()
     creds = REPO / ".superpowers" / "demo_credentials"
     _write_private(creds, "".join(f"{u}: {p}\n" for u, p in passwords.items()))
@@ -128,21 +142,27 @@ def seed(source_env: Path, target: str, n_frames: int) -> None:
 
 
 def serve(target: str, port: int) -> None:
-    os.environ.update({
-        "DATABASE_URL": target,
-        "DASHBOARD_HOST": "127.0.0.1",
-        "DASHBOARD_PORT": str(port),
-        "DASHBOARD_COOKIE_SECURE": "false",
-        "SHEET_URL": "",
-        "WORKER_URL": "http://127.0.0.1:1",
-        "POLLER_URL": "http://127.0.0.1:1",
-        "DASHBOARD_MAIL_BACKEND": "manual",
-        "REVIEW_POOL_TOPUP_INTERVAL_S": "60",
-        "REVIEW_ASSETS_DIR": str(MAIN_CHECKOUT / "assets"),
-        "REVIEW_TAXONOMY_CSV": str(REPO / "assets" / "taxonomy.csv"),
-        "CLASSIFIER_V2_CLASSES_JSON": str(MAIN_CHECKOUT / "data/models/classifier_v2/classes.json"),
-        "REVIEW_BASELINE_MANIFEST": str(MAIN_CHECKOUT / "data/fine_tune/_dataset_manifest.json"),
-    })
+    os.environ.update(
+        {
+            "DATABASE_URL": target,
+            "DASHBOARD_HOST": "127.0.0.1",
+            "DASHBOARD_PORT": str(port),
+            "DASHBOARD_COOKIE_SECURE": "false",
+            "SHEET_URL": "",
+            "WORKER_URL": "http://127.0.0.1:1",
+            "POLLER_URL": "http://127.0.0.1:1",
+            "DASHBOARD_MAIL_BACKEND": "manual",
+            "REVIEW_POOL_TOPUP_INTERVAL_S": "60",
+            "REVIEW_ASSETS_DIR": str(MAIN_CHECKOUT / "assets"),
+            "REVIEW_TAXONOMY_CSV": str(REPO / "assets" / "taxonomy.csv"),
+            "CLASSIFIER_V2_CLASSES_JSON": str(
+                MAIN_CHECKOUT / "data/models/classifier_v2/classes.json"
+            ),
+            "REVIEW_BASELINE_MANIFEST": str(
+                MAIN_CHECKOUT / "data/fine_tune/_dataset_manifest.json"
+            ),
+        }
+    )
     from app.main import main as run_dashboard
 
     run_dashboard()

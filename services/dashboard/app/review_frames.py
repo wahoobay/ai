@@ -15,6 +15,7 @@ usable as detector training data.
 * Drawn boxes can be changed or removed by whoever drew them until the
   frame is complete; administrators can change them at any time.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,13 +56,18 @@ def _is_admin(user) -> bool:
 
 
 async def frame_record(conn, saved_frame_id: int) -> dict:
-    row = await fetch_one(conn, """SELECT id, ts, source_name, frame_id, image_path
-                                     FROM saved_frames WHERE id = %s""", (saved_frame_id,))
+    row = await fetch_one(
+        conn,
+        """SELECT id, ts, source_name, frame_id, image_path
+                                     FROM saved_frames WHERE id = %s""",
+        (saved_frame_id,),
+    )
     if row is None:
         raise NotFound("no such frame")
     # Off the event loop (follow-up C6): a PIL header read, and a stat.
     row["width"], row["height"] = await asyncio.to_thread(
-        safe_frame_size, row["image_path"], "this frame is missing on disk")
+        safe_frame_size, row["image_path"], "this frame is missing on disk"
+    )
     return row
 
 
@@ -72,7 +78,9 @@ async def refuse_during_second_opinion(conn, *, saved_frame_id: int, user_id: in
     (or the claim lapses): viewing the frame cannot contaminate it (spec
     §8). Admins get no exception, as elsewhere for spot-checks. The frame
     is matched on exact camera + frame_id + ts."""
-    if await fetch_one(conn, """
+    if await fetch_one(
+        conn,
+        """
             SELECT 1 FROM review_items ri
               JOIN detection_events de ON de.id = ri.event_id
               JOIN saved_frames sf ON sf.id = %s
@@ -80,12 +88,15 @@ async def refuse_during_second_opinion(conn, *, saved_frame_id: int, user_id: in
                AND ri.claimed_until > now()
                AND de.source_name = sf.source_name AND de.ts = sf.ts
                AND de.frame_id = sf.frame_id
-             LIMIT 1""", (saved_frame_id, user_id)):
+             LIMIT 1""",
+        (saved_frame_id, user_id),
+    ):
         raise Conflict("finish the second opinion first")
 
 
-async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int,
-                     skip_ttl_days: int = SKIP_TTL_DAYS) -> None:
+async def open_frame(
+    conn, *, saved_frame_id: int, user_id: int, claim_s: int, skip_ttl_days: int = SKIP_TTL_DAYS
+) -> None:
     """Claim the frame's open (or lapsed) first-pass boxes for this
     volunteer, and refresh the claims they already hold here -- including
     the box the queue just served them, which the page no longer releases
@@ -94,7 +105,8 @@ async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int,
     A2); someone else's live claim is left alone."""
     async with conn.transaction(), conn.cursor() as cur:
         await refuse_during_second_opinion(conn, saved_frame_id=saved_frame_id, user_id=user_id)
-        await cur.execute(f"""
+        await cur.execute(
+            f"""
             UPDATE review_items
                SET status = 'claimed', claimed_by = %(uid)s,
                    claimed_until = now() + make_interval(secs => %(claim_s)s)
@@ -103,8 +115,8 @@ async def open_frame(conn, *, saved_frame_id: int, user_id: int, claim_s: int,
                     OR (status = 'claimed' AND claimed_until < now())
                     OR (status = 'claimed' AND claimed_by = %(uid)s))
                AND {not_skipped("review_items")}""",
-                          {"uid": user_id, "claim_s": claim_s, "sf": saved_frame_id,
-                           "skip_days": skip_ttl_days})
+            {"uid": user_id, "claim_s": claim_s, "sf": saved_frame_id, "skip_days": skip_ttl_days},
+        )
 
 
 async def release_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
@@ -115,14 +127,17 @@ async def release_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
     sweep keeps claimed_by). Other volunteers' claims, answered boxes and
     spot-checks are untouched."""
     async with conn.transaction(), conn.cursor() as cur:
-        await cur.execute("""
+        await cur.execute(
+            """
             UPDATE review_items SET status = 'open', claimed_by = NULL, claimed_until = NULL
              WHERE saved_frame_id = %s AND pass = 1 AND claimed_by = %s
-               AND status IN ('claimed', 'open')""", (saved_frame_id, user_id))
+               AND status IN ('claimed', 'open')""",
+            (saved_frame_id, user_id),
+        )
 
 
 async def skip_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
-    """"Next frame" (spec amendment 2026-09-25, flow step 3): every
+    """ "Next frame" (spec amendment 2026-09-25, flow step 3): every
     first-pass box in the frame still waiting for an answer is skipped for
     this volunteer, so neither the queue nor open_frame hands it back to
     them, and their own claims among those boxes are released at once.
@@ -131,43 +146,82 @@ async def skip_frame(conn, *, saved_frame_id: int, user_id: int) -> None:
     each box's clock (follow-up A2)."""
     params = {"uid": user_id, "sf": saved_frame_id}
     async with conn.transaction(), conn.cursor() as cur:
-        await cur.execute("""
+        await cur.execute(
+            """
             INSERT INTO review_skips (item_id, user_id)
             SELECT id, %(uid)s FROM review_items
              WHERE saved_frame_id = %(sf)s AND pass = 1 AND status IN ('open', 'claimed')
-            ON CONFLICT (item_id, user_id) DO UPDATE SET created_at = now()""", params)
-        await cur.execute("""
+            ON CONFLICT (item_id, user_id) DO UPDATE SET created_at = now()""",
+            params,
+        )
+        await cur.execute(
+            """
             UPDATE review_items SET status = 'open', claimed_by = NULL, claimed_until = NULL
              WHERE saved_frame_id = %(sf)s AND pass = 1 AND claimed_by = %(uid)s
-               AND status IN ('claimed', 'open')""", params)
+               AND status IN ('claimed', 'open')""",
+            params,
+        )
 
 
-async def frame_state(conn, *, saved_frame_id: int, user, catalogue, counts=None,
-                      target: int | None = None) -> dict:
+async def frame_state(
+    conn, *, saved_frame_id: int, user, catalogue, counts=None, target: int | None = None
+) -> dict:
     fr = await frame_record(conn, saved_frame_id)
     await refuse_during_second_opinion(conn, saved_frame_id=saved_frame_id, user_id=user.id)
-    events = await fetch_all(conn, """
+    events = await fetch_all(
+        conn,
+        """
         SELECT id, bbox, best_species_id, best_accuracy FROM detection_events
          WHERE source_name = %s AND ts = %s AND frame_id = %s ORDER BY id""",
-                             (fr["source_name"], fr["ts"], fr["frame_id"]))
+        (fr["source_name"], fr["ts"], fr["frame_id"]),
+    )
     ids = [e["id"] for e in events]
     resolved = await resolve_all(conn, ids) if ids else {}
-    items = await fetch_all(conn, """
+    items = (
+        await fetch_all(
+            conn,
+            """
         SELECT id, event_id, pass, status, claimed_by, claimed_until, hints
-          FROM review_items WHERE event_id = ANY(%s)""", (ids,)) if ids else []
-    mine = {r["event_id"] for r in await fetch_all(conn, """
+          FROM review_items WHERE event_id = ANY(%s)""",
+            (ids,),
+        )
+        if ids
+        else []
+    )
+    mine = (
+        {
+            r["event_id"]
+            for r in await fetch_all(
+                conn,
+                """
         SELECT DISTINCT event_id FROM detection_corrections
-         WHERE event_id = ANY(%s) AND user_id = %s""", (ids, user.id))} if ids else set()
+         WHERE event_id = ANY(%s) AND user_id = %s""",
+                (ids, user.id),
+            )
+        }
+        if ids
+        else set()
+    )
     now = datetime.now(UTC)
     boxes = []
     for n, e in enumerate(events, 1):
         its = [i for i in items if i["event_id"] == e["id"]]
         pending_check = any(i["pass"] == 2 and i["status"] in ("open", "claimed") for i in its)
-        held_by_other = any(i["pass"] == 1 and i["status"] == "claimed"
-                            and i["claimed_by"] != user.id and i["claimed_until"] > now
-                            for i in its)
-        my_item = next((i for i in its if i["pass"] == 1 and i["status"] == "claimed"
-                        and i["claimed_by"] == user.id), None)
+        held_by_other = any(
+            i["pass"] == 1
+            and i["status"] == "claimed"
+            and i["claimed_by"] != user.id
+            and i["claimed_until"] > now
+            for i in its
+        )
+        my_item = next(
+            (
+                i
+                for i in its
+                if i["pass"] == 1 and i["status"] == "claimed" and i["claimed_by"] == user.id
+            ),
+            None,
+        )
         r = resolved.get(e["id"])
         if r is None:
             state = "locked" if held_by_other else "needs_answer"
@@ -179,53 +233,102 @@ async def frame_state(conn, *, saved_frame_id: int, user, catalogue, counts=None
             state = "answered_hidden"
         else:
             state = "answered"
-        box = {"n": n, "event_id": e["id"], "bbox": list(e["bbox"]), "state": state,
-               "mine": e["id"] in mine, "review_item_id": my_item["id"] if my_item else None,
-               "zoom": {"url": f"/api/review/boxes/{e['id']}/zoom.jpg",
-                        "region": list(zoom_region(e["bbox"], fr["width"], fr["height"]))},
-               "outcome": None, "label": None, "common": None, "status": None,
-               "model": None, "hints": None, "counts_toward": None}
+        box = {
+            "n": n,
+            "event_id": e["id"],
+            "bbox": list(e["bbox"]),
+            "state": state,
+            "mine": e["id"] in mine,
+            "review_item_id": my_item["id"] if my_item else None,
+            "zoom": {
+                "url": f"/api/review/boxes/{e['id']}/zoom.jpg",
+                "region": list(zoom_region(e["bbox"], fr["width"], fr["height"])),
+            },
+            "outcome": None,
+            "label": None,
+            "common": None,
+            "status": None,
+            "model": None,
+            "hints": None,
+            "counts_toward": None,
+        }
         if state == "answered":
-            box.update(outcome=r.outcome[0], label=r.species,
-                       common=catalogue.common_name(r.species), status=r.status)
+            box.update(
+                outcome=r.outcome[0],
+                label=r.species,
+                common=catalogue.common_name(r.species),
+                status=r.status,
+            )
         elif state == "needs_answer":
             guess = catalogue.accepted(e["best_species_id"])
             if guess:
-                box["model"] = {"name": guess, "p": e["best_accuracy"],
-                                "common": catalogue.common_name(guess)}
+                box["model"] = {
+                    "name": guess,
+                    "p": e["best_accuracy"],
+                    "common": catalogue.common_name(guess),
+                }
                 if counts is not None:
                     # the same numbers the single-box payload shows (build_payload)
-                    box["counts_toward"] = {"name": guess, "common": catalogue.common_name(guess),
-                                            "count": counts(guess), "target": target}
+                    box["counts_toward"] = {
+                        "name": guess,
+                        "common": catalogue.common_name(guess),
+                        "count": counts(guess),
+                        "target": target,
+                    }
             if my_item and my_item["hints"]:
-                box["hints"] = [{"name": h["name"], "p": h.get("p"),
-                                 "common": catalogue.common_name(h["name"])}
-                                for h in my_item["hints"] if h.get("name") != guess][:3]
+                box["hints"] = [
+                    {"name": h["name"], "p": h.get("p"), "common": catalogue.common_name(h["name"])}
+                    for h in my_item["hints"]
+                    if h.get("name") != guess
+                ][:3]
         boxes.append(box)
-    added = await fetch_all(conn, """
+    added = await fetch_all(
+        conn,
+        """
         SELECT a.id, a.bbox, a.outcome, a.label, a.life_stage, a.confidence, a.celebrity_id,
                a.user_id, u.display_name
           FROM review_added_boxes a JOIN users u ON u.id = a.user_id
          WHERE a.saved_frame_id = %s AND a.removed_at IS NULL
-         ORDER BY a.id""", (saved_frame_id,))
-    done = await fetch_one(conn, """
+         ORDER BY a.id""",
+        (saved_frame_id,),
+    )
+    done = await fetch_one(
+        conn,
+        """
         SELECT f.completed_at, u.display_name FROM review_frames f
           JOIN users u ON u.id = f.completed_by
-         WHERE f.saved_frame_id = %s""", (saved_frame_id,))
+         WHERE f.saved_frame_id = %s""",
+        (saved_frame_id,),
+    )
     return {
-        "saved_frame_id": saved_frame_id, "source_name": fr["source_name"],
+        "saved_frame_id": saved_frame_id,
+        "source_name": fr["source_name"],
         "ts": fr["ts"].isoformat(),
-        "frame": {"url": f"/api/review/frames/{saved_frame_id}/image.jpg",
-                  "width": fr["width"], "height": fr["height"]},
+        "frame": {
+            "url": f"/api/review/frames/{saved_frame_id}/image.jpg",
+            "width": fr["width"],
+            "height": fr["height"],
+        },
         "boxes": boxes,
-        "added": [{"id": a["id"], "bbox": list(a["bbox"]), "outcome": a["outcome"],
-                   "label": a["label"], "common": catalogue.common_name(a["label"]),
-                   "life_stage": a["life_stage"], "not_sure": a["confidence"] == "uncertain",
-                   "celebrity_id": a["celebrity_id"], "mine": a["user_id"] == user.id,
-                   "by": a["display_name"], "zoom_url": f"/api/review/added/{a['id']}/zoom.jpg"}
-                  for a in added],
-        "complete": ({"at": done["completed_at"].isoformat(), "by": done["display_name"]}
-                     if done else None),
+        "added": [
+            {
+                "id": a["id"],
+                "bbox": list(a["bbox"]),
+                "outcome": a["outcome"],
+                "label": a["label"],
+                "common": catalogue.common_name(a["label"]),
+                "life_stage": a["life_stage"],
+                "not_sure": a["confidence"] == "uncertain",
+                "celebrity_id": a["celebrity_id"],
+                "mine": a["user_id"] == user.id,
+                "by": a["display_name"],
+                "zoom_url": f"/api/review/added/{a['id']}/zoom.jpg",
+            }
+            for a in added
+        ],
+        "complete": (
+            {"at": done["completed_at"].isoformat(), "by": done["display_name"]} if done else None
+        ),
         "blocking": [b["n"] for b in boxes if b["state"] not in ("answered", "answered_hidden")],
     }
 
@@ -240,13 +343,22 @@ def _validate_added(body: AddedBoxIn, *, catalogue, width: int, height: int) -> 
     elif body.label:
         raise Invalid("no species goes with this answer")
     extra = validate_label(body, catalogue=catalogue, name=label)
-    return {"bbox": bbox, "label": label, "life_stage": life_stage,
-            "confidence": extra["confidence"], "celebrity_id": extra["celebrity_id"]}
+    return {
+        "bbox": bbox,
+        "label": label,
+        "life_stage": life_stage,
+        "confidence": extra["confidence"],
+        "celebrity_id": extra["celebrity_id"],
+    }
 
 
 async def _is_complete(conn, saved_frame_id: int) -> bool:
-    return await fetch_one(conn, "SELECT 1 FROM review_frames WHERE saved_frame_id = %s",
-                           (saved_frame_id,)) is not None
+    return (
+        await fetch_one(
+            conn, "SELECT 1 FROM review_frames WHERE saved_frame_id = %s", (saved_frame_id,)
+        )
+        is not None
+    )
 
 
 async def add_box(conn, *, saved_frame_id: int, user, body: AddedBoxIn, catalogue) -> dict:
@@ -255,20 +367,34 @@ async def add_box(conn, *, saved_frame_id: int, user, body: AddedBoxIn, catalogu
     async with conn.transaction():
         if not _is_admin(user) and await _is_complete(conn, saved_frame_id):
             raise Conflict("this frame is already marked complete")
-        row = await fetch_one(conn, """
+        row = await fetch_one(
+            conn,
+            """
             INSERT INTO review_added_boxes (saved_frame_id, bbox, outcome, label, life_stage,
                                             confidence, celebrity_id, user_id, session_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                              (saved_frame_id, v["bbox"], body.outcome, v["label"],
-                               v["life_stage"], v["confidence"], v["celebrity_id"], user.id,
-                               user.session_id))
+            (
+                saved_frame_id,
+                v["bbox"],
+                body.outcome,
+                v["label"],
+                v["life_stage"],
+                v["confidence"],
+                v["celebrity_id"],
+                user.id,
+                user.session_id,
+            ),
+        )
     return {"id": row["id"]}
 
 
 async def _own_box(conn, *, saved_frame_id: int, box_id: int, user) -> None:
-    row = await fetch_one(conn, """SELECT saved_frame_id, user_id FROM review_added_boxes
+    row = await fetch_one(
+        conn,
+        """SELECT saved_frame_id, user_id FROM review_added_boxes
                                     WHERE id = %s AND removed_at IS NULL FOR UPDATE""",
-                          (box_id,))
+        (box_id,),
+    )
     if row is None or row["saved_frame_id"] != saved_frame_id:
         raise NotFound("no such drawn box")
     if _is_admin(user):
@@ -279,19 +405,30 @@ async def _own_box(conn, *, saved_frame_id: int, box_id: int, user) -> None:
         raise Conflict("this frame is already marked complete")
 
 
-async def update_box(conn, *, saved_frame_id: int, box_id: int, user, body: AddedBoxIn,
-                     catalogue) -> dict:
+async def update_box(
+    conn, *, saved_frame_id: int, box_id: int, user, body: AddedBoxIn, catalogue
+) -> dict:
     fr = await frame_record(conn, saved_frame_id)
     v = _validate_added(body, catalogue=catalogue, width=fr["width"], height=fr["height"])
     async with conn.transaction():
         await _own_box(conn, saved_frame_id=saved_frame_id, box_id=box_id, user=user)
         async with conn.cursor() as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 UPDATE review_added_boxes
                    SET bbox = %s, outcome = %s, label = %s, life_stage = %s, confidence = %s,
                        celebrity_id = %s, updated_at = now()
-                 WHERE id = %s""", (v["bbox"], body.outcome, v["label"], v["life_stage"],
-                                    v["confidence"], v["celebrity_id"], box_id))
+                 WHERE id = %s""",
+                (
+                    v["bbox"],
+                    body.outcome,
+                    v["label"],
+                    v["life_stage"],
+                    v["confidence"],
+                    v["celebrity_id"],
+                    box_id,
+                ),
+            )
     return {"id": box_id}
 
 
@@ -299,13 +436,13 @@ async def remove_box(conn, *, saved_frame_id: int, box_id: int, user) -> None:
     async with conn.transaction():
         await _own_box(conn, saved_frame_id=saved_frame_id, box_id=box_id, user=user)
         async with conn.cursor() as cur:
-            await cur.execute("UPDATE review_added_boxes SET removed_at = now() WHERE id = %s",
-                              (box_id,))
+            await cur.execute(
+                "UPDATE review_added_boxes SET removed_at = now() WHERE id = %s", (box_id,)
+            )
 
 
 async def complete_frame(conn, *, saved_frame_id: int, user, catalogue) -> dict:
-    state = await frame_state(conn, saved_frame_id=saved_frame_id, user=user,
-                              catalogue=catalogue)
+    state = await frame_state(conn, saved_frame_id=saved_frame_id, user=user, catalogue=catalogue)
     if state["complete"]:
         return {"complete": True, "already": True}
     if state["blocking"]:
@@ -315,14 +452,16 @@ async def complete_frame(conn, *, saved_frame_id: int, user, catalogue) -> dict:
         # "not complete": read back whether THIS insert is the one that
         # actually won, rather than trusting the pre-check above, which
         # is stale the moment two completions overlap.
-        row = await fetch_one(conn, """
+        row = await fetch_one(
+            conn,
+            """
             INSERT INTO review_frames (saved_frame_id, completed_by, session_id)
                  VALUES (%s, %s, %s) ON CONFLICT DO NOTHING RETURNING saved_frame_id""",
-                              (saved_frame_id, user.id, user.session_id))
+            (saved_frame_id, user.id, user.session_id),
+        )
     return {"complete": True, "already": row is None}
 
 
 async def uncomplete_frame(conn, *, saved_frame_id: int) -> None:
     async with conn.transaction(), conn.cursor() as cur:
-        await cur.execute("DELETE FROM review_frames WHERE saved_frame_id = %s",
-                          (saved_frame_id,))
+        await cur.execute("DELETE FROM review_frames WHERE saved_frame_id = %s", (saved_frame_id,))

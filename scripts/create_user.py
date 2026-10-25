@@ -9,6 +9,7 @@ active and pre-approved.
 The password is read with getpass and never accepted as an argument —
 this is a shared machine where any user can read full command lines out
 of `ps`."""
+
 from __future__ import annotations
 
 import argparse
@@ -58,8 +59,13 @@ def main() -> None:
             """INSERT INTO users (username, display_name, email, password_hash,
                                   role, status, approved_at)
                VALUES (%s, %s, %s, %s, %s, 'active', NOW()) RETURNING id""",
-            (args.username.strip().lower(), args.display_name.strip(),
-             args.email.strip().lower(), hash_password(password), args.role),
+            (
+                args.username.strip().lower(),
+                args.display_name.strip(),
+                args.email.strip().lower(),
+                hash_password(password),
+                args.role,
+            ),
         )
         print(f"created user id={cur.fetchone()[0]} role={args.role}")
 

@@ -16,14 +16,15 @@ Sheet visibility: relies on "anyone with the link" sharing — the
 sheet becomes private later, the poller logs a warning and the
 existing local files stay in place (graceful degradation).
 """
+
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable
 
 import httpx
 
@@ -90,7 +91,9 @@ class SheetPoller:
         }
         try:
             r = await self.http_client.get(
-                self.sheet_url, timeout=60.0, follow_redirects=True,
+                self.sheet_url,
+                timeout=60.0,
+                follow_redirects=True,
             )
         except Exception as e:
             msg = f"download failed: {e}"
@@ -106,9 +109,7 @@ class SheetPoller:
         new_bytes = r.content
         result["downloaded_bytes"] = len(new_bytes)
         new_hash = _sha(new_bytes)
-        old_hash = (
-            _sha(self.xlsx_path.read_bytes()) if self.xlsx_path.exists() else None
-        )
+        old_hash = _sha(self.xlsx_path.read_bytes()) if self.xlsx_path.exists() else None
 
         if old_hash == new_hash and not force:
             log.debug("sheet_poller: unchanged (sha=%s)", new_hash)
@@ -128,7 +129,9 @@ class SheetPoller:
             return result
         log.info(
             "sheet_poller: xlsx updated (sha %s → %s, %d bytes)",
-            old_hash, new_hash, len(new_bytes),
+            old_hash,
+            new_hash,
+            len(new_bytes),
         )
         result["sheet_changed"] = True
 
@@ -150,7 +153,7 @@ class SheetPoller:
                 log.warning("sheet_poller: %s", msg)
                 result["errors"].append(msg)
             else:
-                log.info("sheet_poller: %s OK — %s", script, ' | '.join(tail))
+                log.info("sheet_poller: %s OK — %s", script, " | ".join(tail))
                 result["rebuilt"].append(script)
 
         # Hot-reload in-memory state (celebrities catalogue, common-name

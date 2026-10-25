@@ -1,6 +1,7 @@
 """The review page's shell and scripts. There is no browser-test harness
 in this repo, so the JavaScript gets a syntax check here and a manual
 checklist in Task 12."""
+
 from __future__ import annotations
 
 import re
@@ -20,8 +21,9 @@ SCRIPTS = ["review-core.js", "review-single.js", "review-frame.js", "review-brow
 @pytest.mark.skipif(not Path(NODE).exists(), reason="node is not available")
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_script_parses(name):
-    r = subprocess.run([NODE, "--check", str(STATIC / name)], capture_output=True, text=True,
-                       timeout=60)
+    r = subprocess.run(
+        [NODE, "--check", str(STATIC / name)], capture_output=True, text=True, timeout=60
+    )
     assert r.returncode == 0, r.stderr
 
 
@@ -49,8 +51,9 @@ def _assert_busy_guarded(body: str, name: str) -> None:
     assert re.search(r"\bbusy\s*=\s*true\b", body), f"{name}() must set busy = true"
     m = re.search(r"\bfinally\s*\{", body)
     assert m, f"{name}() must reset busy in a finally block"
-    assert re.search(r"\bbusy\s*=\s*false\b", _braces_from(body, m.end() - 1)), (
-        f"{name}() must reset busy inside its finally block")
+    assert re.search(
+        r"\bbusy\s*=\s*false\b", _braces_from(body, m.end() - 1)
+    ), f"{name}() must reset busy inside its finally block"
 
 
 def test_the_busy_guard_check_accepts_braces_and_wants_the_reset_in_finally():
@@ -83,8 +86,16 @@ def test_mutating_handlers_share_the_busy_guard(name):
 # review-frame.js's own actions that send a request (Task 11): entering the
 # view claims the frame's boxes, and each answer/draw/complete action
 # mutates state, so the same re-entrancy guard applies to all of them.
-FRAME_MUTATING_HANDLERS = ("enter", "answerModel", "saveAddedBox", "removeAddedBox", "complete",
-                            "toSingle", "nextFrame", "reopenFrame")
+FRAME_MUTATING_HANDLERS = (
+    "enter",
+    "answerModel",
+    "saveAddedBox",
+    "removeAddedBox",
+    "complete",
+    "toSingle",
+    "nextFrame",
+    "reopenFrame",
+)
 
 
 @pytest.mark.parametrize("name", FRAME_MUTATING_HANDLERS)
@@ -114,14 +125,15 @@ def test_browse_mutating_handlers_share_the_busy_guard(name):
 # shared RV.acceptGuessFlow() in review-core.js instead of reimplementing
 # the stage enumeration inline, so the rule can't drift between the views.
 def test_accept_guess_uses_the_shared_helper():
-    assert "RV.acceptGuessFlow" in (STATIC / "review-core.js").read_text(), (
-        "the shared life-stage-picking helper must live in review-core.js"
-    )
+    assert (
+        "RV.acceptGuessFlow" in (STATIC / "review-core.js").read_text()
+    ), "the shared life-stage-picking helper must live in review-core.js"
     for name in ("review-single.js", "review-frame.js"):
         body = _function_body((STATIC / name).read_text(), "acceptGuess")
         assert "RV.acceptGuessFlow(" in body, f"{name}'s acceptGuess() must call the shared helper"
-        assert "RV.catalogue.filter" not in body, (
-            f"{name}'s acceptGuess() must not reimplement the life-stage check inline")
+        assert (
+            "RV.catalogue.filter" not in body
+        ), f"{name}'s acceptGuess() must not reimplement the life-stage check inline"
 
 
 # Final review I1: whole-frame mode shows the other boxes' labels and model
@@ -136,12 +148,15 @@ def test_whole_frame_is_not_offered_on_a_spot_check():
     assert "lane" not in gate, "frameAllowed() must not rely on item.lane"
     # every way into the frame view from the single view goes through it:
     # the button, the F key, and openFrame() itself
-    assert re.search(r"frameAllowed\(c\)\s*\?\s*RV\.el\(\"button\"[^\n]*Whole frame", src), (
-        "the Whole-frame button must only be built when frameAllowed(c)")
-    assert re.search(r'k === "f" && frameAllowed\(current\)', src), (
-        "the F key must be ignored unless frameAllowed(current)")
-    assert re.search(r"if \(frameAllowed\(current\)\)",
-                     _function_body(src, "openFrame")), "openFrame() must check frameAllowed"
+    assert re.search(
+        r"frameAllowed\(c\)\s*\?\s*RV\.el\(\"button\"[^\n]*Whole frame", src
+    ), "the Whole-frame button must only be built when frameAllowed(c)"
+    assert re.search(
+        r'k === "f" && frameAllowed\(current\)', src
+    ), "the F key must be ignored unless frameAllowed(current)"
+    assert re.search(
+        r"if \(frameAllowed\(current\)\)", _function_body(src, "openFrame")
+    ), "openFrame() must check frameAllowed"
     assert src.count('RV.show("frame"') == 1, "the frame view is only entered via openFrame()"
 
 
@@ -151,7 +166,8 @@ def test_key_dispatcher_ignores_held_down_keys():
     block = _braces_from(src, src.index("{", src.index(marker)))
     assert "ev.repeat" in block, (
         "the shared keydown dispatcher must ignore ev.repeat, or a held-down "
-        "key re-fires its action every few milliseconds")
+        "key re-fires its action every few milliseconds"
+    )
 
 
 @pytest.mark.anyio
@@ -167,10 +183,12 @@ async def test_the_page_carries_the_role_and_loads_the_scripts(rdb, rclient):
 
 # ---- spec amendment 2026-09-25: frame-first review -----------------------------
 
+
 def test_the_queue_is_asked_in_one_place_and_spot_checks_stay_single():
     for name in ("review-single.js", "review-frame.js", "review-browse.js"):
-        assert "/api/review/next" not in _read(name), (
-            f"{name} must go through RV.next(), not call /api/review/next itself")
+        assert "/api/review/next" not in _read(
+            name
+        ), f"{name} must go through RV.next(), not call /api/review/next itself"
     body = _function_body(_read("review-core.js"), "next")
     assert re.search(r"\.item\.pass\s*!==\s*2", body), "RV.next() must send pass 2 to single view"
     assert 'RV.mode() === "frame"' in body, "RV.next() must honour the chosen mode"
@@ -185,35 +203,41 @@ def test_the_mode_preference_survives_blocked_storage():
     core = _read("review-core.js")
     for name in ("mode", "setMode"):
         body = _function_body(core, name)
-        assert "localStorage" in body and "try" in body and "catch" in body, (
-            f"RV.{name}() must guard every storage access")
+        assert (
+            "localStorage" in body and "try" in body and "catch" in body
+        ), f"RV.{name}() must guard every storage access"
     # Fix round 1, Minor B: a blocked write must still be remembered for
     # this session, or F in the frame view can never reach single boxes
     # (setMode("single") silently drops and mode() falls back to "frame").
-    assert re.search(r"RV\.modeValue\s*=\s*value", _function_body(core, "setMode")), (
-        "setMode() must keep an in-memory copy before the storage write can fail")
+    assert re.search(
+        r"RV\.modeValue\s*=\s*value", _function_body(core, "setMode")
+    ), "setMode() must keep an in-memory copy before the storage write can fail"
     # Fix round 2, Minor (carried): RV.modeValue is only ever set by setMode
     # in this page's lifetime, so it must win over whatever storage holds --
     # otherwise a readable-but-unwritable store (a stale "frame" read
     # succeeds while the "single" write silently fails) overrides the
     # in-memory choice instead of the other way around.
     mode_body = _function_body(core, "mode")
-    assert re.search(r"if \(RV\.modeValue\) return RV\.modeValue;", mode_body), (
-        "mode() must prefer the in-memory value over a stored one")
+    assert re.search(
+        r"if \(RV\.modeValue\) return RV\.modeValue;", mode_body
+    ), "mode() must prefer the in-memory value over a stored one"
     # Anchored on the literal `if (RV.modeValue)` check, not the first
     # mention of "RV.modeValue" anywhere in the function -- the preceding
     # comment also says "RV.modeValue", which would satisfy `.index()`
     # regardless of where the real check sits relative to the storage read.
-    assert mode_body.index("if (RV.modeValue)") < mode_body.index("localStorage"), (
-        "the in-memory check must run before the storage read, not after it")
+    assert mode_body.index("if (RV.modeValue)") < mode_body.index(
+        "localStorage"
+    ), "the in-memory check must run before the storage read, not after it"
     assert 'return "frame"' in mode_body, "whole frame is still the ultimate fallback"
 
 
 def test_opening_a_frame_keeps_the_box_the_queue_just_served():
-    assert re.search(r"RV\.releaseHeld\(\s*id\s*\)", _function_body(_read("review-frame.js"),
-                                                                      "enter"))
-    assert "held.savedFrameId === keepFrameId" in _function_body(_read("review-core.js"),
-                                                                   "releaseHeld")
+    assert re.search(
+        r"RV\.releaseHeld\(\s*id\s*\)", _function_body(_read("review-frame.js"), "enter")
+    )
+    assert "held.savedFrameId === keepFrameId" in _function_body(
+        _read("review-core.js"), "releaseHeld"
+    )
 
 
 def test_a_frame_that_will_not_open_does_not_ask_the_queue_again():
@@ -237,8 +261,9 @@ def test_completing_a_frame_asks_for_the_next_one_outside_the_busy_guard():
     fin = body.index("finally")
     assert "RV.next()" not in body[:fin]
     tail = body[fin:]
-    assert "RV.next()" in tail[tail.index("}") + 1:], (
-        "complete() must call RV.next() after busy is reset, or enter() refuses it")
+    assert (
+        "RV.next()" in tail[tail.index("}") + 1 :]
+    ), "complete() must call RV.next() after busy is reset, or enter() refuses it"
 
 
 def test_leaving_the_frame_view_releases_its_boxes():
@@ -256,8 +281,9 @@ def test_switching_lanes_releases_before_asking_the_queue():
     click_marker = 'addEventListener("click"'
     click_block = _braces_from(block, block.index("{", block.index(click_marker)))
     assert "await RV.releaseAll()" in click_block and "RV.next()" in click_block
-    assert click_block.index("await RV.releaseAll()") < click_block.index("RV.next()"), (
-        "the lane button must release before it asks the queue again")
+    assert click_block.index("await RV.releaseAll()") < click_block.index(
+        "RV.next()"
+    ), "the lane button must release before it asks the queue again"
 
 
 def test_closing_the_tab_releases_the_frame_too():
@@ -272,6 +298,7 @@ def test_closing_the_tab_releases_the_frame_too():
 
 # ---- fix round 1 (opus review of f614479..dc65ba2) ------------------------------
 
+
 # Important 1(a): reload() started POSTing /open (a claim, not a plain read) so
 # it can refresh this volunteer's claims mid-frame. But if the volunteer has
 # already left the frame by the time a late reload's request lands -- F, a
@@ -283,12 +310,15 @@ def test_reload_does_not_reclaim_a_frame_the_volunteer_already_left():
     body = _function_body(_read("review-frame.js"), "reload")
     pre, sep, post = body.partition("await RV.post")
     assert sep, "reload() must still claim via RV.post"
-    assert re.search(r"if \(RV\.openFrameId !== id\) return;", pre), (
-        "reload() must skip the re-open once the volunteer has already left this frame")
-    assert re.search(r"if \(RV\.openFrameId !== id\)", post), (
-        "reload() must notice a leave that happened while its POST was in flight")
-    assert "/api/review/frames/${id}/release" in post, (
-        "a late reload must give back the claims it just re-acquired, not strand them")
+    assert re.search(
+        r"if \(RV\.openFrameId !== id\) return;", pre
+    ), "reload() must skip the re-open once the volunteer has already left this frame"
+    assert re.search(
+        r"if \(RV\.openFrameId !== id\)", post
+    ), "reload() must notice a leave that happened while its POST was in flight"
+    assert (
+        "/api/review/frames/${id}/release" in post
+    ), "a late reload must give back the claims it just re-acquired, not strand them"
 
 
 # Important 1(b): the fix above stops a late reload from re-claiming a frame
@@ -304,21 +334,24 @@ def test_reload_does_not_reclaim_a_frame_the_volunteer_already_left():
 # own, not gated on which view happens to be showing right now.
 def test_leaving_the_frame_view_waits_for_an_in_flight_action():
     frame_src = _read("review-frame.js")
-    assert re.search(r"return\s*\{\s*enter\s*,\s*isBusy\b", frame_src), (
-        "review-frame.js must expose isBusy alongside enter")
+    assert re.search(
+        r"return\s*\{\s*enter\s*,\s*isBusy\b", frame_src
+    ), "review-frame.js must expose isBusy alongside enter"
     core = _read("review-core.js")
     marker = 'document.addEventListener("DOMContentLoaded"'
     block = _braces_from(core, core.index("{", core.index(marker)))
     click_marker = 'addEventListener("click"'
     click_block = _braces_from(block, block.index("{", block.index(click_marker)))
-    guard = re.search(r'if \([^\n]*isBusy\(\)\s*\)\s*return;', click_block)
+    guard = re.search(r"if \([^\n]*isBusy\(\)\s*\)\s*return;", click_block)
     assert guard, "the nav click handler must ignore a click while the frame view is busy"
-    assert re.search(r"RV\.views\.frame\s*&&\s*RV\.views\.frame\.isBusy\s*&&\s*"
-                      r"RV\.views\.frame\.isBusy\(\)", guard.group(0)), (
-        "the guard must check the frame view's busy state directly")
+    assert re.search(
+        r"RV\.views\.frame\s*&&\s*RV\.views\.frame\.isBusy\s*&&\s*" r"RV\.views\.frame\.isBusy\(\)",
+        guard.group(0),
+    ), "the guard must check the frame view's busy state directly"
     assert "RV.view ===" not in guard.group(0), (
-        "the guard must not also require RV.view === \"frame\" -- a stale, no-longer-current "
-        "frame view can still be busy and must still be caught")
+        'the guard must not also require RV.view === "frame" -- a stale, no-longer-current '
+        "frame view can still be busy and must still be caught"
+    )
 
 
 # Minor A (carried, fix round 1): pressing F in single view passed no
@@ -331,11 +364,13 @@ def test_leaving_the_frame_view_waits_for_an_in_flight_action():
 def test_f_in_single_view_falls_back_to_the_held_box_if_the_frame_wont_open():
     body = _function_body(_read("review-single.js"), "openFrame")
     assert re.search(r"if \(frameAllowed\(current\)\)", body), "openFrame() must check frameAllowed"
-    assert re.search(r"if \(!reopened\)\s*arg\.payload\s*=\s*current;", body), (
-        "openFrame() must offer the current box as a fallback payload, unless it's reopened")
-    assert "RV.setMode(\"frame\")" in body, "F must still remember the frame preference"
-    assert body.index("RV.show(\"frame\"") < body.index("RV.setMode(\"frame\")"), (
-        "the mode must only be remembered once the frame has actually opened")
+    assert re.search(
+        r"if \(!reopened\)\s*arg\.payload\s*=\s*current;", body
+    ), "openFrame() must offer the current box as a fallback payload, unless it's reopened"
+    assert 'RV.setMode("frame")' in body, "F must still remember the frame preference"
+    assert body.index('RV.show("frame"') < body.index(
+        'RV.setMode("frame")'
+    ), "the mode must only be remembered once the frame has actually opened"
 
 
 # ---- fix round 2 (re-review of dc65ba2..6eb069c) ---------------------------------
@@ -353,23 +388,31 @@ def test_f_in_single_view_falls_back_to_the_held_box_if_the_frame_wont_open():
 # come before the busy check so the existing busy-guard tests still match
 # (FRAME_MUTATING_HANDLERS parametrizes over the same function names).
 FRAME_LEFT_GUARD = r"if \(!state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;"
-FRAME_LEAVE_AWARE_ACTIONS = ("answerModel", "saveAddedBox", "removeAddedBox", "complete", "toSingle",
-                             "nextFrame", "reopenFrame")
+FRAME_LEAVE_AWARE_ACTIONS = (
+    "answerModel",
+    "saveAddedBox",
+    "removeAddedBox",
+    "complete",
+    "toSingle",
+    "nextFrame",
+    "reopenFrame",
+)
 
 
 @pytest.mark.parametrize("name", FRAME_LEAVE_AWARE_ACTIONS)
 def test_frame_actions_refuse_once_the_frame_has_been_left(name):
     body = _function_body((STATIC / "review-frame.js").read_text(), name)
     left_guard = re.search(FRAME_LEFT_GUARD, body)
-    assert left_guard, (
-        f"{name}() must refuse once RV.openFrameId no longer matches this frame")
+    assert left_guard, f"{name}() must refuse once RV.openFrameId no longer matches this frame"
     busy_check = re.search(r"\bbusy\b\s*\)\s*return", body)
     assert busy_check, f"{name}() must still return early when busy is already true"
-    assert left_guard.start() < busy_check.start(), (
-        f"{name}()'s openFrameId guard must come before its busy check")
+    assert (
+        left_guard.start() < busy_check.start()
+    ), f"{name}()'s openFrameId guard must come before its busy check"
 
 
 # ---- Task 4: "Next frame", per-box progress, clickable preview boxes -------------
+
 
 # S / "Next frame" (spec amendment 2026-09-25, flow step 3): skip the boxes
 # this volunteer hasn't answered and ask the queue for the next one, outside
@@ -386,7 +429,7 @@ def test_next_frame_skips_and_asks_for_the_next_one_outside_the_busy_guard():
     fin = body.index("finally")
     assert "RV.next()" not in body[:fin]
     tail = body[fin:]
-    assert "RV.next()" in tail[tail.index("}") + 1:]
+    assert "RV.next()" in tail[tail.index("}") + 1 :]
     assert re.search(r'k === "s"\) \{ nextFrame\(\)', src), "S must be Next frame"
 
 
@@ -420,14 +463,18 @@ def test_change_my_answer_refuses_once_the_frame_has_been_left():
     body = _function_body(_read("review-frame.js"), "modelPanel")
     at = body.index('RV.show("single", { reopenEventId: b.event_id })')
     onclick_start = body.rindex("onclick:", 0, at)
-    onclick_body = body[onclick_start:body.index("}", at) + 1]
-    assert re.search(r"if \(busy \|\| !state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;",
-                      onclick_body), (
-        "\"Change my answer\" must refuse once this frame has been left (busy, or "
-        "RV.openFrameId no longer names it)")
+    onclick_body = body[onclick_start : body.index("}", at) + 1]
+    assert re.search(
+        r"if \(busy \|\| !state \|\| RV\.openFrameId !== state\.saved_frame_id\) return;",
+        onclick_body,
+    ), (
+        '"Change my answer" must refuse once this frame has been left (busy, or '
+        "RV.openFrameId no longer names it)"
+    )
 
 
 # ---- final review fix wave (final-findings.md) -----------------------------------
+
 
 # M1: pagehide also fires when the page goes into the back/forward cache, so
 # its keepalive releases have already given the claims back by the time Back
@@ -439,8 +486,9 @@ def test_a_page_restored_from_the_back_forward_cache_starts_afresh():
     marker = 'window.addEventListener("pageshow"'
     assert marker in core, "the page must listen for pageshow"
     block = _braces_from(core, core.index("{", core.index(marker)))
-    assert re.search(r"if \(ev\.persisted\) window\.location\.reload\(\);", block), (
-        "a page restored from the back/forward cache must reload, not act on released claims")
+    assert re.search(
+        r"if \(ev\.persisted\) window\.location\.reload\(\);", block
+    ), "a page restored from the back/forward cache must reload, not act on released claims"
 
 
 # M2: "answered" in frame_state means any verdict on the box, and the older
@@ -453,13 +501,15 @@ def test_completing_a_frame_releases_it_rather_than_forgetting_it():
     body = _function_body(_read("review-frame.js"), "complete")
     assert "RV.openFrameId = null" not in body, "complete() must release the frame, not forget it"
     fin = body.index("} finally {")
-    assert re.search(r"await RV\.releaseFrame\(\);", body[:fin]), (
-        "complete() must await RV.releaseFrame() inside the busy guard, before RV.next()")
+    assert re.search(
+        r"await RV\.releaseFrame\(\);", body[:fin]
+    ), "complete() must await RV.releaseFrame() inside the busy guard, before RV.next()"
     # A second click on "Mark frame complete" is refused by the leave guard
     # only because releaseFrame() nulls RV.openFrameId before its request.
     release = _function_body(_read("review-core.js"), "releaseFrame")
-    assert release.index("RV.openFrameId = null") < release.index("RV.post("), (
-        "releaseFrame() must forget the frame before it sends the release")
+    assert release.index("RV.openFrameId = null") < release.index(
+        "RV.post("
+    ), "releaseFrame() must forget the frame before it sends the release"
 
 
 # M3: every frame action's leave guard compares RV.openFrameId with this
@@ -473,11 +523,12 @@ def test_opening_a_frame_records_it_as_the_open_frame():
     at = body.index("if (!r.ok)")
     brace = body.index("{", at)
     failure = _braces_from(body, brace)
-    success = body[brace + len(failure):body.index("finally")]
+    success = body[brace + len(failure) : body.index("finally")]
     for statement in ("state = r.data;", "RV.held = null;", "RV.openFrameId = id;"):
         assert statement in success, f"enter()'s success path must run `{statement}`"
-    assert "RV.openFrameId = id" not in body[:at], (
-        "enter() must not record the frame as open before it has actually opened")
+    assert (
+        "RV.openFrameId = id" not in body[:at]
+    ), "enter() must not record the frame as open before it has actually opened"
 
 
 # I1 (F1, as ruled): a navigation made while RV.next() is in flight must win.
@@ -486,8 +537,9 @@ def test_opening_a_frame_records_it_as_the_open_frame():
 # switches the view nor keeps its box.
 def test_every_view_switch_supersedes_a_pending_next():
     body = _function_body(_read("review-core.js"), "show")
-    assert re.search(r"if \(!RV\.views\[view\]\) return;\s*RV\.navToken \+= 1;", body), (
-        "RV.show() must take a new navToken right after its view-exists check")
+    assert re.search(
+        r"if \(!RV\.views\[view\]\) return;\s*RV\.navToken \+= 1;", body
+    ), "RV.show() must take a new navToken right after its view-exists check"
 
 
 # ...and only one /next is out at a time. Each call waits for the one before it
@@ -499,8 +551,9 @@ def test_every_view_switch_supersedes_a_pending_next():
 def test_a_superseded_next_gives_its_box_back_and_shows_nothing():
     core = _read("review-core.js")
     assert re.search(r"^RV\.navToken = 0;$", core, re.M), "RV.navToken must start at 0"
-    assert re.search(r"^RV\.nextTurn = Promise\.resolve\(\);$", core, re.M), (
-        "RV.nextTurn must start settled")
+    assert re.search(
+        r"^RV\.nextTurn = Promise\.resolve\(\);$", core, re.M
+    ), "RV.nextTurn must start settled"
     body = _function_body(core, "next")
     get = body.index("RV.get(")
     first_show = body.index("RV.show(")
@@ -508,19 +561,23 @@ def test_a_superseded_next_gives_its_box_back_and_shows_nothing():
     turn = body.index("const turn = RV.nextTurn;")
     chain = body.index("RV.nextTurn = new Promise(")
     wait = body.index("await turn;")
-    assert take < turn < chain < wait < get, (
-        "RV.next() must take its token and queue behind the previous call before it asks")
-    assert re.search(r"if \(token !== RV\.navToken\) return;", body[wait:get]), (
-        "a call superseded while it waited its turn must not ask the queue at all")
+    assert (
+        take < turn < chain < wait < get
+    ), "RV.next() must take its token and queue behind the previous call before it asks"
+    assert re.search(
+        r"if \(token !== RV\.navToken\) return;", body[wait:get]
+    ), "a call superseded while it waited its turn must not ask the queue at all"
     at = body.index("if (token !== RV.navToken) {", get)
     block = _braces_from(body, body.index("{", at))
-    assert "await RV.post(`/api/review/items/${r.data.item.id}/release`)" in block, (
-        "a call superseded while its GET was out must give back -- and await -- the box it got")
+    assert (
+        "await RV.post(`/api/review/items/${r.data.item.id}/release`)" in block
+    ), "a call superseded while its GET was out must give back -- and await -- the box it got"
     assert "return;" in block and at < first_show, "...and return before RV.show()"
     fin = body.index("} finally {")
     handoff = body.index("handOff();", fin)
-    assert get < fin and handoff < first_show, (
-        "the turn must be handed on in a finally, before any RV.show()")
+    assert (
+        get < fin and handoff < first_show
+    ), "the turn must be handed on in a finally, before any RV.show()"
 
 
 # H2: RV.show() counts every call as a navigation, so a reopen the single view
@@ -530,9 +587,10 @@ def test_a_superseded_next_gives_its_box_back_and_shows_nothing():
 def test_a_recent_box_is_not_reopened_while_an_answer_is_in_flight():
     body = _function_body(_read("review-single.js"), "renderRecent")
     at = body.index('RV.show("single", { reopenEventId: r.event_id })')
-    onclick = body[body.rindex("onclick:", 0, at):at]
-    assert re.search(r"if \(busy\) return;", onclick), (
-        "a recent-strip click must be ignored while the single view is busy")
+    onclick = body[body.rindex("onclick:", 0, at) : at]
+    assert re.search(
+        r"if \(busy\) return;", onclick
+    ), "a recent-strip click must be ignored while the single view is busy"
 
 
 # Demo walk-through 2026-09-26: the dashboard's style.css gives every <main> a
@@ -556,13 +614,14 @@ def test_the_review_page_is_one_centred_column():
 def test_every_time_is_shown_in_eastern():
     core = _read("review-core.js")
     body = _function_body(core, "fmtTime")
-    assert 'timeZone: RV.TIME_ZONE' in body
+    assert "timeZone: RV.TIME_ZONE" in body
     assert 'RV.TIME_ZONE = "America/New_York"' in core
     outside = core.replace(body, "")
     for name in ("review-core.js", "review-single.js", "review-frame.js", "review-browse.js"):
         src = outside if name == "review-core.js" else _read(name)
-        assert not re.search(r"toLocale(String|TimeString|DateString)\(", src), (
-            f"{name} formats a time without RV.fmtTime")
+        assert not re.search(
+            r"toLocale(String|TimeString|DateString)\(", src
+        ), f"{name} formats a time without RV.fmtTime"
 
 
 # Demo walk-through 2026-09-26: review-page colours outside style.css's :root
@@ -575,7 +634,6 @@ def test_review_colours_are_theme_variables():
     assert css.count("#1f3b4f") == 1, "border colours must use var(--rv-line)"
     for literal in ("#173049", "#5a2a14", "#ffe2cf", "#ff9a9a", "#062a14"):
         assert css.count(literal) == 1, f"{literal} must only appear as a .rv-page default"
-
 
 
 # Demo walk-through 2026-09-26: the whole-frame instructions were a faint grey
@@ -591,8 +649,12 @@ def test_the_frame_instructions_are_a_callout_with_a_legend():
     assert 'kbd("S")' in body and 'kbd("D")' in body
     assert "legend()" in _function_body(src, "render")
     css = _read("review.css")
-    for state, colour in (("pending", "#ffc400"), ("done", "#34c759"), ("added", "#3ad1ff"),
-                          ("locked", "#8aa3b5")):
+    for state, colour in (
+        ("pending", "#ffc400"),
+        ("done", "#34c759"),
+        ("added", "#3ad1ff"),
+        ("locked", "#8aa3b5"),
+    ):
         rule = re.search(r"\.rv-swatch-" + state + r"\s*\{([^}]*)\}", css)
         assert rule and colour in rule.group(1), f"the {state} swatch must match its frame box"
 
@@ -600,9 +662,12 @@ def test_the_frame_instructions_are_a_callout_with_a_legend():
 # ---- Task 6: navigation waits its turn and gives way, and a stalled request
 # times out (B1, B3, B4) -----------------------------------------------------
 
+
 @needs_node
 def test_next_gives_way_once_the_volunteer_has_moved_on(tmp_path):
-    out = run_node([_read("review-core.js")], """
+    out = run_node(
+        [_read("review-core.js")],
+        """
       let asked = 0;
       globalThis.fetch = async () => { asked += 1;
         return { status: 200, ok: true, json: async () => ({ item: null, pool: null }) }; };
@@ -613,13 +678,17 @@ def test_next_gives_way_once_the_volunteer_has_moved_on(tmp_path):
       const stale = { asked, moved: RV.navToken - started };
       await RV.next();                     // a fresh navigation still asks
       return { stale, asked };
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     assert out == {"stale": {"asked": 0, "moved": 1}, "asked": 1}
 
 
 @needs_node
 def test_a_request_that_never_answers_times_out_and_frees_the_queue(tmp_path):
-    out = run_node([_read("review-core.js")], """
+    out = run_node(
+        [_read("review-core.js")],
+        """
       RV.API_TIMEOUT_MS = 50;
       const shown = [];
       let hang = true, asked = 0;
@@ -638,7 +707,9 @@ def test_a_request_that_never_answers_times_out_and_frees_the_queue(tmp_path):
       const banner = document.getElementById("rv-banner").textContent;
       await RV.next();                     // and the next one still runs
       return { shown, banner, asked };
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     assert out["shown"] == ["the server took too long; try again", None]
     assert "took too long" in out["banner"]
     assert out["asked"] == 2
@@ -655,7 +726,9 @@ def test_rv_api_clears_its_timer_whatever_happens():
 
 @needs_node
 def test_a_frame_opens_only_after_a_superseded_next_has_given_its_box_back(tmp_path):
-    out = run_node([_read("review-core.js"), _read("review-frame.js")], """
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        """
       const posted = [];
       globalThis.fetch = async (url) => { posted.push(url);
         return { status: 404, ok: false, json: async () => ({ error: "gone" }) }; };
@@ -668,13 +741,17 @@ def test_a_frame_opens_only_after_a_superseded_next_has_given_its_box_back(tmp_p
       handOff();
       await opening;
       return { before, after: posted };
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     assert out == {"before": [], "after": ["/api/review/frames/5/open"]}
 
 
 @needs_node
 def test_a_frame_the_volunteer_navigated_away_from_while_waiting_is_never_claimed(tmp_path):
-    out = run_node([_read("review-core.js"), _read("review-frame.js")], """
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        """
       const posted = [];
       globalThis.fetch = async (url) => { posted.push(url);
         return { status: 404, ok: false, json: async () => ({}) }; };
@@ -685,7 +762,9 @@ def test_a_frame_the_volunteer_navigated_away_from_while_waiting_is_never_claime
       handOff();
       await opening;
       return posted;
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     assert out == []
 
 
@@ -725,8 +804,10 @@ def test_a_preview_click_keeps_single_box_mode():
 
 def test_browse_cells_wait_for_a_view_that_is_still_saving():
     body = _function_body(_read("review-browse.js"), "open")
-    guard = ('for (const v of ["single", "frame"]) '
-             "if (RV.views[v] && RV.views[v].isBusy && RV.views[v].isBusy()) return;")
+    guard = (
+        'for (const v of ["single", "frame"]) '
+        "if (RV.views[v] && RV.views[v].isBusy && RV.views[v].isBusy()) return;"
+    )
     assert guard in body and body.index(guard) < body.index("RV.show(")
     assert "isBusy: () => busy" in _read("review-single.js")
 
@@ -735,9 +816,12 @@ def test_browse_cells_wait_for_a_view_that_is_still_saving():
 def test_reopening_reads_back_what_you_answered(tmp_path):
     src = _read("review-single.js")
     assert "mineText(c.mine)" in _function_body(src, "render")
-    out = run_node([
-        "RV = { entry: (n) => (n === 'Acanthurus coeruleus' ? { common: 'Blue Tang' } : null) };",
-        function_source(src, "mineText")], """
+    out = run_node(
+        [
+            "RV = { entry: (n) => (n === 'Acanthurus coeruleus' ? { common: 'Blue Tang' } : null) };",
+            function_source(src, "mineText"),
+        ],
+        """
       return [
         mineText({ outcome: "species", label: "Acanthurus coeruleus", life_stage: null,
                    not_sure: true, bbox: [1, 2, 30, 40] }),
@@ -745,18 +829,25 @@ def test_reopening_reads_back_what_you_answered(tmp_path):
                    not_sure: false, bbox: null }),
         mineText({ outcome: "no_animal" }),
         mineText({ outcome: "unidentifiable" })];
-    """, tmp_path)
-    assert out == ["Blue Tang, not sure; the box shows where you put it",
-                   "Pomacanthus paru (juvenile)", "no animal here", "can't identify"]
+    """,
+        tmp_path,
+    )
+    assert out == [
+        "Blue Tang, not sure; the box shows where you put it",
+        "Pomacanthus paru (juvenile)",
+        "no animal here",
+        "can't identify",
+    ]
 
 
 def test_admins_can_edit_and_reopen_a_completed_frame():
     src = _read("review-frame.js")
-    assert ('if (!selected || (state.complete && RV.role !== "admin")) return false;'
-            in _function_body(src, "editableSelection"))
+    assert (
+        'if (!selected || (state.complete && RV.role !== "admin")) return false;'
+        in _function_body(src, "editableSelection")
+    )
     assert '(state.complete && RV.role !== "admin")' in _function_body(src, "addedPanel")
-    assert ('if (state.complete && RV.role !== "admin") return;'
-            in _function_body(src, "toggleDraw"))
+    assert 'if (state.complete && RV.role !== "admin") return;' in _function_body(src, "toggleDraw")
     panel = _function_body(src, "panelContent")
     assert '"Reopen frame for edits"' in panel and 'RV.role === "admin"' in panel
     reopen = _function_body(src, "reopenFrame")
@@ -771,23 +862,33 @@ def test_admins_can_edit_and_reopen_a_completed_frame():
 # too, stranding the just-answered box on screen with nothing held.
 
 
-@pytest.mark.parametrize("single_busy, expected", [
-    (True, {"entered": False, "moved": 0}),
-    (False, {"entered": True, "moved": 1}),
-])
+@pytest.mark.parametrize(
+    "single_busy, expected",
+    [
+        (True, {"entered": False, "moved": 0}),
+        (False, {"entered": True, "moved": 1}),
+    ],
+)
 @needs_node
-def test_browse_open_refuses_a_reopen_while_the_single_view_is_busy(single_busy, expected, tmp_path):
-    out = run_node([
-        _read("review-core.js"),
-        f'RV.views.single = {{ isBusy: () => {"true" if single_busy else "false"}, '
-        "enter: async () => { globalThis.entered = true; } };",
-        function_source(_read("review-browse.js"), "open")], """
+def test_browse_open_refuses_a_reopen_while_the_single_view_is_busy(
+    single_busy, expected, tmp_path
+):
+    out = run_node(
+        [
+            _read("review-core.js"),
+            f'RV.views.single = {{ isBusy: () => {"true" if single_busy else "false"}, '
+            "enter: async () => { globalThis.entered = true; } };",
+            function_source(_read("review-browse.js"), "open"),
+        ],
+        """
       globalThis.entered = false;
       const before = RV.navToken;
       open({ kind: "box", mine: true, event_id: 99 });
       await new Promise((r) => setTimeout(r, 10));
       return { entered: globalThis.entered, moved: RV.navToken - before };
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     assert out == expected
 
 

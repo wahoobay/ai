@@ -1,4 +1,5 @@
 """scripts/enrich_taxonomy_from_worms.py, against a fake WoRMS."""
+
 from __future__ import annotations
 
 import csv
@@ -15,22 +16,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import enrich_taxonomy_from_worms as enr  # noqa: E402
 
 
-def _rec(name, aphia, *, valid=None, valid_id=None, status="accepted", match="exact",
-         rank="Species", family="Fam"):
+def _rec(
+    name,
+    aphia,
+    *,
+    valid=None,
+    valid_id=None,
+    status="accepted",
+    match="exact",
+    rank="Species",
+    family="Fam",
+):
     genus = name.split()[0]
-    return {"AphiaID": aphia, "scientificname": name, "authority": "Someone, 1900",
-            "status": status, "rank": rank, "valid_AphiaID": valid_id or aphia,
-            "valid_name": valid or name, "valid_authority": "Someone, 1900",
-            "match_type": match, "kingdom": "Animalia", "phylum": "Chordata",
-            "class": "Teleostei", "order": "Ord", "family": family, "genus": genus}
+    return {
+        "AphiaID": aphia,
+        "scientificname": name,
+        "authority": "Someone, 1900",
+        "status": status,
+        "rank": rank,
+        "valid_AphiaID": valid_id or aphia,
+        "valid_name": valid or name,
+        "valid_authority": "Someone, 1900",
+        "match_type": match,
+        "kingdom": "Animalia",
+        "phylum": "Chordata",
+        "class": "Teleostei",
+        "order": "Ord",
+        "family": family,
+        "genus": genus,
+    }
 
 
 FAKE = {
     "Seriola zonata": _rec("Seriola zonata", 1),
     # a misspelling: WoRMS matches it phonetically to an unaccepted record
     # whose accepted name is the correct spelling
-    "Pomatomus saltarix": _rec("Pomatomus saltarix", 2, valid="Pomatomus saltatrix",
-                               valid_id=20, status="unaccepted", match="phonetic"),
+    "Pomatomus saltarix": _rec(
+        "Pomatomus saltarix",
+        2,
+        valid="Pomatomus saltatrix",
+        valid_id=20,
+        status="unaccepted",
+        match="phonetic",
+    ),
     "Anamobaea": _rec("Anamobaea", 3, rank="Genus"),
     "Ghostus": _rec("Ghostus", 4, rank="Genus"),
     # a real species whose raw spelling has a capitalised or
@@ -76,7 +104,8 @@ def test_clean_query_name_normalises_the_epithet_before_testing_it():
 def test_collect_raw_names_merges_log_and_classes():
     raws = enr.collect_raw_names(
         [{"binomial": "Seriola zonata"}, {"binomial": None}, {"binomial": " Anamobaea  . "}],
-        ["Seriola_zonata", "Pomatomus_saltarix"])
+        ["Seriola_zonata", "Pomatomus_saltarix"],
+    )
     assert raws == ["Anamobaea .", "Pomatomus saltarix", "Seriola zonata"]
 
 
@@ -96,8 +125,9 @@ def test_resolve_names_falls_back_to_the_genus():
 
 
 def test_unresolved_lines_flag_fuzzy_genus_only_and_missing():
-    out = enr.resolve_names(["Pomatomus saltarix", "Ghostus unknownii", "Nothing here",
-                             "Seriola zonata"], fake_batch)
+    out = enr.resolve_names(
+        ["Pomatomus saltarix", "Ghostus unknownii", "Nothing here", "Seriola zonata"], fake_batch
+    )
     text = "\n".join(enr.unresolved_lines(out))
     assert "Pomatomus saltarix\tfuzzy match (phonetic)\tPomatomus saltatrix" in text
     assert "Ghostus unknownii\tgenus only\tGhostus" in text
@@ -107,9 +137,14 @@ def test_unresolved_lines_flag_fuzzy_genus_only_and_missing():
 
 def test_unresolved_lines_flags_a_dropped_epithet_and_words_the_actual_rank():
     out = enr.resolve_names(
-        ["Diodon Hystrix", "Kyphosus sp.", "Kyphosus sectatrix/bigibbus",
-         "Alligatoridae mississippiensis"],
-        fake_batch)
+        [
+            "Diodon Hystrix",
+            "Kyphosus sp.",
+            "Kyphosus sectatrix/bigibbus",
+            "Alligatoridae mississippiensis",
+        ],
+        fake_batch,
+    )
     text = "\n".join(enr.unresolved_lines(out))
     # A real species, once correctly queried, isn't flagged at all.
     assert "Diodon Hystrix" not in text
@@ -138,15 +173,26 @@ def test_build_rows_uses_the_normalised_epithet_for_species_and_lowest():
 
 def test_main_writes_the_csv_and_the_unresolved_list(tmp_path):
     manifest = tmp_path / "species_manifest.json"
-    manifest.write_text(json.dumps([{"binomial": "Seriola zonata", "family": "Carangidae",
-                                     "genus": "Seriola"}]))
+    manifest.write_text(
+        json.dumps([{"binomial": "Seriola zonata", "family": "Carangidae", "genus": "Seriola"}])
+    )
     classes = tmp_path / "classes.json"
     classes.write_text(json.dumps(["Pomatomus_saltarix"]))
     out_csv = tmp_path / "taxonomy.csv"
     unresolved = tmp_path / "taxonomy_unresolved.txt"
-    code = enr.main(["--manifest", str(manifest), "--classes", str(classes),
-                     "--out", str(out_csv), "--unresolved", str(unresolved)],
-                    match_batch=fake_batch)
+    code = enr.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--classes",
+            str(classes),
+            "--out",
+            str(out_csv),
+            "--unresolved",
+            str(unresolved),
+        ],
+        match_batch=fake_batch,
+    )
     assert code == 0
     rows = {r["raw_name"]: r for r in csv.DictReader(out_csv.open())}
     assert set(rows) == {"Seriola zonata", "Pomatomus saltarix"}
@@ -159,6 +205,7 @@ def test_main_writes_the_csv_and_the_unresolved_list(tmp_path):
 # ---- final review, ledger 87/88: WoRMS failures must not pass for "no match" --
 # worms_match_batch gets an httpx client whose transport is a local
 # function (httpx.MockTransport), so nothing here touches the network.
+
 
 def _worms(handler):
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -182,19 +229,33 @@ def _run(tmp_path, match_batch, *, classes=("Pomatomus_saltarix",)):
     if classes is not None:
         classes_json.write_text(json.dumps(list(classes)))
     out_csv, unresolved = tmp_path / "taxonomy.csv", tmp_path / "taxonomy_unresolved.txt"
-    code = enr.main(["--manifest", str(manifest), "--classes", str(classes_json),
-                     "--out", str(out_csv), "--unresolved", str(unresolved)],
-                    match_batch=match_batch)
+    code = enr.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--classes",
+            str(classes_json),
+            "--out",
+            str(out_csv),
+            "--unresolved",
+            str(unresolved),
+        ],
+        match_batch=match_batch,
+    )
     return code, out_csv, unresolved
 
 
-@pytest.mark.parametrize("handler", [
-    _unreachable,
-    _answers(503, text="Service Unavailable"),
-    _answers(400, text="Bad Request"),
-    _answers(200, json=[]),                     # fewer results than names asked
-    _answers(200, text="<html>maintenance</html>"),
-], ids=["transport-error", "http-503", "http-400", "short-result", "not-json"])
+@pytest.mark.parametrize(
+    "handler",
+    [
+        _unreachable,
+        _answers(503, text="Service Unavailable"),
+        _answers(400, text="Bad Request"),
+        _answers(200, json=[]),  # fewer results than names asked
+        _answers(200, text="<html>maintenance</html>"),
+    ],
+    ids=["transport-error", "http-503", "http-400", "short-result", "not-json"],
+)
 def test_a_worms_failure_writes_nothing_and_exits_nonzero(tmp_path, handler):
     (tmp_path / "taxonomy.csv").write_text("previous csv\n")
     (tmp_path / "taxonomy_unresolved.txt").write_text("previous list\n")
@@ -203,22 +264,28 @@ def test_a_worms_failure_writes_nothing_and_exits_nonzero(tmp_path, handler):
     assert out_csv.read_text() == "previous csv\n"
     assert unresolved.read_text() == "previous list\n"
     assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "classes.json", "species_manifest.json", "taxonomy.csv", "taxonomy_unresolved.txt"]
+        "classes.json",
+        "species_manifest.json",
+        "taxonomy.csv",
+        "taxonomy_unresolved.txt",
+    ]
 
 
 def test_worms_no_match_at_all_is_still_just_no_match():
     # HTTP 204 is WoRMS's documented "nothing matched", not a failure
     assert _worms(_answers(204))(["Nothing here"]) == {"Nothing here": None}
     found = _worms(_answers(200, json=[[FAKE["Seriola zonata"]], []]))(
-        ["Seriola zonata", "Nothing here"])
+        ["Seriola zonata", "Nothing here"]
+    )
     assert found == {"Seriola zonata": FAKE["Seriola zonata"], "Nothing here": None}
 
 
 @pytest.mark.parametrize("classes", [None, []], ids=["missing", "empty"])
 def test_main_fails_without_the_classifier_classes(tmp_path, classes):
     asked = []
-    code, out_csv, unresolved = _run(tmp_path, lambda names: asked.append(names) or {},
-                                     classes=classes)
+    code, out_csv, unresolved = _run(
+        tmp_path, lambda names: asked.append(names) or {}, classes=classes
+    )
     assert code != 0 and asked == []
     assert not out_csv.exists() and not unresolved.exists()
 
@@ -247,4 +314,8 @@ def test_main_replaces_both_outputs_atomically(tmp_path, monkeypatch):
     assert "Pomatomus saltarix" in unresolved.read_text()
     assert {out_csv.stat().st_mode & 0o777, unresolved.stat().st_mode & 0o777} == {0o644}
     assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "classes.json", "species_manifest.json", "taxonomy.csv", "taxonomy_unresolved.txt"]
+        "classes.json",
+        "species_manifest.json",
+        "taxonomy.csv",
+        "taxonomy_unresolved.txt",
+    ]

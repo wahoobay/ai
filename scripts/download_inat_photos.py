@@ -27,6 +27,7 @@ concurrent connection. We hit the API once per species (with the
 request/second. Image downloads come from a separate S3 host
 (inaturalist-open-data.s3.amazonaws.com) so we can parallelise those.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,20 +56,25 @@ INAT_API = "https://api.inaturalist.org/v1/observations"
 # limits results to photos with that license, filtering out null
 # (= All Rights Reserved) at the server.
 PERMISSIVE_LICENSES = [
-    "cc0", "cc-by", "cc-by-nc", "cc-by-sa",
-    "cc-by-nc-sa", "cc-by-nd", "cc-by-nc-nd",
+    "cc0",
+    "cc-by",
+    "cc-by-nc",
+    "cc-by-sa",
+    "cc-by-nc-sa",
+    "cc-by-nd",
+    "cc-by-nc-nd",
 ]
 USER_AGENT = "wahoobay-dataset-pull (scoopnisker@gmail.com)"
 
-API_RATE_LIMIT_SECONDS = 1.05    # iNat asks for ≤ 60 req/min on the API
-DOWNLOAD_CONCURRENCY = 16        # S3 bucket can handle plenty in parallel
-PHOTO_SIZE = "medium"            # ~500px max edge — good for ML crops
+API_RATE_LIMIT_SECONDS = 1.05  # iNat asks for ≤ 60 req/min on the API
+DOWNLOAD_CONCURRENCY = 16  # S3 bucket can handle plenty in parallel
+PHOTO_SIZE = "medium"  # ~500px max edge — good for ML crops
 
 
 @dataclass
 class InatRecord:
-    source_id: str               # "inat_<photo_id>" — global unique key
-    source_kind: str             # always "inat"
+    source_id: str  # "inat_<photo_id>" — global unique key
+    source_kind: str  # always "inat"
     photo_id: int
     observation_id: int
     binomial: str
@@ -77,11 +83,11 @@ class InatRecord:
     genus: str | None
     species: str | None
     observer: str | None
-    license: str | None          # cc-by, cc-by-nc, cc0, ...
-    attribution: str             # iNat's pre-formatted "(c) X, CC..." string
+    license: str | None  # cc-by, cc-by-nc, cc0, ...
+    attribution: str  # iNat's pre-formatted "(c) X, CC..." string
     observed_on: str | None
-    original_url: str            # link back to the iNat photo page
-    local_path: str              # relative to repo root
+    original_url: str  # link back to the iNat photo page
+    local_path: str  # relative to repo root
 
 
 def slugify(s: str) -> str:
@@ -107,7 +113,9 @@ def _photo_url(p: dict, size: str = PHOTO_SIZE) -> str | None:
 
 
 async def fetch_observations(
-    client: httpx.AsyncClient, binomial: str, per_species: int,
+    client: httpx.AsyncClient,
+    binomial: str,
+    per_species: int,
 ) -> list[dict]:
     """Single iNat API call for a binomial. Returns the raw observations list."""
     params: list[tuple[str, str]] = [
@@ -120,8 +128,9 @@ async def fetch_observations(
         ("order", "desc"),
     ]
     try:
-        r = await client.get(INAT_API, params=params, timeout=30,
-                             headers={"User-Agent": USER_AGENT})
+        r = await client.get(
+            INAT_API, params=params, timeout=30, headers={"User-Agent": USER_AGENT}
+        )
     except Exception as e:
         print(f"  {binomial}: API error: {e}", file=sys.stderr)
         return []
@@ -132,7 +141,9 @@ async def fetch_observations(
 
 
 async def download_photo(
-    client: httpx.AsyncClient, url: str, dest: Path,
+    client: httpx.AsyncClient,
+    url: str,
+    dest: Path,
 ) -> tuple[bool, int]:
     """Download a single photo to disk. Returns (ok, bytes_written)."""
     if dest.exists() and dest.stat().st_size > 0:
@@ -167,13 +178,16 @@ def collect_species(per_drive: bool) -> list[dict]:
             continue
         if b in seen and not per_drive:
             continue
-        seen.setdefault(b, {
-            "binomial": b,
-            "common_name": r.get("common_name"),
-            "family": r.get("family"),
-            "genus": r.get("genus"),
-            "species": r.get("species"),
-        })
+        seen.setdefault(
+            b,
+            {
+                "binomial": b,
+                "common_name": r.get("common_name"),
+                "family": r.get("family"),
+                "genus": r.get("genus"),
+                "species": r.get("species"),
+            },
+        )
     return list(seen.values())
 
 
@@ -233,17 +247,21 @@ async def main_async(per_species: int, concurrency: int, max_species: int | None
                         local_path=str(dest.relative_to(REPO_ROOT)),
                     )
                     records.append(rec)
-                    pending_downloads.append(asyncio.create_task(
-                        _bounded_download(client, url, dest, download_sem),
-                    ))
+                    pending_downloads.append(
+                        asyncio.create_task(
+                            _bounded_download(client, url, dest, download_sem),
+                        )
+                    )
                     taken_per_species += 1
-                    break   # one photo per observation → maximises observer diversity
+                    break  # one photo per observation → maximises observer diversity
             if taken_per_species == 0:
                 skipped_no_permissive.append(sp["binomial"])
             if (i + 1) % 20 == 0:
                 elapsed = time.monotonic() - t0
-                print(f"  [{i+1:3d}/{len(species)}] api elapsed: {elapsed:.0f}s; "
-                      f"records so far: {len(records)}")
+                print(
+                    f"  [{i+1:3d}/{len(species)}] api elapsed: {elapsed:.0f}s; "
+                    f"records so far: {len(records)}"
+                )
             await asyncio.sleep(API_RATE_LIMIT_SECONDS)
 
         # Wait for the photo downloads (they've been streaming in parallel)
@@ -297,12 +315,18 @@ async def _bounded_download(client, url, dest, sem) -> tuple[bool, int]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--per-species", type=int, default=20,
-                    help="max photos to keep per species (default 20)")
-    ap.add_argument("--concurrency", type=int, default=DOWNLOAD_CONCURRENCY,
-                    help="parallel photo downloads (default 16)")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="cap number of species (for smoke testing)")
+    ap.add_argument(
+        "--per-species", type=int, default=20, help="max photos to keep per species (default 20)"
+    )
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=DOWNLOAD_CONCURRENCY,
+        help="parallel photo downloads (default 16)",
+    )
+    ap.add_argument(
+        "--limit", type=int, default=None, help="cap number of species (for smoke testing)"
+    )
     args = ap.parse_args()
     asyncio.run(main_async(args.per_species, args.concurrency, args.limit))
 

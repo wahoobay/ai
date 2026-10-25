@@ -7,6 +7,7 @@ everyone except the volunteer who gave the first answer, so browsing
 cannot contaminate a spot-check. There is no admin exception -- spec §7
 makes none, because admins can be served a spot-check themselves.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,8 +24,16 @@ from .review_pool import read_window, retire_outside_window
 from .review_queue import Invalid, fetch_all, fetch_one
 
 LOCAL_TZ = ZoneInfo("America/New_York")
-STATUSES = ("any", "verified", "agreed", "adjudicated", "disputed", "unidentifiable",
-            "no_animal", "in_queue")
+STATUSES = (
+    "any",
+    "verified",
+    "agreed",
+    "adjudicated",
+    "disputed",
+    "unidentifiable",
+    "no_animal",
+    "in_queue",
+)
 WHO_VALUES = ("anyone", "me", "session")
 LANE_VALUES = ("any", "check", "identify")
 PAGE_SIZE = 48
@@ -51,8 +60,8 @@ class BrowseFilters:
     status: str = "any"
     species: str | None = None
     camera: str | None = None
-    who: str = "anyone"            # anyone | me | session
-    lane: str = "any"              # any | check | identify
+    who: str = "anyone"  # anyone | me | session
+    lane: str = "any"  # any | check | identify
     date_from: date | None = None
     date_to: date | None = None
 
@@ -84,8 +93,9 @@ async def _set_statement_timeout(conn) -> None:
     life of the current transaction, and pooled connections can arrive
     with autocommit=True, where a bare statement is its own transaction
     of one (global constraint; review_pool.py's own docstring)."""
-    await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                       (str(STATEMENT_TIMEOUT_MS),))
+    await conn.execute(
+        "SELECT set_config('statement_timeout', %s, true)", (str(STATEMENT_TIMEOUT_MS),)
+    )
 
 
 async def _resolved(conn) -> dict:
@@ -98,9 +108,15 @@ async def _resolved(conn) -> dict:
 
 
 async def _pending_spot_checks(conn) -> set[int]:
-    return {r["event_id"] for r in await fetch_all(conn, """
+    return {
+        r["event_id"]
+        for r in await fetch_all(
+            conn,
+            """
         SELECT event_id FROM review_items
-         WHERE pass = 2 AND status IN ('open', 'claimed')""")}
+         WHERE pass = 2 AND status IN ('open', 'claimed')""",
+        )
+    }
 
 
 async def progress_summary(conn, *, pool_obj, catalogue, session_id, target: int) -> dict:
@@ -118,30 +134,55 @@ async def progress_summary(conn, *, pool_obj, catalogue, session_id, target: int
         await _set_statement_timeout(conn)
         resolved = await _resolved(conn)
         verified = [r for r, _v in resolved.values() if r.is_verified]
-        added = await fetch_all(conn, """SELECT label, outcome FROM review_added_boxes
-                                          WHERE removed_at IS NULL""")
-        species_seen = ({r.species for r in verified if r.species}
-                        | {a["label"] for a in added if a["outcome"] == "species"})
+        added = await fetch_all(
+            conn,
+            """SELECT label, outcome FROM review_added_boxes
+                                          WHERE removed_at IS NULL""",
+        )
+        species_seen = {r.species for r in verified if r.species} | {
+            a["label"] for a in added if a["outcome"] == "species"
+        }
         frames = (await fetch_one(conn, "SELECT count(*) AS n FROM review_frames"))["n"]
         session = 0
         if session_id is not None:
-            session = (await fetch_one(conn, """SELECT count(*) AS n FROM detection_corrections
-                                                 WHERE session_id = %s""", (session_id,)))["n"]
+            session = (
+                await fetch_one(
+                    conn,
+                    """SELECT count(*) AS n FROM detection_corrections
+                                                 WHERE session_id = %s""",
+                    (session_id,),
+                )
+            )["n"]
         open_counts = {"check": 0, "identify": 0, "spot_checks": 0}
-        for r in await fetch_all(conn, """SELECT lane, pass, count(*) AS n FROM review_items
+        for r in await fetch_all(
+            conn,
+            """SELECT lane, pass, count(*) AS n FROM review_items
                                            WHERE status IN ('open', 'claimed')
-                                           GROUP BY lane, pass"""):
+                                           GROUP BY lane, pass""",
+        ):
             open_counts["spot_checks" if r["pass"] == 2 else r["lane"]] += r["n"]
-        species = [{"name": name, "common": catalogue.common_name(name),
-                    "baseline": pool_obj.baseline(name) if pool_obj else 0,
-                    "verified": pool_obj.verified(name) if pool_obj else 0,
-                    "target": target} for name in catalogue.names()]
+        species = [
+            {
+                "name": name,
+                "common": catalogue.common_name(name),
+                "baseline": pool_obj.baseline(name) if pool_obj else 0,
+                "verified": pool_obj.verified(name) if pool_obj else 0,
+                "target": target,
+            }
+            for name in catalogue.names()
+        ]
     species.sort(key=lambda s: (s["baseline"] + s["verified"], s["name"]))
-    return {"kpis": {"verified_boxes": len(verified) + len(added),
-                     "species_with_verified": len(species_seen),
-                     "complete_frames": frames, "session_verified": session,
-                     "open": open_counts},
-            "species": species, "target": target}
+    return {
+        "kpis": {
+            "verified_boxes": len(verified) + len(added),
+            "species_with_verified": len(species_seen),
+            "complete_frames": frames,
+            "session_verified": session,
+            "open": open_counts,
+        },
+        "species": species,
+        "target": target,
+    }
 
 
 def _status_matches(r, status: str) -> bool:
@@ -151,11 +192,12 @@ def _status_matches(r, status: str) -> bool:
         return r.is_verified
     if status in ("agreed", "adjudicated", "disputed"):
         return r.status == status
-    return r.is_verified and r.outcome[0] == status       # unidentifiable | no_animal
+    return r.is_verified and r.outcome[0] == status  # unidentifiable | no_animal
 
 
-async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
-                 page_size: int = PAGE_SIZE) -> dict:
+async def browse(
+    conn, *, catalogue, user, filters: BrowseFilters, page: int, page_size: int = PAGE_SIZE
+) -> dict:
     if filters.status not in STATUSES:
         raise Invalid("unknown status filter")
     if filters.who not in WHO_VALUES:
@@ -171,7 +213,9 @@ async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
         await _set_statement_timeout(conn)
 
         if filters.status == "in_queue":
-            rows = await fetch_all(conn, """
+            rows = await fetch_all(
+                conn,
+                """
                 SELECT event_id, lane, source_name, ts, route_species, saved_frame_id, added_at
                   FROM review_items
                  WHERE pass = 1 AND status IN ('open', 'claimed')
@@ -181,17 +225,37 @@ async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
                    AND (%(start)s::timestamptz IS NULL OR ts >= %(start)s)
                    AND (%(end)s::timestamptz IS NULL OR ts < %(end)s)
                  ORDER BY added_at DESC, id DESC
-                 LIMIT %(limit)s OFFSET %(offset)s""", {
-                "lane": filters.lane, "camera": filters.camera, "species": filters.species,
-                "start": start, "end": end, "limit": page_size + 1, "offset": page * page_size})
-            cells = [{"kind": "queue", "event_id": r["event_id"], "added_id": None,
-                      "saved_frame_id": r["saved_frame_id"],
-                      "zoom_url": f"/api/review/boxes/{r['event_id']}/zoom.jpg",
-                      "status": "in_queue", "outcome": None, "label": r["route_species"],
-                      "common": catalogue.common_name(r["route_species"]),
-                      "camera": r["source_name"], "ts": r["ts"].isoformat(), "lane": r["lane"],
-                      "mine": False, "reviewers": [], "last_at": r["added_at"].isoformat()}
-                     for r in rows[:page_size]]
+                 LIMIT %(limit)s OFFSET %(offset)s""",
+                {
+                    "lane": filters.lane,
+                    "camera": filters.camera,
+                    "species": filters.species,
+                    "start": start,
+                    "end": end,
+                    "limit": page_size + 1,
+                    "offset": page * page_size,
+                },
+            )
+            cells = [
+                {
+                    "kind": "queue",
+                    "event_id": r["event_id"],
+                    "added_id": None,
+                    "saved_frame_id": r["saved_frame_id"],
+                    "zoom_url": f"/api/review/boxes/{r['event_id']}/zoom.jpg",
+                    "status": "in_queue",
+                    "outcome": None,
+                    "label": r["route_species"],
+                    "common": catalogue.common_name(r["route_species"]),
+                    "camera": r["source_name"],
+                    "ts": r["ts"].isoformat(),
+                    "lane": r["lane"],
+                    "mine": False,
+                    "reviewers": [],
+                    "last_at": r["added_at"].isoformat(),
+                }
+                for r in rows[:page_size]
+            ]
             return {"cells": cells, "page": page, "has_more": len(rows) > page_size}
 
         resolved = await _resolved(conn)
@@ -202,11 +266,24 @@ async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
         # and the WHERE id = ANY(...) never scans the table. saved_frames
         # is untouched here -- see the page-only lookup below (fix round 1,
         # finding 1).
-        meta = {r["id"]: r for r in await fetch_all(conn, """
+        meta = (
+            {
+                r["id"]: r
+                for r in await fetch_all(
+                    conn,
+                    """
             SELECT id, source_name, ts, frame_id, best_species_id FROM detection_events
-             WHERE id = ANY(%s)""", (ids,))} if ids else {}
-        names = {r["id"]: r["display_name"]
-                 for r in await fetch_all(conn, "SELECT id, display_name FROM users")}
+             WHERE id = ANY(%s)""",
+                    (ids,),
+                )
+            }
+            if ids
+            else {}
+        )
+        names = {
+            r["id"]: r["display_name"]
+            for r in await fetch_all(conn, "SELECT id, display_name FROM users")
+        }
         cells = []
         for event_id, (r, verdicts) in resolved.items():
             m = meta.get(event_id)
@@ -229,61 +306,98 @@ async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
             # filter therefore never matches a hidden cell, whatever its
             # real lane is (fix round 1, finding 3).
             lane = None if hidden else ("check" if m["best_species_id"] else "identify")
-            if ((filters.camera and m["source_name"] != filters.camera)
-                    or (filters.lane != "any" and (hidden or lane != filters.lane))
-                    or (start and m["ts"] < start) or (end and m["ts"] >= end)):
+            if (
+                (filters.camera and m["source_name"] != filters.camera)
+                or (filters.lane != "any" and (hidden or lane != filters.lane))
+                or (start and m["ts"] < start)
+                or (end and m["ts"] >= end)
+            ):
                 continue
             if filters.who == "me" and not mine:
                 continue
             if filters.who == "session" and not (
-                    user.session_id is not None
-                    and any(v.session_id == user.session_id for v in verdicts)):
+                user.session_id is not None
+                and any(v.session_id == user.session_id for v in verdicts)
+            ):
                 continue
-            cell = {"kind": "box", "event_id": event_id, "added_id": None,
-                    "saved_frame_id": None,          # filled in below, page cells only
-                    "zoom_url": f"/api/review/boxes/{event_id}/zoom.jpg",
-                    "status": r.status, "outcome": r.outcome[0], "label": r.species,
-                    "common": catalogue.common_name(r.species), "camera": m["source_name"],
-                    "ts": m["ts"].isoformat(), "lane": lane, "mine": mine,
-                    "reviewers": sorted({names.get(v.user_id, "?")
-                                         for v in verdicts if v.user_id}),
-                    "last_at": max(v.created_at for v in verdicts)}
+            cell = {
+                "kind": "box",
+                "event_id": event_id,
+                "added_id": None,
+                "saved_frame_id": None,  # filled in below, page cells only
+                "zoom_url": f"/api/review/boxes/{event_id}/zoom.jpg",
+                "status": r.status,
+                "outcome": r.outcome[0],
+                "label": r.species,
+                "common": catalogue.common_name(r.species),
+                "camera": m["source_name"],
+                "ts": m["ts"].isoformat(),
+                "lane": lane,
+                "mine": mine,
+                "reviewers": sorted({names.get(v.user_id, "?") for v in verdicts if v.user_id}),
+                "last_at": max(v.created_at for v in verdicts),
+            }
             if hidden:
-                cell.update(status="awaiting_second_opinion", outcome=None, label=None,
-                            common=None, reviewers=[])
+                cell.update(
+                    status="awaiting_second_opinion",
+                    outcome=None,
+                    label=None,
+                    common=None,
+                    reviewers=[],
+                )
             cells.append(cell)
         # Drawn boxes have a single, immediate answer -- never pending,
         # agreed, adjudicated or disputed -- so they belong under "any",
         # "verified" (any outcome) and their own specific outcome filter
         # ("unidentifiable"; "no_animal" naturally matches none, since a
         # drawn box can never carry that outcome). Fix round 1, finding 7.
-        if (filters.status in ("any", "verified", "unidentifiable", "no_animal")
-                and filters.lane == "any"):
-            for a in await fetch_all(conn, """
+        if (
+            filters.status in ("any", "verified", "unidentifiable", "no_animal")
+            and filters.lane == "any"
+        ):
+            for a in await fetch_all(
+                conn,
+                """
                     SELECT a.id, a.saved_frame_id, a.label, a.outcome, a.user_id, a.session_id,
                            a.created_at, sf.source_name, sf.ts
                       FROM review_added_boxes a JOIN saved_frames sf ON sf.id = a.saved_frame_id
-                     WHERE a.removed_at IS NULL"""):
+                     WHERE a.removed_at IS NULL""",
+            ):
                 if filters.status not in ("any", "verified") and a["outcome"] != filters.status:
                     continue
-                if ((filters.species and a["label"] != filters.species)
-                        or (filters.camera and a["source_name"] != filters.camera)
-                        or (start and a["ts"] < start) or (end and a["ts"] >= end)
-                        or (filters.who == "me" and a["user_id"] != user.id)
-                        or (filters.who == "session" and (
-                            user.session_id is None or a["session_id"] != user.session_id))):
+                if (
+                    (filters.species and a["label"] != filters.species)
+                    or (filters.camera and a["source_name"] != filters.camera)
+                    or (start and a["ts"] < start)
+                    or (end and a["ts"] >= end)
+                    or (filters.who == "me" and a["user_id"] != user.id)
+                    or (
+                        filters.who == "session"
+                        and (user.session_id is None or a["session_id"] != user.session_id)
+                    )
+                ):
                     continue
-                cells.append({"kind": "added", "event_id": None, "added_id": a["id"],
-                              "saved_frame_id": a["saved_frame_id"],
-                              "zoom_url": f"/api/review/added/{a['id']}/zoom.jpg",
-                              "status": "single", "outcome": a["outcome"], "label": a["label"],
-                              "common": catalogue.common_name(a["label"]),
-                              "camera": a["source_name"], "ts": a["ts"].isoformat(),
-                              "lane": "drawn", "mine": a["user_id"] == user.id,
-                              "reviewers": [names.get(a["user_id"], "?")],
-                              "last_at": a["created_at"]})
+                cells.append(
+                    {
+                        "kind": "added",
+                        "event_id": None,
+                        "added_id": a["id"],
+                        "saved_frame_id": a["saved_frame_id"],
+                        "zoom_url": f"/api/review/added/{a['id']}/zoom.jpg",
+                        "status": "single",
+                        "outcome": a["outcome"],
+                        "label": a["label"],
+                        "common": catalogue.common_name(a["label"]),
+                        "camera": a["source_name"],
+                        "ts": a["ts"].isoformat(),
+                        "lane": "drawn",
+                        "mine": a["user_id"] == user.id,
+                        "reviewers": [names.get(a["user_id"], "?")],
+                        "last_at": a["created_at"],
+                    }
+                )
         cells.sort(key=lambda c: c["last_at"], reverse=True)
-        page_cells = cells[page * page_size:(page + 1) * page_size]
+        page_cells = cells[page * page_size : (page + 1) * page_size]
         for c in page_cells:
             c["last_at"] = c["last_at"].isoformat()
 
@@ -295,7 +409,9 @@ async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
         # than one round trip per cell (fix round 1, finding 1).
         box_ids = [c["event_id"] for c in page_cells if c["kind"] == "box"]
         if box_ids:
-            rows = await fetch_all(conn, """
+            rows = await fetch_all(
+                conn,
+                """
                 SELECT t.event_id, sf.id AS saved_frame_id
                   FROM unnest(%s::bigint[], %s::text[], %s::bigint[], %s::timestamptz[])
                        AS t(event_id, source_name, frame_id, ts)
@@ -305,32 +421,54 @@ async def browse(conn, *, catalogue, user, filters: BrowseFilters, page: int,
                          AND ts = t.ts
                        ORDER BY id LIMIT 1
                   ) sf ON true""",
-                (box_ids, [meta[eid]["source_name"] for eid in box_ids],
-                 [meta[eid]["frame_id"] for eid in box_ids],
-                 [meta[eid]["ts"] for eid in box_ids]))
+                (
+                    box_ids,
+                    [meta[eid]["source_name"] for eid in box_ids],
+                    [meta[eid]["frame_id"] for eid in box_ids],
+                    [meta[eid]["ts"] for eid in box_ids],
+                ),
+            )
             frame_by_event = {r["event_id"]: r["saved_frame_id"] for r in rows}
             for c in page_cells:
                 if c["kind"] == "box":
                     c["saved_frame_id"] = frame_by_event.get(c["event_id"])
 
-    return {"cells": page_cells, "page": page, "total": len(cells),
-            "has_more": len(cells) > (page + 1) * page_size}
+    return {
+        "cells": page_cells,
+        "page": page,
+        "total": len(cells),
+        "has_more": len(cells) > (page + 1) * page_size,
+    }
 
 
 async def list_disputes(conn, *, catalogue) -> list[dict]:
-    names = {r["id"]: r["display_name"]
-             for r in await fetch_all(conn, "SELECT id, display_name FROM users")}
+    names = {
+        r["id"]: r["display_name"]
+        for r in await fetch_all(conn, "SELECT id, display_name FROM users")
+    }
 
     def side(v):
         kind, *rest = outcome_of(v)
         label = rest[0] if rest else None
-        return {"outcome": kind, "label": label, "common": catalogue.common_name(label),
-                "life_stage": v.life_stage, "by": names.get(v.user_id, "?"),
-                "at": v.created_at.isoformat()}
+        return {
+            "outcome": kind,
+            "label": label,
+            "common": catalogue.common_name(label),
+            "life_stage": v.life_stage,
+            "by": names.get(v.user_id, "?"),
+            "at": v.created_at.isoformat(),
+        }
 
-    out = [{"event_id": event_id, "zoom_url": f"/api/review/boxes/{event_id}/zoom.jpg",
-            "first": side(r.first), "second": side(r.second)}
-           for event_id, (r, _v) in (await _resolved(conn)).items() if r.status == "disputed"]
+    out = [
+        {
+            "event_id": event_id,
+            "zoom_url": f"/api/review/boxes/{event_id}/zoom.jpg",
+            "first": side(r.first),
+            "second": side(r.second),
+        }
+        for event_id, (r, _v) in (await _resolved(conn)).items()
+        if r.status == "disputed"
+    ]
     return sorted(out, key=lambda d: d["event_id"])
 
 
@@ -340,8 +478,7 @@ async def agreement(conn) -> dict:
 
 async def get_window(conn) -> dict:
     start, end = await read_window(conn)
-    return {"start": start.isoformat() if start else None,
-            "end": end.isoformat() if end else None}
+    return {"start": start.isoformat() if start else None, "end": end.isoformat() if end else None}
 
 
 async def set_window(conn, *, admin_id: int, start: date | None, end: date | None) -> dict:
@@ -368,32 +505,53 @@ async def set_window(conn, *, admin_id: int, start: date | None, end: date | Non
             if start is None and end is None:
                 await cur.execute("DELETE FROM review_settings WHERE key = 'window'")
                 return {"start": None, "end": None, "retired": 0}
-            value = {"start": local_day_start(start).isoformat() if start else None,
-                     "end": local_day_start(end + timedelta(days=1)).isoformat() if end else None}
-            await cur.execute("""
+            value = {
+                "start": local_day_start(start).isoformat() if start else None,
+                "end": local_day_start(end + timedelta(days=1)).isoformat() if end else None,
+            }
+            await cur.execute(
+                """
                 INSERT INTO review_settings (key, value, updated_by, updated_at)
                 VALUES ('window', %s, %s, now())
                 ON CONFLICT (key) DO UPDATE
                    SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by,
-                       updated_at = now()""", (Jsonb(value), admin_id))
+                       updated_at = now()""",
+                (Jsonb(value), admin_id),
+            )
         retired = await retire_outside_window(
             conn,
-            datetime.fromisoformat(value["start"]) if value["start"]
+            datetime.fromisoformat(value["start"])
+            if value["start"]
             else datetime.min.replace(tzinfo=UTC),
-            datetime.fromisoformat(value["end"]) if value["end"]
-            else datetime.max.replace(tzinfo=UTC))
+            datetime.fromisoformat(value["end"])
+            if value["end"]
+            else datetime.max.replace(tzinfo=UTC),
+        )
     return {**value, "retired": retired}
 
 
 async def pool_status(conn, *, pool_obj) -> dict:
-    items = await fetch_all(conn, """SELECT lane, pass, status, count(*) AS n FROM review_items
-                                      GROUP BY lane, pass, status ORDER BY lane, pass, status""")
-    unscored = (await fetch_one(conn, """SELECT count(*) AS n FROM review_items
+    items = await fetch_all(
+        conn,
+        """SELECT lane, pass, status, count(*) AS n FROM review_items
+                                      GROUP BY lane, pass, status ORDER BY lane, pass, status""",
+    )
+    unscored = (
+        await fetch_one(
+            conn,
+            """SELECT count(*) AS n FROM review_items
                                           WHERE hints IS NULL
-                                            AND status IN ('open', 'claimed')"""))["n"]
+                                            AND status IN ('open', 'claimed')""",
+        )
+    )["n"]
     last = (await fetch_one(conn, "SELECT max(hinted_at) AS t FROM review_items"))["t"]
-    return {"items": [{"lane": r["lane"], "pass": r["pass"], "status": r["status"],
-                       "count": r["n"]} for r in items],
-            "unscored": unscored, "last_hinted_at": last.isoformat() if last else None,
-            "last_run": pool_obj.last_run if pool_obj else None,
-            "window": await get_window(conn)}
+    return {
+        "items": [
+            {"lane": r["lane"], "pass": r["pass"], "status": r["status"], "count": r["n"]}
+            for r in items
+        ],
+        "unscored": unscored,
+        "last_hinted_at": last.isoformat() if last else None,
+        "last_run": pool_obj.last_run if pool_obj else None,
+        "window": await get_window(conn),
+    }

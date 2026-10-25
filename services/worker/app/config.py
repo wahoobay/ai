@@ -18,6 +18,7 @@ in `.env.example` so it's documented externally. The
 explicitly excluded (see `provenance.py`), so adding a new field
 ensures rows produced under different settings are distinguishable.
 """
+
 from __future__ import annotations
 
 import os
@@ -118,9 +119,9 @@ class Config:
     tracker_iou_threshold: float
     tracker_max_age: int
     tracker_min_hits: int
-    tracker_center_alpha: float      # 0..1, higher = more responsive, less smooth
-    tracker_velocity_alpha: float    # 0..1, EMA weight on new velocity measurement
-    tracker_velocity_decay: float    # 0..1, per-frame velocity decay while coasting
+    tracker_center_alpha: float  # 0..1, higher = more responsive, less smooth
+    tracker_velocity_alpha: float  # 0..1, EMA weight on new velocity measurement
+    tracker_velocity_decay: float  # 0..1, per-frame velocity decay while coasting
 
     # Auto-switch to a fallback source when primary goes dark (sunset/camera off)
     fallback_video_source: str
@@ -137,9 +138,9 @@ class Config:
 
     # PTZ poller (off by default; when on, writes pan/tilt/zoom to ptz_states)
     ptz_poll_enabled: bool
-    ptz_poll_url: str                # full URL incl. userinfo; empty = idle
-    ptz_poll_backend: str            # 'vapix' | 'onvif'
-    ptz_source_name: str             # label written to ptz_states.source_name
+    ptz_poll_url: str  # full URL incl. userinfo; empty = idle
+    ptz_poll_backend: str  # 'vapix' | 'onvif'
+    ptz_source_name: str  # label written to ptz_states.source_name
     ptz_poll_interval_s: float
     ptz_poll_timeout_s: float
 

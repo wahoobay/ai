@@ -5,6 +5,7 @@ Every failure path answers with the same generic message. The specific
 reason is logged, never returned — a login form that distinguishes
 'no such user' from 'wrong password' is an account-enumeration oracle,
 and this dashboard is reachable from the public internet."""
+
 from __future__ import annotations
 
 import asyncio
@@ -146,9 +147,11 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     _forgot_rate_limited = _make_rate_limiter(cfg.forgot_max_per_ip_h)
 
     # Same body for every outcome: created, username taken, email taken.
-    REG_OK = {"ok": True, "message":
-              "Check your email to confirm the address. An administrator "
-              "must approve the account before you can use the site."}
+    REG_OK = {
+        "ok": True,
+        "message": "Check your email to confirm the address. An administrator "
+        "must approve the account before you can use the site.",
+    }
 
     def _page(**ctx) -> dict:
         """Template context for an auth page.
@@ -238,14 +241,22 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
                 (user["id"],),
             )
         raw, _sid = await create_session(
-            pool, user["id"], cfg.session_ttl_h, cfg.session_abs_ttl_d,
+            pool,
+            user["id"],
+            cfg.session_ttl_h,
+            cfg.session_abs_ttl_d,
             request.headers.get("user-agent"),
             ip,
         )
         resp = JSONResponse({"ok": True})
         resp.set_cookie(
-            COOKIE_NAME, raw, httponly=True, samesite="Lax", path="/",
-            secure=cfg.cookie_secure, max_age=cfg.session_ttl_h * 3600,
+            COOKIE_NAME,
+            raw,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+            secure=cfg.cookie_secure,
+            max_age=cfg.session_ttl_h * 3600,
         )
         return resp
 
@@ -320,17 +331,19 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
             # sends no mail at all; the HTTP response stays identical
             # either way.
             constraint = getattr(exc.diag, "constraint_name", None)
-            log.info("register: collision for username=%r email=%r (constraint=%s)",
-                     username, email, constraint)
+            log.info(
+                "register: collision for username=%r email=%r (constraint=%s)",
+                username,
+                email,
+                constraint,
+            )
             if constraint == "users_email_key":
                 subject, text = collision_notice()
                 mailer.send(email, subject, text)
             return JSONResponse(REG_OK)
 
-        token = await create_user_token(pool, user_id, "email_verify",
-                                        cfg.verify_ttl_h * 60, ip)
-        subject, text = verify_email(mailer.link("/verify-email", token),
-                                     hours=cfg.verify_ttl_h)
+        token = await create_user_token(pool, user_id, "email_verify", cfg.verify_ttl_h * 60, ip)
+        subject, text = verify_email(mailer.link("/verify-email", token), hours=cfg.verify_ttl_h)
         delivered = mailer.send(email, subject, text)
         async with pool.connection() as conn:
             await conn.execute(
@@ -343,9 +356,9 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     @router.get("/verify-email", response_class=HTMLResponse)
     async def verify_page(request: Request):
         return templates.TemplateResponse(
-            request, "register.html",
-            _page(open=cfg.registration_open,
-                  verify_token=request.query_params.get("token", "")),
+            request,
+            "register.html",
+            _page(open=cfg.registration_open, verify_token=request.query_params.get("token", "")),
         )
 
     @router.post("/api/auth/verify-email", dependencies=[Depends(require_csrf)])
@@ -353,14 +366,18 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
         pool = _pool()
         user_id = await redeem_user_token(pool, body.token, "email_verify")
         if user_id is None:
-            return JSONResponse(
-                {"error": "That link is invalid or has expired."}, status_code=400)
+            return JSONResponse({"error": "That link is invalid or has expired."}, status_code=400)
         async with pool.connection() as conn:
             await conn.execute(
-                "UPDATE users SET email_verified_at = NOW() WHERE id = %s", (user_id,))
-        return JSONResponse({"ok": True, "message":
-                             "Email confirmed. An administrator will approve "
-                             "your account before you can use the site."})
+                "UPDATE users SET email_verified_at = NOW() WHERE id = %s", (user_id,)
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": "Email confirmed. An administrator will approve "
+                "your account before you can use the site.",
+            }
+        )
 
     @router.get("/waiting", response_class=HTMLResponse)
     async def waiting_page(request: Request):
@@ -368,22 +385,30 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
         its every page here (owner's decision 2026-09-30). Signed out: sign
         in first. Anyone already approved: on to the dashboard."""
         from .auth import effective_role, load_session
+
         user = await load_session(_pool(), request.cookies.get(COOKIE_NAME, ""))
         if user is None:
             return RedirectResponse("/login?next=/waiting", status_code=302)
         if effective_role(user.status, user.role) != "pending":
             return RedirectResponse("/", status_code=302)
-        return templates.TemplateResponse(request, "notice.html", _page(
-            eyebrow="Account created",
-            title="Waiting for approval",
-            message=("An administrator needs to approve your account before you can see "
-                     "the site. Sign in again once they have."),
-            signout=True,
-        ))
+        return templates.TemplateResponse(
+            request,
+            "notice.html",
+            _page(
+                eyebrow="Account created",
+                title="Waiting for approval",
+                message=(
+                    "An administrator needs to approve your account before you can see "
+                    "the site. Sign in again once they have."
+                ),
+                signout=True,
+            ),
+        )
 
     @router.post("/api/auth/logout", dependencies=[Depends(require_csrf)])
     async def logout(request: Request):
         from .auth import load_session
+
         pool = state.get("pool")
         if pool is not None:
             user = await load_session(pool, request.cookies.get(COOKIE_NAME, ""))
@@ -396,6 +421,7 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     @router.get("/api/auth/me")
     async def me(request: Request):
         from .auth import load_session
+
         pool = state.get("pool")
         if pool is None:
             return {"authenticated": False}
@@ -417,13 +443,16 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     # an administrator is the actual channel. Keyed off the mailer's
     # *effective* backend, not the configured one, because a misconfigured
     # relay degrades to manual at construction.
-    FORGOT_OK = {"ok": True, "message": (
-        "If that address has an account, a reset link is on its way."
-        if mailer.backend == "smtp" else
-        "If that address has an account, an administrator can issue a reset "
-        "link for it. Automatic email is not enabled on this deployment, so "
-        "please contact an administrator."
-    )}
+    FORGOT_OK = {
+        "ok": True,
+        "message": (
+            "If that address has an account, a reset link is on its way."
+            if mailer.backend == "smtp"
+            else "If that address has an account, an administrator can issue a reset "
+            "link for it. Automatic email is not enabled on this deployment, so "
+            "please contact an administrator."
+        ),
+    }
 
     @router.get("/forgot-password", response_class=HTMLResponse)
     async def forgot_page(request: Request):
@@ -445,12 +474,13 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
             row = await cur.fetchone()
         if row is None:
             log.info("forgot-password: no account for %r", email)
-            return JSONResponse(FORGOT_OK)   # identical to the success path
+            return JSONResponse(FORGOT_OK)  # identical to the success path
 
         user_id = row[0]
         await invalidate_tokens(pool, user_id, "password_reset")
-        token = await create_user_token(pool, user_id, "password_reset",
-                                        cfg.reset_ttl_min, _client_ip(request))
+        token = await create_user_token(
+            pool, user_id, "password_reset", cfg.reset_ttl_min, _client_ip(request)
+        )
         subject, text = reset_email(mailer.link("/reset-password", token))
         delivered = mailer.send(email, subject, text)
         async with pool.connection() as conn:
@@ -463,7 +493,8 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
     @router.get("/reset-password", response_class=HTMLResponse)
     async def reset_page(request: Request):
         return templates.TemplateResponse(
-            request, "reset_password.html",
+            request,
+            "reset_password.html",
             _page(token=request.query_params.get("token", "")),
         )
 
@@ -478,8 +509,7 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
 
         user_id = await redeem_user_token(pool, body.token, "password_reset")
         if user_id is None:
-            return JSONResponse(
-                {"error": "That link is invalid or has expired."}, status_code=400)
+            return JSONResponse({"error": "That link is invalid or has expired."}, status_code=400)
 
         password_hash = await asyncio.to_thread(hash_password, body.password)
         async with pool.connection() as conn:
@@ -490,7 +520,8 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
             )
         killed = await revoke_all_sessions(pool, user_id)
         log.info("reset-password: user id=%s, %d session(s) revoked", user_id, killed)
-        return JSONResponse({"ok": True, "message":
-                             "Password changed. You have been signed out everywhere."})
+        return JSONResponse(
+            {"ok": True, "message": "Password changed. You have been signed out everywhere."}
+        )
 
     return router

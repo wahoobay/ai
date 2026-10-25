@@ -3,6 +3,7 @@
 (spec §12.3). Since 2026-09-30 the whole site is behind sign-in, so the
 "public" these rules protect against is any signed-in account that isn't an
 admin; the tests use a viewer, the least privileged one."""
+
 from __future__ import annotations
 
 import csv
@@ -29,11 +30,18 @@ IDENTITY = {"reviewer", "notes", "user_id", "session_id"}
 
 
 async def _seed_named_verdict(rdb, tmp_path):
-    frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
-                                                    "species": "Seriola zonata"}])
+    frame = await seed_frame(
+        rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250], "species": "Seriola zonata"}]
+    )
     uid = await make_user(rdb, "alice")
-    await add_verdict(rdb, frame["event_ids"][0], uid, name="Seriola zonata",
-                      reviewer="Alice Example", notes="secret note")
+    await add_verdict(
+        rdb,
+        frame["event_ids"][0],
+        uid,
+        name="Seriola zonata",
+        reviewer="Alice Example",
+        notes="secret note",
+    )
     return frame
 
 
@@ -53,8 +61,16 @@ async def test_a_viewers_labeled_corrections_have_labels_but_no_identity(rdb, rc
     assert r.status_code == 200
     header = _header(r.text)
     assert not (IDENTITY & header)
-    assert {"corrected_name", "corrected_bbox", "unidentifiable", "life_stage",
-            "label_source", "review_item_id", "is_adjudication", "is_endorsement"} <= header
+    assert {
+        "corrected_name",
+        "corrected_bbox",
+        "unidentifiable",
+        "life_stage",
+        "label_source",
+        "review_item_id",
+        "is_adjudication",
+        "is_endorsement",
+    } <= header
     assert "Alice Example" not in r.text and "secret note" not in r.text
 
 
@@ -92,13 +108,17 @@ def _app_state(client) -> dict:
     state["celebrities_by_id"], which startup loads from the repo's own
     assets/celebrities.json rather than REVIEW_ASSETS_DIR, so a test that
     tags the fixture's named individual has to register it there too."""
-    route = next(r for r in client.app.routes
-                 if getattr(r, "path", None) == "/api/celebrities/{celebrity_id}")
+    route = next(
+        r
+        for r in client.app.routes
+        if getattr(r, "path", None) == "/api/celebrities/{celebrity_id}"
+    )
     return inspect.getclosurevars(route.endpoint).nonlocals["state"]
 
 
-async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(rdb, rclient, tmp_path,
-                                                                         monkeypatch):
+async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(
+    rdb, rclient, tmp_path, monkeypatch
+):
     """Final review C1: GET /api/celebrities/{id} is open to every account, and the review
     page tags named individuals with reviewer = the volunteer's display
     name. Nobody has opted in to public credit (spec §1), so the gallery
@@ -106,13 +126,22 @@ async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(rdb, rcl
     blanked)."""
     bobby = CELEBRITIES["celebrities"][0]
     monkeypatch.setitem(_app_state(rclient), "celebrities_by_id", {bobby["id"]: bobby})
-    frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
-                                                    "species": "Acanthurus coeruleus"}])
+    frame = await seed_frame(
+        rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250], "species": "Acanthurus coeruleus"}]
+    )
     await make_user(rdb, "alice")
     login(rclient, "alice")
-    r = rclient.post("/api/review/verdicts", headers=CSRF, json={
-        "event_id": frame["event_ids"][0], "outcome": "species",
-        "label": "Acanthurus coeruleus", "label_source": "search", "celebrity_id": bobby["id"]})
+    r = rclient.post(
+        "/api/review/verdicts",
+        headers=CSRF,
+        json={
+            "event_id": frame["event_ids"][0],
+            "outcome": "species",
+            "label": "Acanthurus coeruleus",
+            "label_source": "search",
+            "celebrity_id": bobby["id"],
+        },
+    )
     assert r.status_code == 200, r.text
 
     url = f"/api/celebrities/{bobby['id']}"
@@ -135,10 +164,22 @@ async def test_the_celebrity_gallery_names_no_reviewer_except_to_admins(rdb, rcl
 async def test_roi_uses_the_frame_saved_at_the_detections_own_timestamp(rdb, rclient, tmp_path):
     # A worker restart reused frame_id 500: the red frame is from before the
     # restart, the green one from after. The detection belongs to the red one.
-    before = await seed_frame(rdb, tmp_path, ts=T0, frame_id=500, color=(220, 10, 10),
-                              boxes=[{"bbox": [100, 100, 300, 250]}])
-    await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=2), frame_id=500,
-                     color=(10, 220, 10), boxes=[{"bbox": [100, 100, 300, 250]}])
+    before = await seed_frame(
+        rdb,
+        tmp_path,
+        ts=T0,
+        frame_id=500,
+        color=(220, 10, 10),
+        boxes=[{"bbox": [100, 100, 300, 250]}],
+    )
+    await seed_frame(
+        rdb,
+        tmp_path,
+        ts=T0 + timedelta(hours=2),
+        frame_id=500,
+        color=(10, 220, 10),
+        boxes=[{"bbox": [100, 100, 300, 250]}],
+    )
     await _as_viewer(rdb, rclient)
     r = rclient.get(f"/api/detections/{before['event_ids'][0]}/roi.jpg")
     assert r.status_code == 200
@@ -148,18 +189,24 @@ async def test_roi_uses_the_frame_saved_at_the_detections_own_timestamp(rdb, rcl
 
 async def test_detection_whose_own_frame_was_not_saved_gets_no_image(rdb, rclient, tmp_path):
     await seed_frame(rdb, tmp_path, ts=T0, frame_id=500, boxes=[{"bbox": [1, 1, 50, 50]}])
-    orphan = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=1), frame_id=500,
-                              save=False, boxes=[{"bbox": [1, 1, 50, 50]}])
+    orphan = await seed_frame(
+        rdb,
+        tmp_path,
+        ts=T0 + timedelta(hours=1),
+        frame_id=500,
+        save=False,
+        boxes=[{"bbox": [1, 1, 50, 50]}],
+    )
     await _as_viewer(rdb, rclient)
     assert rclient.get(f"/api/detections/{orphan['event_ids'][0]}/roi.jpg").status_code == 404
     assert rclient.get(f"/api/detections/{orphan['event_ids'][0]}/frame.jpg").status_code == 404
 
 
 async def test_labeled_corrections_frame_path_matches_the_timestamp(rdb, rclient, tmp_path):
-    before = await seed_frame(rdb, tmp_path, ts=T0, frame_id=500,
-                              boxes=[{"bbox": [1, 1, 50, 50]}])
-    after = await seed_frame(rdb, tmp_path, ts=T0 + timedelta(hours=2), frame_id=500,
-                             boxes=[{"bbox": [1, 1, 50, 50]}])
+    before = await seed_frame(rdb, tmp_path, ts=T0, frame_id=500, boxes=[{"bbox": [1, 1, 50, 50]}])
+    after = await seed_frame(
+        rdb, tmp_path, ts=T0 + timedelta(hours=2), frame_id=500, boxes=[{"bbox": [1, 1, 50, 50]}]
+    )
     uid = await make_user(rdb, "alice")
     await add_verdict(rdb, before["event_ids"][0], uid, not_a_fish=True)
     await _as_viewer(rdb, rclient)
@@ -176,14 +223,16 @@ async def _spot_pending(rdb, tmp_path, status="open"):
     async with rdb.connection() as conn:
         cur = await conn.execute("SELECT id, user_id FROM detection_corrections")
         first, alice = await cur.fetchone()
-    spot = await add_item(rdb, frame, pass_=2, status=status, exclude_user_id=alice,
-                          first_correction_id=first)
+    spot = await add_item(
+        rdb, frame, pass_=2, status=status, exclude_user_id=alice, first_correction_id=first
+    )
     return frame["event_ids"][0], spot
 
 
 @pytest.mark.parametrize("status", ["open", "claimed"])
-async def test_a_pending_spot_checks_first_answer_stays_out_of_public_lists(rdb, rclient,
-                                                                           tmp_path, status):
+async def test_a_pending_spot_checks_first_answer_stays_out_of_public_lists(
+    rdb, rclient, tmp_path, status
+):
     event, spot = await _spot_pending(rdb, tmp_path, status)
     await _as_viewer(rdb, rclient)
     assert event not in {r["event_id"] for r in rclient.get("/api/corrections").json()}
@@ -201,32 +250,36 @@ async def test_a_pending_spot_checks_first_answer_stays_out_of_public_lists(rdb,
 
 async def test_cant_identify_shows_as_such_in_public_outputs(rdb, rclient, tmp_path):
     frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250]}])
-    await add_verdict(rdb, frame["event_ids"][0], await make_user(rdb, "alice"),
-                      unidentifiable=True)
+    await add_verdict(
+        rdb, frame["event_ids"][0], await make_user(rdb, "alice"), unidentifiable=True
+    )
     await _as_viewer(rdb, rclient)
     [row] = rclient.get("/api/corrections").json()
     assert row["unidentifiable"] is True and row["corrected_name"] is None
-    [csv_row] = list(csv.DictReader(io.StringIO(
-        rclient.get("/api/export/corrections.csv").text)))
+    [csv_row] = list(csv.DictReader(io.StringIO(rclient.get("/api/export/corrections.csv").text)))
     assert csv_row["unidentifiable"] == "True"
 
 
 async def test_the_celebrity_gallery_counts_each_event_once_and_hides_a_pending_spot_check(
-        rdb, rclient, tmp_path, monkeypatch):
+    rdb, rclient, tmp_path, monkeypatch
+):
     bobby = CELEBRITIES["celebrities"][0]
     state = _app_state(rclient)
     monkeypatch.setitem(state, "celebrities_by_id", {bobby["id"]: bobby})
     monkeypatch.setitem(state, "celebrities", [bobby])
-    frame = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250],
-                                                    "species": "Acanthurus coeruleus"}])
+    frame = await seed_frame(
+        rdb, tmp_path, boxes=[{"bbox": [100, 100, 300, 250], "species": "Acanthurus coeruleus"}]
+    )
     alice = await make_user(rdb, "alice")
     event = frame["event_ids"][0]
     async with rdb.connection() as conn:
-        for _ in range(2):   # an answer, then the same volunteer changing it
+        for _ in range(2):  # an answer, then the same volunteer changing it
             await conn.execute(
                 """INSERT INTO detection_corrections (event_id, corrected_name, user_id,
                                                       celebrity_id)
-                   VALUES (%s, 'Acanthurus coeruleus', %s, %s)""", (event, alice, bobby["id"]))
+                   VALUES (%s, 'Acanthurus coeruleus', %s, %s)""",
+                (event, alice, bobby["id"]),
+            )
     await _as_viewer(rdb, rclient)
     detail = rclient.get(f"/api/celebrities/{bobby['id']}").json()
     assert detail["sightings"] == 1 and [g["event_id"] for g in detail["gallery"]] == [event]
@@ -247,10 +300,16 @@ async def test_the_celebrity_gallery_counts_each_event_once_and_hides_a_pending_
 
 
 async def test_the_species_gallery_uses_the_frame_saved_at_the_detections_own_time(
-        rdb, rclient, tmp_path):
+    rdb, rclient, tmp_path
+):
     now = datetime.now(UTC)
-    mine = await seed_frame(rdb, tmp_path, ts=now - timedelta(hours=2), frame_id=7,
-                            boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}])
+    mine = await seed_frame(
+        rdb,
+        tmp_path,
+        ts=now - timedelta(hours=2),
+        frame_id=7,
+        boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata"}],
+    )
     # frame_id restarts with every worker run: the same camera and frame_id
     # an hour later is another frame, with no Seriola in it
     await seed_frame(rdb, tmp_path, ts=now - timedelta(hours=1), frame_id=7, boxes=[])
@@ -267,7 +326,8 @@ async def _alert(rdb):
             """INSERT INTO alerts (name, severity, message, first_seen, last_seen,
                                    acknowledged_by, acknowledged_at)
                VALUES ('privacy_test_alert', 'warning', 'no frames for 5 min', now(), now(),
-                       'Boss Person', now())""")
+                       'Boss Person', now())"""
+        )
     # a name no SLO rule uses, so the app's own checker never resolves it
 
 
@@ -301,8 +361,11 @@ async def test_a_reviewer_session_is_never_treated_as_admin(rdb, rclient, tmp_pa
     rows = rclient.get("/api/corrections").json()
     assert rows and all("reviewer" not in r and "notes" not in r for r in rows)
     assert rclient.get("/api/corrections?reviewer=Alice%20Example").status_code == 403
-    for path in ("/api/export/corrections.csv", "/api/export/labeled_corrections.csv",
-                 "/api/export/alerts.csv"):
+    for path in (
+        "/api/export/corrections.csv",
+        "/api/export/labeled_corrections.csv",
+        "/api/export/alerts.csv",
+    ):
         text = rclient.get(path).text
         assert not ((IDENTITY | {"acknowledged_by"}) & _header(text)), path
         assert "Alice Example" not in text and "Boss Person" not in text, path

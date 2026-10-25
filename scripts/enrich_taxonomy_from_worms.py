@@ -30,6 +30,7 @@ nothing, so an outage is never recorded as "no match". A missing
 ``classes.json`` is an error too. Both outputs are replaced atomically:
 the dashboard hot-reloads ``taxonomy.csv`` on its mtime.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,16 +72,33 @@ except ImportError as e:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "assets" / "species_manifest.json"
 OUT_CSV = REPO_ROOT / "assets" / "taxonomy.csv"
-DEFAULT_CLASSES = Path(os.environ.get(
-    "CLASSIFIER_V2_CLASSES_JSON",
-    str(REPO_ROOT / "data" / "models" / "classifier_v2" / "classes.json")))
+DEFAULT_CLASSES = Path(
+    os.environ.get(
+        "CLASSIFIER_V2_CLASSES_JSON",
+        str(REPO_ROOT / "data" / "models" / "classifier_v2" / "classes.json"),
+    )
+)
 OUT_UNRESOLVED = REPO_ROOT / "assets" / "taxonomy_unresolved.txt"
-FIELDNAMES = ["raw_name", "aphia_id", "accepted_name", "authority", "rank", "match_type",
-              "status", "species", "genus", "family", "order", "class", "phylum",
-              "kingdom", "lowest"]
+FIELDNAMES = [
+    "raw_name",
+    "aphia_id",
+    "accepted_name",
+    "authority",
+    "rank",
+    "match_type",
+    "status",
+    "species",
+    "genus",
+    "family",
+    "order",
+    "class",
+    "phylum",
+    "kingdom",
+    "lowest",
+]
 
 WORMS_BASE = "https://www.marinespecies.org/rest"
-WORMS_BATCH_SIZE = 50            # API supports up to 50 names per call
+WORMS_BATCH_SIZE = 50  # API supports up to 50 names per call
 WORMS_TIMEOUT = 30.0
 
 
@@ -111,7 +129,9 @@ class WormsError(RuntimeError):
 
 
 def worms_match_batch(
-    client: httpx.Client, names: list[str], marine_only: bool = False,
+    client: httpx.Client,
+    names: list[str],
+    marine_only: bool = False,
 ) -> dict[str, dict | None]:
     """Batch /AphiaRecordsByMatchNames call. Returns {input_name: record-or-None}.
     Raises WormsError on a transport error, a status other than 200 or 204
@@ -123,11 +143,12 @@ def worms_match_batch(
     params: list[tuple[str, str]] = [("scientificnames[]", n) for n in names]
     params.append(("marine_only", "true" if marine_only else "false"))
     try:
-        r = client.get(f"{WORMS_BASE}/AphiaRecordsByMatchNames",
-                       params=params, timeout=WORMS_TIMEOUT)
+        r = client.get(
+            f"{WORMS_BASE}/AphiaRecordsByMatchNames", params=params, timeout=WORMS_TIMEOUT
+        )
     except httpx.HTTPError as e:
         raise WormsError(f"WoRMS request failed: {e}") from e
-    if r.status_code == 204:    # no matches at all
+    if r.status_code == 204:  # no matches at all
         return {n: None for n in names}
     if r.status_code != 200:
         raise WormsError(f"WoRMS answered HTTP {r.status_code}: {r.text[:160]}")
@@ -158,10 +179,14 @@ def _flatten(rec: dict, *, lowest: str, fallback_species: str | None) -> dict[st
     rank = (rec.get("rank") or "").lower()
     # WoRMS ranks WE care about, in order from finest to coarsest.
     rank_to_lowest = {
-        "species": "species", "subspecies": "species",
-        "variety": "species", "form": "species",
-        "genus": "genus", "subgenus": "genus",
-        "family": "family", "subfamily": "family",
+        "species": "species",
+        "subspecies": "species",
+        "variety": "species",
+        "form": "species",
+        "genus": "genus",
+        "subgenus": "genus",
+        "family": "family",
+        "subfamily": "family",
         "tribe": "family",
     }
     actual_lowest = rank_to_lowest.get(rank, lowest)
@@ -173,13 +198,13 @@ def _flatten(rec: dict, *, lowest: str, fallback_species: str | None) -> dict[st
         species = species or fallback_species
     return {
         "kingdom": rec.get("kingdom"),
-        "phylum":  rec.get("phylum"),
-        "class":   rec.get("class"),
-        "order":   rec.get("order"),
-        "family":  rec.get("family"),
-        "genus":   rec.get("genus"),
+        "phylum": rec.get("phylum"),
+        "class": rec.get("class"),
+        "order": rec.get("order"),
+        "family": rec.get("family"),
+        "genus": rec.get("genus"),
         "species": species,
-        "lowest":  actual_lowest,
+        "lowest": actual_lowest,
     }
 
 
@@ -303,8 +328,14 @@ def collect_raw_names(manifest_records: list[dict], class_names: list[str]) -> l
 
 def _accepted_fields(rec: dict | None) -> dict:
     if not rec:
-        return {"aphia_id": None, "accepted_name": None, "authority": None, "rank": None,
-                "match_type": None, "status": None}
+        return {
+            "aphia_id": None,
+            "accepted_name": None,
+            "authority": None,
+            "rank": None,
+            "match_type": None,
+            "status": None,
+        }
     return {
         "aphia_id": rec.get("valid_AphiaID") or rec.get("AphiaID"),
         "accepted_name": rec.get("valid_name") or rec.get("scientificname"),
@@ -318,7 +349,7 @@ def _accepted_fields(rec: dict | None) -> dict:
 def _batched(match_batch: MatchBatch, names: list[str]) -> dict[str, dict | None]:
     found: dict[str, dict | None] = {}
     for i in range(0, len(names), WORMS_BATCH_SIZE):
-        found.update(match_batch(names[i:i + WORMS_BATCH_SIZE]))
+        found.update(match_batch(names[i : i + WORMS_BATCH_SIZE]))
     return found
 
 
@@ -338,14 +369,22 @@ def resolve_names(raw_names: list[str], match_batch: MatchBatch) -> dict[str, di
             if rec is None and " " in query:
                 rec = by_genus.get(query.split()[0])
                 via = "genus" if rec else None
-        out[raw] = {"raw_name": raw, "query": query, "via": via, "record": rec,
-                    **_accepted_fields(rec)}
+        out[raw] = {
+            "raw_name": raw,
+            "query": query,
+            "via": via,
+            "record": rec,
+            **_accepted_fields(rec),
+        }
     return out
 
 
 def build_rows(resolved: dict[str, dict], manifest_records: list[dict]) -> list[dict]:
-    families = {" ".join(r["binomial"].split()): r.get("family")
-                for r in manifest_records if r.get("binomial")}
+    families = {
+        " ".join(r["binomial"].split()): r.get("family")
+        for r in manifest_records
+        if r.get("binomial")
+    }
     rows = []
     for raw in sorted(resolved):
         res = resolved[raw]
@@ -354,19 +393,52 @@ def build_rows(resolved: dict[str, dict], manifest_records: list[dict]) -> list[
             # Take the epithet from the accepted name, not the matched one: a
             # misspelled name matches an unaccepted record carrying the typo.
             accepted = {**rec, "scientificname": res["accepted_name"] or rec.get("scientificname")}
-            ranks = _carry_down(_flatten(
-                accepted, lowest="species" if res["via"] == "name" else "genus",
-                fallback_species=_species_epithet(raw)))
+            ranks = _carry_down(
+                _flatten(
+                    accepted,
+                    lowest="species" if res["via"] == "name" else "genus",
+                    fallback_species=_species_epithet(raw),
+                )
+            )
         else:
             query = res["query"] or ""
-            ranks = {"kingdom": None, "phylum": None, "class": None, "order": None,
-                     "family": families.get(raw), "genus": query.split()[0] if query else None,
-                     "species": _species_epithet(query) if query else None,
-                     "lowest": "unknown"}
-        row = {k: res.get(k) for k in ("raw_name", "aphia_id", "accepted_name", "authority",
-                                        "rank", "match_type", "status")}
-        row.update({k: ranks.get(k) for k in ("species", "genus", "family", "order", "class",
-                                              "phylum", "kingdom", "lowest")})
+            ranks = {
+                "kingdom": None,
+                "phylum": None,
+                "class": None,
+                "order": None,
+                "family": families.get(raw),
+                "genus": query.split()[0] if query else None,
+                "species": _species_epithet(query) if query else None,
+                "lowest": "unknown",
+            }
+        row = {
+            k: res.get(k)
+            for k in (
+                "raw_name",
+                "aphia_id",
+                "accepted_name",
+                "authority",
+                "rank",
+                "match_type",
+                "status",
+            )
+        }
+        row.update(
+            {
+                k: ranks.get(k)
+                for k in (
+                    "species",
+                    "genus",
+                    "family",
+                    "order",
+                    "class",
+                    "phylum",
+                    "kingdom",
+                    "lowest",
+                )
+            }
+        )
         rows.append(row)
     return rows
 
@@ -390,9 +462,11 @@ def unresolved_lines(resolved: dict[str, dict]) -> list[str]:
         rank = (res.get("rank") or "").lower()
         if res["record"] is None:
             problem = "no match"
-        elif (res["via"] == "genus"
-              or (res["query"] and " " in res["query"] and rank == "genus")
-              or _epithet_dropped(raw)):
+        elif (
+            res["via"] == "genus"
+            or (res["query"] and " " in res["query"] and rank == "genus")
+            or _epithet_dropped(raw)
+        ):
             problem = f"{rank} only" if rank else "genus only"
         elif res.get("match_type") and res["match_type"] != "exact":
             problem = f"fuzzy match ({res['match_type']})"
@@ -408,7 +482,7 @@ def _live_match_batch() -> MatchBatch:
     def match(names: list[str]) -> dict[str, dict | None]:
         print(f"  worms: {len(names)} names")
         result = worms_match_batch(client, names)
-        time.sleep(0.5)   # polite pause between batches
+        time.sleep(0.5)  # polite pause between batches
         return result
 
     return match
@@ -443,15 +517,20 @@ def main(argv: list[str] | None = None, match_batch: MatchBatch | None = None) -
     args = ap.parse_args(argv)
 
     if not args.manifest.exists():
-        print(f"missing manifest: {args.manifest} (run build_species_manifest.py first)",
-              file=sys.stderr)
+        print(
+            f"missing manifest: {args.manifest} (run build_species_manifest.py first)",
+            file=sys.stderr,
+        )
         return 1
     records = json.loads(args.manifest.read_text())
     # Without the classifier's classes, every classifier-only name would
     # silently drop out of taxonomy.csv (and so out of the review catalogue).
     if not args.classes.exists():
-        print(f"missing classifier classes: {args.classes} (pass --classes or set "
-              "CLASSIFIER_V2_CLASSES_JSON)", file=sys.stderr)
+        print(
+            f"missing classifier classes: {args.classes} (pass --classes or set "
+            "CLASSIFIER_V2_CLASSES_JSON)",
+            file=sys.stderr,
+        )
         return 1
     classes = json.loads(args.classes.read_text())
     if not classes:
@@ -474,11 +553,15 @@ def main(argv: list[str] | None = None, match_batch: MatchBatch | None = None) -
         w.writerow({k: ("" if row.get(k) is None else row[k]) for k in FIELDNAMES})
     problems = unresolved_lines(resolved)
     write_atomic(args.out, buf.getvalue())
-    write_atomic(args.unresolved,
-                 "# raw_name\tproblem\taccepted_name  (fix these names in the Species Log)\n"
-                 + "".join(line + "\n" for line in problems))
-    print(f"wrote {args.out} ({len(rows)} rows); {len(problems)} names need attention "
-          f"(see {args.unresolved})")
+    write_atomic(
+        args.unresolved,
+        "# raw_name\tproblem\taccepted_name  (fix these names in the Species Log)\n"
+        + "".join(line + "\n" for line in problems),
+    )
+    print(
+        f"wrote {args.out} ({len(rows)} rows); {len(problems)} names need attention "
+        f"(see {args.unresolved})"
+    )
     return 0
 
 

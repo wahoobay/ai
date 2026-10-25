@@ -1,5 +1,6 @@
 """scripts/dev/backup_db.sh against the test database (docs/operations.md,
 "Backups")."""
+
 from __future__ import annotations
 
 import csv
@@ -20,15 +21,22 @@ PG_RESTORE = "/raid/scratch/dzimmerman2021/miniconda3/envs/wahoobay/bin/pg_resto
 
 
 def _run(tmp_path, **env):
-    full = {**os.environ, "BACKUP_DATABASE_URL": TEST_DSN, "BACKUP_DIR": str(tmp_path / "main"),
-            "BACKUP_COPY_DIR": str(tmp_path / "copy"), **env}
-    return subprocess.run(["bash", str(SCRIPT)], env=full, capture_output=True, text=True,
-                          timeout=300)
+    full = {
+        **os.environ,
+        "BACKUP_DATABASE_URL": TEST_DSN,
+        "BACKUP_DIR": str(tmp_path / "main"),
+        "BACKUP_COPY_DIR": str(tmp_path / "copy"),
+        **env,
+    }
+    return subprocess.run(
+        ["bash", str(SCRIPT)], env=full, capture_output=True, text=True, timeout=300
+    )
 
 
 async def test_the_backup_keeps_labels_and_small_tables_but_not_the_camera_bulk(rdb, tmp_path):
-    f = await seed_frame(rdb, tmp_path, boxes=[{"bbox": [10, 10, 110, 110],
-                                                "species": "Seriola zonata"}])
+    f = await seed_frame(
+        rdb, tmp_path, boxes=[{"bbox": [10, 10, 110, 110], "species": "Seriola zonata"}]
+    )
     who = await make_user(rdb, "rev")
     await add_verdict(rdb, f["event_ids"][0], who, name="Seriola zonata")
     r = _run(tmp_path)
@@ -39,12 +47,15 @@ async def test_the_backup_keeps_labels_and_small_tables_but_not_the_camera_bulk(
     for p in (dump, labels):
         assert stat.S_IMODE(p.stat().st_mode) == 0o600, "backups hold emails and password hashes"
         assert (tmp_path / "copy" / p.name).exists(), "a copy goes to the second disk"
-    listing = subprocess.run([PG_RESTORE, "--list", str(dump)], capture_output=True, text=True,
-                             timeout=60).stdout
+    listing = subprocess.run(
+        [PG_RESTORE, "--list", str(dump)], capture_output=True, text=True, timeout=60
+    ).stdout
     for kept in ("detection_corrections", "users", "review_items", "sensor_readings"):
         assert re.search(rf"TABLE DATA public {kept}\b", listing), f"{kept} data must be kept"
     for bulk in ("detection_events", "saved_frames", "frame_stats"):
-        assert not re.search(rf"TABLE DATA public {bulk}\b", listing), f"{bulk} data is re-derivable"
+        assert not re.search(
+            rf"TABLE DATA public {bulk}\b", listing
+        ), f"{bulk} data is re-derivable"
         assert re.search(rf"TABLE public {bulk}\b", listing), f"{bulk}'s schema is kept"
     rows = list(csv.DictReader(gzip.open(labels, "rt", newline="")))
     assert len(rows) == 1
@@ -76,8 +87,7 @@ async def test_by_default_there_is_no_second_copy(rdb, tmp_path):
     # hold no project data, so a copy is made only when BACKUP_COPY_DIR is set.
     env = {k: v for k, v in os.environ.items() if k != "BACKUP_COPY_DIR"}
     env.update(BACKUP_DATABASE_URL=TEST_DSN, BACKUP_DIR=str(tmp_path / "main"))
-    r = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True,
-                       timeout=300)
+    r = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr
     assert r.stdout.rstrip().endswith(str(tmp_path / "main")), "no '+ <copy>' in the log line"
     assert "beegfs" not in SCRIPT.read_text()

@@ -17,6 +17,7 @@ If neither source has a name for a binomial, the dashboard falls
 through to italic Latin alone — that's the "(G. species)" you see in
 the UI.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,113 +28,113 @@ log = logging.getLogger(__name__)
 
 COMMON_NAMES: dict[str, str] = {
     # Damselfishes
-    "Abudefduf saxatilis":        "Sergeant Major",
-    "Abudefduf sordidus":         "Black-spot Sergeant",
-    "Stegastes partitus":         "Bicolor Damselfish",
-    "Chromis chromis":            "Damselfish",
+    "Abudefduf saxatilis": "Sergeant Major",
+    "Abudefduf sordidus": "Black-spot Sergeant",
+    "Stegastes partitus": "Bicolor Damselfish",
+    "Chromis chromis": "Damselfish",
     # Angelfishes
-    "Holacanthus bermudensis":    "Blue Angelfish",
-    "Holacanthus tricolor":       "Rock Beauty",
-    "Pomacanthus arcuatus":       "Gray Angelfish",
-    "Pomacanthus paru":           "French Angelfish",
+    "Holacanthus bermudensis": "Blue Angelfish",
+    "Holacanthus tricolor": "Rock Beauty",
+    "Pomacanthus arcuatus": "Gray Angelfish",
+    "Pomacanthus paru": "French Angelfish",
     # Butterflyfishes
-    "Chaetodon ocellatus":        "Spotfin Butterflyfish",
-    "Chaetodon striatus":         "Banded Butterflyfish",
+    "Chaetodon ocellatus": "Spotfin Butterflyfish",
+    "Chaetodon striatus": "Banded Butterflyfish",
     # Surgeonfishes / Tangs
-    "Acanthurus chirurgus":       "Doctorfish",
-    "Acanthurus coeruleus":       "Blue Tang",
-    "Paracanthurus hepatus":      "Blue Tang (Indo-Pacific)",
+    "Acanthurus chirurgus": "Doctorfish",
+    "Acanthurus coeruleus": "Blue Tang",
+    "Paracanthurus hepatus": "Blue Tang (Indo-Pacific)",
     # Parrotfishes
-    "Sparisoma viride":           "Stoplight Parrotfish",
-    "Sparisoma aurofrenatum":     "Redband Parrotfish",
-    "Scarus iseri":               "Striped Parrotfish",
+    "Sparisoma viride": "Stoplight Parrotfish",
+    "Sparisoma aurofrenatum": "Redband Parrotfish",
+    "Scarus iseri": "Striped Parrotfish",
     # Wrasses & hogfishes
-    "Halichoeres bivittatus":     "Slippery Dick",
-    "Bodianus rufus":              "Spanish Hogfish",
-    "Lachnolaimus maximus":       "Hogfish",
-    "Labroides dimidiatus":       "Cleaner Wrasse",
+    "Halichoeres bivittatus": "Slippery Dick",
+    "Bodianus rufus": "Spanish Hogfish",
+    "Lachnolaimus maximus": "Hogfish",
+    "Labroides dimidiatus": "Cleaner Wrasse",
     # Snappers
-    "Lutjanus griseus":           "Mangrove Snapper",
-    "Lutjanus apodus":            "Schoolmaster Snapper",
-    "Lutjanus cyanopterus":       "Cubera Snapper",
-    "Lutjanus synagris":          "Lane Snapper",
-    "Lutjanus purpureus":         "Caribbean Red Snapper",
-    "Rhomboplites aurorubens":    "Vermilion Snapper",
+    "Lutjanus griseus": "Mangrove Snapper",
+    "Lutjanus apodus": "Schoolmaster Snapper",
+    "Lutjanus cyanopterus": "Cubera Snapper",
+    "Lutjanus synagris": "Lane Snapper",
+    "Lutjanus purpureus": "Caribbean Red Snapper",
+    "Rhomboplites aurorubens": "Vermilion Snapper",
     # Groupers
-    "Mycteroperca microlepis":    "Gag Grouper",
-    "Mycteroperca bonaci":        "Black Grouper",
-    "Mycteroperca tigris":        "Tiger Grouper",
-    "Epinephelus striatus":       "Nassau Grouper",
-    "Epinephelus morio":          "Red Grouper",
-    "Centropristis striata":      "Black Sea Bass",
+    "Mycteroperca microlepis": "Gag Grouper",
+    "Mycteroperca bonaci": "Black Grouper",
+    "Mycteroperca tigris": "Tiger Grouper",
+    "Epinephelus striatus": "Nassau Grouper",
+    "Epinephelus morio": "Red Grouper",
+    "Centropristis striata": "Black Sea Bass",
     # Grunts & porgies
-    "Haemulon parra":             "Sailor's Choice",
-    "Haemulon flavolineatum":     "French Grunt",
-    "Haemulon sciurus":           "Bluestriped Grunt",
-    "Haemulon plumieri":          "White Grunt",
-    "Haemulon chrysargyreum":     "Smallmouth Grunt",
-    "Calamus bajonado":           "Jolthead Porgy",
-    "Diplodus holbrookii":        "Spottail Pinfish",
-    "Diplodus vulgaris":          "Common Two-banded Seabream",
-    "Lagodon rhomboides":         "Pinfish",
-    "Archosargus probatocephalus":"Sheepshead",
+    "Haemulon parra": "Sailor's Choice",
+    "Haemulon flavolineatum": "French Grunt",
+    "Haemulon sciurus": "Bluestriped Grunt",
+    "Haemulon plumieri": "White Grunt",
+    "Haemulon chrysargyreum": "Smallmouth Grunt",
+    "Calamus bajonado": "Jolthead Porgy",
+    "Diplodus holbrookii": "Spottail Pinfish",
+    "Diplodus vulgaris": "Common Two-banded Seabream",
+    "Lagodon rhomboides": "Pinfish",
+    "Archosargus probatocephalus": "Sheepshead",
     # Drums / croakers
-    "Sciaenops ocellatus":        "Red Drum",
-    "Pogonias cromis":             "Black Drum",
-    "Menticirrhus littoralis":    "Gulf Kingfish",
+    "Sciaenops ocellatus": "Red Drum",
+    "Pogonias cromis": "Black Drum",
+    "Menticirrhus littoralis": "Gulf Kingfish",
     # Jacks
-    "Caranx ruber":               "Bar Jack",
-    "Caranx hippos":              "Crevalle Jack",
-    "Seriola dumerili":           "Greater Amberjack",
-    "Seriola rivoliana":          "Almaco Jack",
-    "Alectis ciliaris":           "African Pompano",
-    "Pomatomus saltatrix":        "Bluefish",
+    "Caranx ruber": "Bar Jack",
+    "Caranx hippos": "Crevalle Jack",
+    "Seriola dumerili": "Greater Amberjack",
+    "Seriola rivoliana": "Almaco Jack",
+    "Alectis ciliaris": "African Pompano",
+    "Pomatomus saltatrix": "Bluefish",
     # Mullets / mojarras
-    "Mugil cephalus":             "Striped Mullet",
+    "Mugil cephalus": "Striped Mullet",
     # Tarpon, snook, mahi
-    "Megalops atlanticus":        "Tarpon",
-    "Centropomus undecimalis":    "Common Snook",
-    "Coryphaena hippurus":        "Mahi-mahi",
-    "Elops saurus":               "Ladyfish",
+    "Megalops atlanticus": "Tarpon",
+    "Centropomus undecimalis": "Common Snook",
+    "Coryphaena hippurus": "Mahi-mahi",
+    "Elops saurus": "Ladyfish",
     # Tunas, mackerel, billfish
-    "Thunnus atlanticus":         "Blackfin Tuna",
-    "Katsuwonus pelamis":         "Skipjack Tuna",
-    "Acanthocybium solandri":     "Wahoo",
-    "Sphyraena barracuda":        "Great Barracuda",
-    "Istiophorus albicans":       "Atlantic Sailfish",
+    "Thunnus atlanticus": "Blackfin Tuna",
+    "Katsuwonus pelamis": "Skipjack Tuna",
+    "Acanthocybium solandri": "Wahoo",
+    "Sphyraena barracuda": "Great Barracuda",
+    "Istiophorus albicans": "Atlantic Sailfish",
     # Filefish & pufferfish
-    "Aluterus scriptus":          "Scrawled Filefish",
-    "Aluterus monoceros":         "Unicorn Filefish",
-    "Aluterus schoepfii":         "Orange Filefish",
-    "Acanthostracion quadricornis":"Scrawled Cowfish",
-    "Canthigaster rostrata":      "Sharpnose Puffer",
-    "Diodon hystrix":             "Spot-fin Porcupinefish",
-    "Arothron hispidus":          "White-spotted Puffer",
+    "Aluterus scriptus": "Scrawled Filefish",
+    "Aluterus monoceros": "Unicorn Filefish",
+    "Aluterus schoepfii": "Orange Filefish",
+    "Acanthostracion quadricornis": "Scrawled Cowfish",
+    "Canthigaster rostrata": "Sharpnose Puffer",
+    "Diodon hystrix": "Spot-fin Porcupinefish",
+    "Arothron hispidus": "White-spotted Puffer",
     # Lionfish (invasive)
-    "Pterois volitans":           "Lionfish (invasive)",
+    "Pterois volitans": "Lionfish (invasive)",
     # Sharks & rays
-    "Ginglymostoma cirratum":     "Nurse Shark",
-    "Mustelus canis":             "Dusky Smooth-hound",
-    "Mustelus mustelus":          "Smooth-hound Shark",
+    "Ginglymostoma cirratum": "Nurse Shark",
+    "Mustelus canis": "Dusky Smooth-hound",
+    "Mustelus mustelus": "Smooth-hound Shark",
     "Rhizoprionodon terraenovae": "Atlantic Sharpnose Shark",
-    "Carcharhinus plumbeus":      "Sandbar Shark",
-    "Aetobatus narinari":         "Spotted Eagle Ray",
-    "Gymnura altavela":           "Spiny Butterfly Ray",
+    "Carcharhinus plumbeus": "Sandbar Shark",
+    "Aetobatus narinari": "Spotted Eagle Ray",
+    "Gymnura altavela": "Spiny Butterfly Ray",
     # Eels
-    "Gymnothorax moringa":        "Spotted Moray Eel",
-    "Gymnothorax funebris":       "Green Moray Eel",
-    "Echiophis intertinctus":     "Spotted Spoon-nose Eel",
+    "Gymnothorax moringa": "Spotted Moray Eel",
+    "Gymnothorax funebris": "Green Moray Eel",
+    "Echiophis intertinctus": "Spotted Spoon-nose Eel",
     # Chubs & damselfishes (continued)
-    "Kyphosus sectatrix":         "Bermuda Chub",
-    "Kyphosus vaigiensis":        "Brassy Chub",
+    "Kyphosus sectatrix": "Bermuda Chub",
+    "Kyphosus vaigiensis": "Brassy Chub",
     # Other
-    "Echeneis naucrates":         "Live Sharksucker",
-    "Aulostomus maculatus":       "Trumpetfish",
-    "Cephalopholis cruentata":    "Graysby",
-    "Anisotremus virginicus":     "Porkfish",
-    "Anisotremus surinamensis":   "Black Margate",
+    "Echeneis naucrates": "Live Sharksucker",
+    "Aulostomus maculatus": "Trumpetfish",
+    "Cephalopholis cruentata": "Graysby",
+    "Anisotremus virginicus": "Porkfish",
+    "Anisotremus surinamensis": "Black Margate",
     # The Wahoo Bay YouTube channel mentioned several specifically
-    "Rachycentron canadum":       "Cobia",
+    "Rachycentron canadum": "Cobia",
 }
 
 
@@ -183,14 +184,14 @@ def _load_manifest_names() -> None:
     root = _repo_root()
     # species_manifest.json first (spreadsheet-curated, generally the
     # cleanest labels). inat_manifest.json second to backfill the tail.
-    n_sm = _ingest_manifest(root / "assets" / "species_manifest.json",
-                            "binomial", "common_name")
-    n_in = _ingest_manifest(root / "assets" / "inat_manifest.json",
-                            "binomial", "common_name")
+    n_sm = _ingest_manifest(root / "assets" / "species_manifest.json", "binomial", "common_name")
+    n_in = _ingest_manifest(root / "assets" / "inat_manifest.json", "binomial", "common_name")
     if _MANIFEST_NAMES:
         log.info(
             "common_names: loaded %d manifest fallbacks (species_manifest=%d, inat=%d)",
-            len(_MANIFEST_NAMES), n_sm, n_in,
+            len(_MANIFEST_NAMES),
+            n_sm,
+            n_in,
         )
 
 

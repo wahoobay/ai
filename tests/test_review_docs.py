@@ -1,4 +1,5 @@
 """Every review-tool setting the dashboard reads is documented."""
+
 from __future__ import annotations
 
 import re
@@ -18,8 +19,12 @@ def test_every_review_setting_is_in_env_example():
 
 def test_operations_doc_covers_the_pool_task():
     ops = (REPO / "docs" / "operations.md").read_text()
-    for phrase in ("REVIEW_POOL_ENABLED", "2026-09-24-review-tool.sql", "/api/review/status",
-                   "seed_review_demo.py"):
+    for phrase in (
+        "REVIEW_POOL_ENABLED",
+        "2026-09-24-review-tool.sql",
+        "/api/review/status",
+        "seed_review_demo.py",
+    ):
         assert phrase in ops, phrase
 
 

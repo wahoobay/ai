@@ -35,6 +35,7 @@ all slots are in flight FrameTap pops the oldest queued `FrameIn`
 and recycles its slot (latest-frame-wins), so inference never chases
 stale frames.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,8 +65,9 @@ class LiveFrame:
     dataclass for both so the MJPEG/snapshot endpoints can pick out
     whichever field they need.
     """
-    jpeg: bytes              # annotated (with bboxes + labels)
-    jpeg_raw: bytes          # source-pixel frame, no overlay
+
+    jpeg: bytes  # annotated (with bboxes + labels)
+    jpeg_raw: bytes  # source-pixel frame, no overlay
     frame_id: int
     ts: datetime
     source_name: str
@@ -75,9 +77,12 @@ class LiveFrame:
     @classmethod
     def empty(cls) -> LiveFrame:
         return cls(
-            jpeg=b"", jpeg_raw=b"", frame_id=0,
+            jpeg=b"",
+            jpeg_raw=b"",
+            frame_id=0,
             ts=datetime.now(UTC),
-            source_name="", detections_summary=[],
+            source_name="",
+            detections_summary=[],
         )
 
 
@@ -106,8 +111,8 @@ class LiveBuffer:
 
 @dataclass
 class PipelineStats:
-    frames_seen: int = 0           # frames grabbed from source (native fps)
-    frames_inferred: int = 0       # frames the inference subprocess processed
+    frames_seen: int = 0  # frames grabbed from source (native fps)
+    frames_inferred: int = 0  # frames the inference subprocess processed
     frames_with_fish: int = 0
     detections_total: int = 0
     last_infer_ms: float = 0.0
@@ -162,9 +167,9 @@ class FrameTap:
         self.source = source
         self.live_raw = live_raw
         self.live_annotated = live_annotated
-        self.in_queue = in_queue        # filled_q: parent → child (metadata only)
-        self.empty_q = empty_q          # parent ← child: returned slot indices
-        self.frame_pool = frame_pool    # parent-owned shared-memory pool
+        self.in_queue = in_queue  # filled_q: parent → child (metadata only)
+        self.empty_q = empty_q  # parent ← child: returned slot indices
+        self.frame_pool = frame_pool  # parent-owned shared-memory pool
         self.stats = stats
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -203,28 +208,46 @@ class FrameTap:
                 ok, buf = cv2.imencode(".jpg", frame, jpeg_q)
                 jpeg_bytes = buf.tobytes() if ok else b""
                 if jpeg_bytes:
-                    self.live_raw.publish(LiveFrame(
-                        jpeg=b"", jpeg_raw=jpeg_bytes, frame_id=frame_id, ts=ts,
-                        source_name=source_name, detections_summary=[], infer_ms=0.0,
-                    ))
+                    self.live_raw.publish(
+                        LiveFrame(
+                            jpeg=b"",
+                            jpeg_raw=jpeg_bytes,
+                            frame_id=frame_id,
+                            ts=ts,
+                            source_name=source_name,
+                            detections_summary=[],
+                            infer_ms=0.0,
+                        )
+                    )
 
                 if in_fallback:
                     if not was_fallback:
-                        log.info("autoswitch transition: in_fallback=True — PAUSING video-data collection")
+                        log.info(
+                            "autoswitch transition: in_fallback=True — PAUSING video-data collection"
+                        )
                     was_fallback = True
                     # Mirror raw onto annotated so bbox-on viewers also see
                     # the fallback frame (no overlay drawn).
                     if jpeg_bytes:
-                        self.live_annotated.publish(LiveFrame(
-                            jpeg=jpeg_bytes, jpeg_raw=b"", frame_id=frame_id, ts=ts,
-                            source_name=source_name, detections_summary=[], infer_ms=0.0,
-                        ))
+                        self.live_annotated.publish(
+                            LiveFrame(
+                                jpeg=jpeg_bytes,
+                                jpeg_raw=b"",
+                                frame_id=frame_id,
+                                ts=ts,
+                                source_name=source_name,
+                                detections_summary=[],
+                                infer_ms=0.0,
+                            )
+                        )
                     continue
 
                 # ----- live-camera path: dispatch to inference subprocess -----
                 reset_smoother = was_fallback  # first live frame after fallback
                 if was_fallback:
-                    log.info("autoswitch transition: in_fallback=False — RESUMING video-data collection")
+                    log.info(
+                        "autoswitch transition: in_fallback=False — RESUMING video-data collection"
+                    )
                 was_fallback = False
 
                 # Acquire a shared-memory slot. Drop-old semantics: if all
@@ -241,8 +264,10 @@ class FrameTap:
                     h, w, c = self.frame_pool.write_into(slot_idx, frame)
                 except Exception:
                     log.exception("shm write failed; returning slot %d", slot_idx)
-                    try: self.empty_q.put_nowait(slot_idx)
-                    except Exception: pass
+                    try:
+                        self.empty_q.put_nowait(slot_idx)
+                    except Exception:
+                        pass
                     continue
 
                 msg = FrameIn(
@@ -259,8 +284,10 @@ class FrameTap:
                     # Extremely unlikely (filled_q is sized = num_slots so
                     # if we got a slot, there's room in filled_q too).
                     # Recover by handing the slot back ourselves.
-                    try: self.empty_q.put_nowait(slot_idx)
-                    except Exception: pass
+                    try:
+                        self.empty_q.put_nowait(slot_idx)
+                    except Exception:
+                        pass
         except Exception:
             log.exception("frame-tap crashed")
 
@@ -367,15 +394,17 @@ class InferenceClient:
             self.stats.detections_total += out.n_detections
 
             if out.annotated_jpeg:
-                self.live_annotated.publish(LiveFrame(
-                    jpeg=out.annotated_jpeg,
-                    jpeg_raw=b"",
-                    frame_id=out.frame_id,
-                    ts=out.ts,
-                    source_name=out.source_name,
-                    detections_summary=out.detections_summary,
-                    infer_ms=out.infer_ms,
-                ))
+                self.live_annotated.publish(
+                    LiveFrame(
+                        jpeg=out.annotated_jpeg,
+                        jpeg_raw=b"",
+                        frame_id=out.frame_id,
+                        ts=out.ts,
+                        source_name=out.source_name,
+                        detections_summary=out.detections_summary,
+                        infer_ms=out.infer_ms,
+                    )
+                )
 
 
 def spawn_inference(
@@ -420,7 +449,8 @@ def spawn_inference(
     proc.start()
     log.info(
         "inference subprocess: spawned (pid=%s, shm slots=%d); waiting for ready",
-        proc.pid, n_slots,
+        proc.pid,
+        n_slots,
     )
     if not ready.wait(timeout=120.0):
         log.error("inference subprocess: not ready after 120s; aborting startup")

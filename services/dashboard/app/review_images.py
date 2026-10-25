@@ -6,6 +6,7 @@ and never past 960 px on its long edge. The page receives the region in
 frame pixels so it can map drags back to frame coordinates; the zoom
 endpoint recomputes the same region from the same inputs, so the two
 always agree."""
+
 from __future__ import annotations
 
 import io
@@ -36,8 +37,9 @@ def _frame_size_at(path: str, mtime_ns: int) -> tuple[int, int]:
         return im.size
 
 
-def zoom_region(bbox, width: int, height: int, margin: float = ZOOM_MARGIN
-                ) -> tuple[int, int, int, int]:
+def zoom_region(
+    bbox, width: int, height: int, margin: float = ZOOM_MARGIN
+) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = bbox
     mx = int(round(max(1, x2 - x1) * margin))
     my = int(round(max(1, y2 - y1) * margin))

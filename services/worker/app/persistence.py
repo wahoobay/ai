@@ -6,6 +6,7 @@ Image saving has three independent, tunable modes — enable any combination:
   3. interesting_only: on (a) new species seen today, (b) confidence >= threshold,
                       (c) first detection after a quiet period
 """
+
 from __future__ import annotations
 
 import json
@@ -65,7 +66,13 @@ class PgWriter:
         p = self._prov
         if p is None:
             return (None, None, None, None, None)
-        return (p.model_version, p.detector_sha256, p.classifier_sha256, p.config_hash, p.pipeline_git_sha)
+        return (
+            p.model_version,
+            p.detector_sha256,
+            p.classifier_sha256,
+            p.config_hash,
+            p.pipeline_git_sha,
+        )
 
     def record_detections(
         self,
@@ -83,20 +90,31 @@ class PgWriter:
         rows = []
         for d, tid in zip(detections, track_ids, strict=False):
             best = d.best
-            rows.append((
-                ts, frame_id, source_name,
-                d.det_conf, list(d.bbox),
-                Jsonb([
-                    {"name": p.name, "species_id": p.species_id, "accuracy": p.accuracy}
-                    for p in d.topk
-                ]),
-                best.name if best else None,
-                best.species_id if best else None,
-                best.accuracy if best else None,
-                image_path,
-                mv, dsha, csha, cfghash, gitsha,
-                tid,
-            ))
+            rows.append(
+                (
+                    ts,
+                    frame_id,
+                    source_name,
+                    d.det_conf,
+                    list(d.bbox),
+                    Jsonb(
+                        [
+                            {"name": p.name, "species_id": p.species_id, "accuracy": p.accuracy}
+                            for p in d.topk
+                        ]
+                    ),
+                    best.name if best else None,
+                    best.species_id if best else None,
+                    best.accuracy if best else None,
+                    image_path,
+                    mv,
+                    dsha,
+                    csha,
+                    cfghash,
+                    gitsha,
+                    tid,
+                )
+            )
         if not rows:
             return
         with self._pool.connection() as conn, conn.cursor() as cur:
@@ -132,8 +150,18 @@ class PgWriter:
                  model_version, config_hash, pipeline_git_sha)
                 VALUES (%s,%s,%s,%s,%s,%s,%s, %s,%s,%s)
                 """,
-                (ts, frame_id, source_name, reason, image_path, coco_path, num_fish,
-                 mv, cfghash, gitsha),
+                (
+                    ts,
+                    frame_id,
+                    source_name,
+                    reason,
+                    image_path,
+                    coco_path,
+                    num_fish,
+                    mv,
+                    cfghash,
+                    gitsha,
+                ),
             )
 
     def record_ptz_state(
@@ -154,8 +182,7 @@ class PgWriter:
                 (ts, source_name, pan_deg, tilt_deg, zoom, raw, poll_method, config_hash)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
-                (ts, source_name, pan_deg, tilt_deg, zoom,
-                 Jsonb(raw or {}), poll_method, cfghash),
+                (ts, source_name, pan_deg, tilt_deg, zoom, Jsonb(raw or {}), poll_method, cfghash),
             )
 
     def record_frame_stats(self, rows: list[tuple]) -> None:
@@ -186,6 +213,7 @@ class SaveJob:
     inference loop; consumed by a background thread so disk I/O doesn't
     stall inference. Holds the BGR ndarrays by reference — they live
     until the writer is done with them, no copy taken."""
+
     frame_bgr: object  # np.ndarray, kept lightly typed to avoid import here
     annotated_bgr: object
     img_path: Path
@@ -237,7 +265,10 @@ class ImageSaver:
         self._reset_today(ts)
         cfg = self.cfg
 
-        if cfg.save_timelapse_seconds > 0 and (now_mono - self._last_timelapse) >= cfg.save_timelapse_seconds:
+        if (
+            cfg.save_timelapse_seconds > 0
+            and (now_mono - self._last_timelapse) >= cfg.save_timelapse_seconds
+        ):
             return "timelapse"
 
         if not detections:
@@ -324,8 +355,7 @@ class ImageSaver:
                 gap = max(1.0, float(self.cfg.save_min_track_gap_seconds))
                 cutoff = now_mono - 2 * gap - 10.0
                 self._last_track_save_mono = {
-                    tid: t for tid, t in self._last_track_save_mono.items()
-                    if t >= cutoff
+                    tid: t for tid, t in self._last_track_save_mono.items() if t >= cutoff
                 }
                 self._track_gc_next = now_mono + 30.0
 
@@ -339,7 +369,8 @@ class ImageSaver:
         h, w = frame_bgr.shape[:2]
         coco = self._build_coco(
             image_path=img_path.name,
-            width=w, height=h,
+            width=w,
+            height=h,
             frame_id=frame_id,
             ts=ts,
             source_name=source_name,
@@ -413,13 +444,15 @@ class ImageSaver:
                 "save_reason": reason,
                 "date_captured": ts.isoformat(),
             },
-            "images": [{
-                "id": frame_id,
-                "file_name": image_path,
-                "width": width,
-                "height": height,
-                "date_captured": ts.isoformat(),
-            }],
+            "images": [
+                {
+                    "id": frame_id,
+                    "file_name": image_path,
+                    "width": width,
+                    "height": height,
+                    "date_captured": ts.isoformat(),
+                }
+            ],
             "annotations": annotations,
             "categories": categories,
         }

@@ -23,6 +23,7 @@ with a "virus scan can't be performed" confirmation page. We parse the
 ``confirm`` token out of the response and replay the request with it
 appended. Files under 100 MB stream straight through.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,7 +59,7 @@ class DownloadResult:
     drive_id: str
     binomial: str | None
     common_name: str
-    status: str             # "ok" | "skipped" | "error"
+    status: str  # "ok" | "skipped" | "error"
     local_path: str | None  # relative to repo root
     bytes: int
     mime: str | None
@@ -127,9 +128,14 @@ async def download_one(
         p = OUT_DIR / f"{drive_id}{ext}"
         if p.exists() and p.stat().st_size > 0:
             return DownloadResult(
-                drive_id=drive_id, binomial=binomial, common_name=common,
-                status="skipped", local_path=str(p.relative_to(REPO_ROOT)),
-                bytes=p.stat().st_size, mime=None, error=None,
+                drive_id=drive_id,
+                binomial=binomial,
+                common_name=common,
+                status="skipped",
+                local_path=str(p.relative_to(REPO_ROOT)),
+                bytes=p.stat().st_size,
+                mime=None,
+                error=None,
             )
 
     async with sem:
@@ -138,8 +144,14 @@ async def download_one(
             r = await client.get(url, follow_redirects=True, timeout=120)
         except Exception as e:
             return DownloadResult(
-                drive_id=drive_id, binomial=binomial, common_name=common,
-                status="error", local_path=None, bytes=0, mime=None, error=str(e),
+                drive_id=drive_id,
+                binomial=binomial,
+                common_name=common,
+                status="error",
+                local_path=None,
+                bytes=0,
+                mime=None,
+                error=str(e),
             )
 
         # Detect the virus-scan interstitial: response is HTML, not the file.
@@ -153,13 +165,19 @@ async def download_one(
                     r = await client.get(
                         "https://drive.usercontent.google.com/download",
                         params={k: params.get(k, "") for k in ("id", "export", "confirm", "uuid")},
-                        follow_redirects=True, timeout=300,
+                        follow_redirects=True,
+                        timeout=300,
                     )
                     ct = r.headers.get("content-type", "")
                 except Exception as e:
                     return DownloadResult(
-                        drive_id=drive_id, binomial=binomial, common_name=common,
-                        status="error", local_path=None, bytes=0, mime=ct,
+                        drive_id=drive_id,
+                        binomial=binomial,
+                        common_name=common,
+                        status="error",
+                        local_path=None,
+                        bytes=0,
+                        mime=ct,
                         error=f"confirm-step: {e}",
                     )
             elif params.get("confirm"):
@@ -167,26 +185,42 @@ async def download_one(
                 try:
                     r = await client.get(
                         f"{url}&confirm={params['confirm']}",
-                        follow_redirects=True, timeout=300,
+                        follow_redirects=True,
+                        timeout=300,
                     )
                     ct = r.headers.get("content-type", "")
                 except Exception as e:
                     return DownloadResult(
-                        drive_id=drive_id, binomial=binomial, common_name=common,
-                        status="error", local_path=None, bytes=0, mime=ct,
+                        drive_id=drive_id,
+                        binomial=binomial,
+                        common_name=common,
+                        status="error",
+                        local_path=None,
+                        bytes=0,
+                        mime=ct,
                         error=f"confirm-step: {e}",
                     )
             else:
                 return DownloadResult(
-                    drive_id=drive_id, binomial=binomial, common_name=common,
-                    status="error", local_path=None, bytes=0, mime=ct,
+                    drive_id=drive_id,
+                    binomial=binomial,
+                    common_name=common,
+                    status="error",
+                    local_path=None,
+                    bytes=0,
+                    mime=ct,
                     error="HTML response with no confirm form (file may be private or deleted)",
                 )
 
         if r.status_code != 200:
             return DownloadResult(
-                drive_id=drive_id, binomial=binomial, common_name=common,
-                status="error", local_path=None, bytes=0, mime=ct,
+                drive_id=drive_id,
+                binomial=binomial,
+                common_name=common,
+                status="error",
+                local_path=None,
+                bytes=0,
+                mime=ct,
                 error=f"HTTP {r.status_code}",
             )
 
@@ -194,9 +228,14 @@ async def download_one(
         out_path = OUT_DIR / f"{drive_id}{ext}"
         out_path.write_bytes(r.content)
         return DownloadResult(
-            drive_id=drive_id, binomial=binomial, common_name=common,
-            status="ok", local_path=str(out_path.relative_to(REPO_ROOT)),
-            bytes=len(r.content), mime=ct, error=None,
+            drive_id=drive_id,
+            binomial=binomial,
+            common_name=common,
+            status="ok",
+            local_path=str(out_path.relative_to(REPO_ROOT)),
+            bytes=len(r.content),
+            mime=ct,
+            error=None,
         )
 
 
@@ -226,13 +265,18 @@ async def main_async(concurrency: int, limit: int | None) -> None:
             ext = Path(r.local_path).suffix
             by_ext[ext] = by_ext.get(ext, 0) + 1
 
-    REPORT_PATH.write_text(json.dumps({
-        "elapsed_seconds": round(elapsed, 1),
-        "total": len(results),
-        "by_status": by_status,
-        "by_extension": by_ext,
-        "results": [asdict(r) for r in results],
-    }, indent=2))
+    REPORT_PATH.write_text(
+        json.dumps(
+            {
+                "elapsed_seconds": round(elapsed, 1),
+                "total": len(results),
+                "by_status": by_status,
+                "by_extension": by_ext,
+                "results": [asdict(r) for r in results],
+            },
+            indent=2,
+        )
+    )
 
     print(f"downloaded in {elapsed:.1f}s — {by_status}")
     print(f"by extension: {by_ext}")
@@ -247,10 +291,10 @@ async def main_async(concurrency: int, limit: int | None) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--concurrency", type=int, default=8,
-                    help="parallel downloads (default 8)")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="stop after N files (for smoke-testing)")
+    ap.add_argument("--concurrency", type=int, default=8, help="parallel downloads (default 8)")
+    ap.add_argument(
+        "--limit", type=int, default=None, help="stop after N files (for smoke-testing)"
+    )
     args = ap.parse_args()
     asyncio.run(main_async(args.concurrency, args.limit))
 

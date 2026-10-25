@@ -16,6 +16,7 @@ only after the owner has seen the dry run.
     python scripts/dev/remap_legacy_corrections.py --env /raid/scratch/dzimmerman2021/wahoobay/.env
     python scripts/dev/remap_legacy_corrections.py --env ... --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,8 +44,8 @@ LEGACY_ROWS_SQL = """
 
 @dataclass
 class Report:
-    changes: list[tuple[int, str, str]] = field(default_factory=list)   # (id, old, new)
-    unmapped: list[tuple[int, str]] = field(default_factory=list)       # (id, name)
+    changes: list[tuple[int, str, str]] = field(default_factory=list)  # (id, old, new)
+    unmapped: list[tuple[int, str]] = field(default_factory=list)  # (id, name)
     unchanged: int = 0
 
 
@@ -66,8 +67,10 @@ def remap(conn, catalogue, *, apply: bool) -> Report:
     if apply and report.changes:
         with conn.transaction(), conn.cursor() as cur:
             for row_id, _old, new in report.changes:
-                cur.execute("UPDATE detection_corrections SET corrected_name = %s WHERE id = %s",
-                            (new, row_id))
+                cur.execute(
+                    "UPDATE detection_corrections SET corrected_name = %s WHERE id = %s",
+                    (new, row_id),
+                )
     return report
 
 
@@ -98,8 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     for row_id, name in report.unmapped:
         print(f"{row_id}\t{name!r}: not in the species list; left alone")
     verb = "changed" if args.apply else "would change"
-    print(f"{len(report.changes)} {verb}, {report.unchanged} already accepted, "
-          f"{len(report.unmapped)} unmapped")
+    print(
+        f"{len(report.changes)} {verb}, {report.unchanged} already accepted, "
+        f"{len(report.unmapped)} unmapped"
+    )
     return 0
 
 

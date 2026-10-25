@@ -25,6 +25,7 @@ Filtering happens post-detector / pre-classifier in inference_proc.py
 so suppressed detections never reach the classifier, the database,
 the live overlay, or the reviewer queue.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,10 +50,11 @@ _DEFAULT_MIN_IOU = 0.5
 class _Region:
     """One polygon, precomputed for fast IoU. Polygon kept around for
     rescaling under a resolution change."""
-    polygon_xy: np.ndarray         # (N, 2) float32 — raw vertices
+
+    polygon_xy: np.ndarray  # (N, 2) float32 — raw vertices
     rect: tuple[int, int, int, int]  # bounding rect (x1, y1, x2, y2)
-    rect_area: int                 # rect's area, used as the IoU denominator
-    min_iou: float                 # per-region drop threshold
+    rect_area: int  # rect's area, used as the IoU denominator
+    min_iou: float  # per-region drop threshold
 
 
 @dataclass
@@ -107,7 +109,8 @@ class NegativeRegionFilter:
         except Exception as e:
             log.warning(
                 "negative-regions filter: failed to parse %s (%s); disabled",
-                p, e,
+                p,
+                e,
             )
             return
         sources = data.get("sources") or {}
@@ -124,23 +127,26 @@ class NegativeRegionFilter:
                 rect_area = max(0, rect[2] - rect[0]) * max(0, rect[3] - rect[1])
                 if rect_area == 0:
                     continue
-                regions.append(_Region(
-                    polygon_xy=pts,
-                    rect=rect,
-                    rect_area=rect_area,
-                    min_iou=float(r.get("min_iou", _DEFAULT_MIN_IOU)),
-                ))
+                regions.append(
+                    _Region(
+                        polygon_xy=pts,
+                        rect=rect,
+                        rect_area=rect_area,
+                        min_iou=float(r.get("min_iou", _DEFAULT_MIN_IOU)),
+                    )
+                )
             if regions:
                 self._by_source[source_name] = _RegionGroup(
-                    regions=regions, src_w=src_w, src_h=src_h,
+                    regions=regions,
+                    src_w=src_w,
+                    src_h=src_h,
                 )
                 self._n_regions += len(regions)
         if self._by_source:
             log.info(
                 "negative-regions filter loaded: %s (path=%s)",
                 ", ".join(
-                    f"{s}={len(g.regions)}@{g.src_w}x{g.src_h}"
-                    for s, g in self._by_source.items()
+                    f"{s}={len(g.regions)}@{g.src_w}x{g.src_h}" for s, g in self._by_source.items()
                 ),
                 p,
             )
@@ -174,10 +180,7 @@ class NegativeRegionFilter:
         # Build per-call rect list, rescaling once if the annotation
         # resolution differs from the current frame resolution. Common
         # path is matching resolution; the rescale branch is cheap.
-        if (
-            group.src_w and group.src_h
-            and (group.src_w != frame_w or group.src_h != frame_h)
-        ):
+        if group.src_w and group.src_h and (group.src_w != frame_w or group.src_h != frame_h):
             sx = frame_w / group.src_w
             sy = frame_h / group.src_h
             rects = []
@@ -205,7 +208,10 @@ class NegativeRegionFilter:
                     if log.isEnabledFor(logging.DEBUG):
                         log.debug(
                             "negative-regions: drop bbox=%s vs rect=%s iou=%.2f (>= %.2f)",
-                            bbox, rect, iou, min_iou,
+                            bbox,
+                            rect,
+                            iou,
+                            min_iou,
                         )
                     break
             if matched:

@@ -56,6 +56,7 @@ drops any detection whose bbox closely matches a configured
 no-fish-zone polygon (the SEAHIVE holes, etc.). See
 `negative_regions.py`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -83,9 +84,10 @@ class FrameIn:
     inference subprocess attaches via FrameShmReader and reconstructs
     a zero-copy numpy view at `shape`. Slot is returned to the
     parent's empty_q after the subprocess is done reading."""
+
     frame_id: int
     slot_idx: int
-    shape: tuple[int, int, int]      # (H, W, C) of the frame in the slot
+    shape: tuple[int, int, int]  # (H, W, C) of the frame in the slot
     ts: datetime
     source_name: str
     reset_smoother: bool = False
@@ -94,6 +96,7 @@ class FrameIn:
 @dataclass
 class FrameOut:
     """Inference → worker. Carries the annotated JPEG + summary + stats."""
+
     frame_id: int
     ts: datetime
     source_name: str
@@ -149,9 +152,7 @@ def run_inference_worker(
     elif backend == "fishial":
         from .fishial import FishialPipeline as _Pipeline
     else:
-        raise RuntimeError(
-            f"unknown CLASSIFIER_BACKEND={backend!r}; expected 'v2' or 'fishial'"
-        )
+        raise RuntimeError(f"unknown CLASSIFIER_BACKEND={backend!r}; expected 'v2' or 'fishial'")
 
     logging.basicConfig(
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
@@ -160,7 +161,9 @@ def run_inference_worker(
 
     log.info(
         "inference subprocess: starting (pid=%d, device=%s, classifier_backend=%s)",
-        os.getpid(), cfg.device, backend,
+        os.getpid(),
+        cfg.device,
+        backend,
     )
 
     # Attach to the parent's shared-memory frame pool. Done before model
@@ -171,7 +174,8 @@ def run_inference_worker(
         frame_reader = FrameShmReader(frame_shm_descriptor)
         log.info(
             "frame pool attached: %d slot(s), %d bytes each",
-            len(frame_reader.shms), frame_reader.slot_bytes,
+            len(frame_reader.shms),
+            frame_reader.slot_bytes,
         )
 
     provenance = compute_provenance(cfg)
@@ -229,8 +233,12 @@ def run_inference_worker(
                 saver.write(job)
                 if pg:
                     pg.record_saved_frame(
-                        job.ts, job.frame_id, job.source_name,
-                        job.reason, str(job.img_path), str(job.coco_path),
+                        job.ts,
+                        job.frame_id,
+                        job.source_name,
+                        job.reason,
+                        str(job.img_path),
+                        str(job.coco_path),
                         num_fish=job.n_fish,
                     )
             except Exception:
@@ -267,7 +275,7 @@ def run_inference_worker(
             slot_idx = getattr(item, "slot_idx", None)
             slot_released = False
 
-            def _release_slot() -> None:
+            def _release_slot(slot_idx=slot_idx) -> None:  # bound per item: the closure outlives the loop variable
                 nonlocal slot_released
                 if slot_released:
                     return
@@ -307,7 +315,10 @@ def run_inference_worker(
                 if negative_filter.has_regions and detections:
                     h, w = frame_bgr.shape[:2]
                     detections, _n_filtered = negative_filter.filter_detections(
-                        item.source_name, detections, w, h,
+                        item.source_name,
+                        detections,
+                        w,
+                        h,
                     )
                 infer_ms = (time.time() - t0) * 1000
 
@@ -342,8 +353,9 @@ def run_inference_worker(
                         event_log.write(rec)
                     if pg:
                         try:
-                            pg.record_detections(item.ts, item.frame_id, item.source_name,
-                                                 detections, track_ids)
+                            pg.record_detections(
+                                item.ts, item.frame_id, item.source_name, detections, track_ids
+                            )
                         except Exception:
                             log.exception("pg: detection insert failed (will retry)")
 
@@ -352,12 +364,23 @@ def run_inference_worker(
                     small = cv2.resize(frame_bgr, (160, 90), interpolation=cv2.INTER_AREA)
                     b, g, r = small[..., 0], small[..., 1], small[..., 2]
                     luma = 0.114 * b + 0.587 * g + 0.299 * r
-                    mean_conf = float(np.mean([d.det_conf for d in detections])) if detections else 0.0
-                    frame_stats_buf.append((
-                        item.ts, item.source_name, item.frame_id,
-                        float(luma.mean()), float(r.mean()), float(g.mean()), float(b.mean()),
-                        float(luma.std()), n_detections, mean_conf,
-                    ))
+                    mean_conf = (
+                        float(np.mean([d.det_conf for d in detections])) if detections else 0.0
+                    )
+                    frame_stats_buf.append(
+                        (
+                            item.ts,
+                            item.source_name,
+                            item.frame_id,
+                            float(luma.mean()),
+                            float(r.mean()),
+                            float(g.mean()),
+                            float(b.mean()),
+                            float(luma.std()),
+                            n_detections,
+                            mean_conf,
+                        )
+                    )
                     if pg and len(frame_stats_buf) >= frame_stats_flush_threshold:
                         _flush_frame_stats()
 
@@ -423,16 +446,18 @@ def run_inference_worker(
                     for d in display
                 ]
                 try:
-                    out_queue.put_nowait(FrameOut(
-                        frame_id=item.frame_id,
-                        ts=item.ts,
-                        source_name=item.source_name,
-                        annotated_jpeg=annotated_jpeg,
-                        detections_summary=summary,
-                        infer_ms=infer_ms,
-                        n_detections=n_detections,
-                        had_fish=had_fish,
-                    ))
+                    out_queue.put_nowait(
+                        FrameOut(
+                            frame_id=item.frame_id,
+                            ts=item.ts,
+                            source_name=item.source_name,
+                            annotated_jpeg=annotated_jpeg,
+                            detections_summary=summary,
+                            infer_ms=infer_ms,
+                            n_detections=n_detections,
+                            had_fish=had_fish,
+                        )
+                    )
                 except queue.Full:
                     # Parent draining slowly — drop. Live overlay will
                     # skip a frame, persisted data is unaffected.
@@ -452,8 +477,7 @@ def run_inference_worker(
             save_worker_stop.set()
         save_thread.join(timeout=10.0)
         if save_thread.is_alive():
-            log.warning("save worker did not drain in 10s; %d job(s) lost",
-                        save_queue.qsize())
+            log.warning("save worker did not drain in 10s; %d job(s) lost", save_queue.qsize())
         try:
             _flush_frame_stats()
         except Exception:

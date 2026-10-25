@@ -16,6 +16,7 @@ dropdown by the species the reviewer is correcting toward.
 
 Run: python scripts/build_celebrities.py
 """
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,7 @@ SHEET_NAME = "Fish named by Chatters"
 
 # Reuse the dashboard's common-name lookup for binomial recovery.
 sys.path.insert(0, str(REPO_ROOT / "services" / "dashboard"))
-from app.common_names import COMMON_NAMES, _MANIFEST_NAMES  # noqa: E402
+from app.common_names import _MANIFEST_NAMES, COMMON_NAMES  # noqa: E402
 
 
 def _normalize(s: str) -> str:
@@ -42,9 +43,9 @@ def _normalize(s: str) -> str:
     if not s:
         return ""
     s = str(s)
-    s = re.sub(r"\s*\([^)]*\)", "", s)                     # drop "(...)" parentheticals
-    s = re.sub(r"#\s*\d+\s*$", "", s).strip()              # trailing "#1", "#2"
-    s = re.sub(r"\s+poss\..*$", "", s, flags=re.I).strip() # ", poss. <other>"
+    s = re.sub(r"\s*\([^)]*\)", "", s)  # drop "(...)" parentheticals
+    s = re.sub(r"#\s*\d+\s*$", "", s).strip()  # trailing "#1", "#2"
+    s = re.sub(r"\s+poss\..*$", "", s, flags=re.I).strip()  # ", poss. <other>"
     s = re.sub(r"^(large|huge|tiny|big|adult|juvi|juvenile)\s+", "", s, flags=re.I)
     s = re.sub(r"\s+", " ", s.lower()).strip()
     return s
@@ -66,7 +67,7 @@ def _build_reverse_lookup() -> dict[str, str]:
     out: dict[str, str] = {}
     for layer, overwrite_prev_layer in [
         (_MANIFEST_NAMES, False),  # written first, kept where curated is silent
-        (COMMON_NAMES,    True),   # overwrites manifest entries entirely
+        (COMMON_NAMES, True),  # overwrites manifest entries entirely
     ]:
         seen_in_layer: set[str] = set()
         # Paren-free names sort first so they win the within-layer race.
@@ -79,6 +80,7 @@ def _build_reverse_lookup() -> dict[str, str]:
             if overwrite_prev_layer or key not in out:
                 out[key] = binomial
     return out
+
 
 COMMON_TO_LATIN: dict[str, str] = _build_reverse_lookup()
 

@@ -3,6 +3,7 @@
 get "Accounts". Since 2026-09-30 the whole site is behind sign-in, so the
 chip has nothing to show a signed-out visitor. Static checks: no browser
 harness in this repo."""
+
 from __future__ import annotations
 
 import re
@@ -19,7 +20,7 @@ def _chip() -> str:
     for j in range(i, len(js)):
         depth += {"{": 1, "}": -1}.get(js[j], 0)
         if depth == 0:
-            return js[i:j + 1]
+            return js[i : j + 1]
     raise AssertionError("unbalanced braces")
 
 
@@ -32,7 +33,10 @@ def test_signed_out_the_chip_shows_nothing():
 
 def test_admins_get_a_link_to_the_accounts_page():
     body = _chip()
-    assert re.search(r'active && me\.role === "admin"\) parts\.push\(link\("/admin/users\.html", "Accounts"', body)
+    assert re.search(
+        r'active && me\.role === "admin"\) parts\.push\(link\("/admin/users\.html", "Accounts"',
+        body,
+    )
 
 
 def test_active_reviewers_and_admins_get_a_review_link_except_on_review():

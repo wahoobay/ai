@@ -35,6 +35,7 @@ Conventions:
     recipe.
   - AdamW + cosine LR with warmup. Mixed-precision (bf16 on Ampere+).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,7 +69,7 @@ RUNS_DIR = REPO_ROOT / "data" / "baseline_runs"
 class TrainConfig:
     run_id: str
     arch: str = "vit_small_patch14_dinov2"
-    img_size: int = 224         # native is 518 for DINOv2; 224 is faster + standard ViT-S
+    img_size: int = 224  # native is 518 for DINOv2; 224 is faster + standard ViT-S
     num_classes: int = 0
     batch_size: int = 32
     val_batch_size: int = 64
@@ -82,7 +83,7 @@ class TrainConfig:
     seed: int = 42
     val_split: float = 0.20
     device: str = "cuda:0"
-    amp_dtype: str = "bf16"     # bf16 needs Ampere+; falls back to fp16 elsewhere
+    amp_dtype: str = "bf16"  # bf16 needs Ampere+; falls back to fp16 elsewhere
     num_workers: int = 4
     # "stratified" = random 80/20 with class balance (frames from one video
     # leak across splits → optimistic numbers). "by_source" = 80/20 over
@@ -111,9 +112,9 @@ class CropDataset(Dataset):
         return self.transform(img), label
 
 
-def build_splits(cfg: TrainConfig) -> tuple[list[tuple[Path, int]],
-                                             list[tuple[Path, int]],
-                                             list[str]]:
+def build_splits(
+    cfg: TrainConfig,
+) -> tuple[list[tuple[Path, int]], list[tuple[Path, int]], list[str]]:
     """Discover crops on disk, build the class list, do an 80/20 split.
 
     Two split modes (selected via cfg.split_mode):
@@ -127,8 +128,9 @@ def build_splits(cfg: TrainConfig) -> tuple[list[tuple[Path, int]],
         this split they'll be entirely train OR entirely val — the
         latter become effectively zero-shot tests.
     """
-    classes = sorted(p.name for p in DATASET_DIR.iterdir()
-                     if p.is_dir() and not p.name.startswith("_"))
+    classes = sorted(
+        p.name for p in DATASET_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")
+    )
     cls_to_idx = {c: i for i, c in enumerate(classes)}
 
     samples: list[tuple[Path, int]] = []
@@ -151,11 +153,13 @@ def build_splits(cfg: TrainConfig) -> tuple[list[tuple[Path, int]],
         kind = "stratified"
 
     train = [(paths[i], int(labels[i])) for i in train_idx]
-    val   = [(paths[i], int(labels[i])) for i in val_idx]
+    val = [(paths[i], int(labels[i])) for i in val_idx]
     cls_counts = Counter(labels.tolist())
     only_one_count = sum(1 for c, n in cls_counts.items() if n == 1)
-    print(f"split[{kind}]: train={len(train)}  val={len(val)}  "
-          f"classes={len(classes)}  singletons={only_one_count}")
+    print(
+        f"split[{kind}]: train={len(train)}  val={len(val)}  "
+        f"classes={len(classes)}  singletons={only_one_count}"
+    )
     return train, val, classes
 
 
@@ -178,7 +182,9 @@ def _split_stratified(labels: np.ndarray, cfg: TrainConfig) -> tuple[np.ndarray,
 
 
 def _split_by_source(
-    paths: list[Path], labels: np.ndarray, cfg: TrainConfig,
+    paths: list[Path],
+    labels: np.ndarray,
+    cfg: TrainConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Hold out 20% of source drive_ids. All crops from a held-out source
     land in val; train sees none of those clips. The drive_id for each
@@ -197,13 +203,17 @@ def _split_by_source(
     is_val = np.array([g in val_drive_set for g in groups])
     train_idx = np.where(~is_val)[0]
     val_idx = np.where(is_val)[0]
-    print(f"  source-split: {len(unique_drives) - n_val_drives} train sources / "
-          f"{n_val_drives} val sources")
+    print(
+        f"  source-split: {len(unique_drives) - n_val_drives} train sources / "
+        f"{n_val_drives} val sources"
+    )
     return train_idx, val_idx
 
 
 def _split_temporal_within_source(
-    paths: list[Path], labels: np.ndarray, cfg: TrainConfig,
+    paths: list[Path],
+    labels: np.ndarray,
+    cfg: TrainConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Within each video source, hold out the last val_split fraction of
     frames as val. Image sources (single frame) stay in train. Same fish
@@ -224,8 +234,8 @@ def _split_temporal_within_source(
     }
 
     # Group video crops by drive_id, sorted by frame_index
-    by_drive: dict[str, list[tuple[int, int]]] = {}    # drive_id → [(frame_idx, sample_idx)]
-    image_only: list[int] = []                          # indices of image-sourced crops
+    by_drive: dict[str, list[tuple[int, int]]] = {}  # drive_id → [(frame_idx, sample_idx)]
+    image_only: list[int] = []  # indices of image-sourced crops
     for i, p in enumerate(paths):
         rec = crop_to_rec.get(p.resolve().as_posix())
         # source_kind on dataset_manifest records carries the origin prefix
@@ -245,12 +255,14 @@ def _split_temporal_within_source(
         n = len(items)
         n_val = max(1, int(round(n * cfg.val_split)))
         train_part = [s for _, s in items[: n - n_val]]
-        val_part   = [s for _, s in items[n - n_val:]]
+        val_part = [s for _, s in items[n - n_val :]]
         train_idx_list.extend(train_part)
         val_idx_list.extend(val_part)
 
-    print(f"  temporal-within-source: {len(by_drive)} videos contribute val frames; "
-          f"{len(image_only)} image-only crops stay in train")
+    print(
+        f"  temporal-within-source: {len(by_drive)} videos contribute val frames; "
+        f"{len(image_only)} image-only crops stay in train"
+    )
     return np.array(train_idx_list), np.array(val_idx_list)
 
 
@@ -265,7 +277,9 @@ def cosine_lr(epoch: int, cfg: TrainConfig) -> float:
     return cfg.lr * 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
-def mixup_pair(x: torch.Tensor, y: torch.Tensor, alpha: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+def mixup_pair(
+    x: torch.Tensor, y: torch.Tensor, alpha: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
     if alpha <= 0:
         return x, y, y, 1.0
     lam = float(np.random.beta(alpha, alpha))
@@ -273,8 +287,9 @@ def mixup_pair(x: torch.Tensor, y: torch.Tensor, alpha: float) -> tuple[torch.Te
     return x * lam + x[perm] * (1 - lam), y, y[perm], lam
 
 
-def mixup_loss(logits: torch.Tensor, y_a: torch.Tensor, y_b: torch.Tensor,
-               lam: float, smoothing: float) -> torch.Tensor:
+def mixup_loss(
+    logits: torch.Tensor, y_a: torch.Tensor, y_b: torch.Tensor, lam: float, smoothing: float
+) -> torch.Tensor:
     loss_fn = nn.CrossEntropyLoss(label_smoothing=smoothing)
     return lam * loss_fn(logits, y_a) + (1 - lam) * loss_fn(logits, y_b)
 
@@ -319,24 +334,28 @@ def train(cfg: TrainConfig) -> dict:
     cfg.num_classes = len(classes)
 
     # Augmentation. From-scratch ViTs need heavy aug to avoid collapse.
-    train_tf = transforms.Compose([
-        transforms.RandomResizedCrop(cfg.img_size, scale=(0.7, 1.0)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandAugment(num_ops=2, magnitude=9),
-        transforms.ColorJitter(0.2, 0.2, 0.2, 0.05),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.1, scale=(0.02, 0.10)),
-    ])
-    val_tf = transforms.Compose([
-        transforms.Resize(int(cfg.img_size * 1.14)),
-        transforms.CenterCrop(cfg.img_size),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    train_tf = transforms.Compose(
+        [
+            transforms.RandomResizedCrop(cfg.img_size, scale=(0.7, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandAugment(num_ops=2, magnitude=9),
+            transforms.ColorJitter(0.2, 0.2, 0.2, 0.05),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.RandomErasing(p=0.1, scale=(0.02, 0.10)),
+        ]
+    )
+    val_tf = transforms.Compose(
+        [
+            transforms.Resize(int(cfg.img_size * 1.14)),
+            transforms.CenterCrop(cfg.img_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
 
     train_ds = CropDataset(train_items, train_tf)
-    val_ds   = CropDataset(val_items, val_tf)
+    val_ds = CropDataset(val_items, val_tf)
 
     # Class-balanced sampling: weight each sample by 1/sqrt(count) so the
     # long tail isn't starved but capped-at-120 classes don't overwhelm.
@@ -344,19 +363,35 @@ def train(cfg: TrainConfig) -> dict:
     cls_count = np.bincount(train_labels, minlength=cfg.num_classes).astype(np.float64)
     cls_count = np.maximum(cls_count, 1.0)
     sample_w = (1.0 / np.sqrt(cls_count))[train_labels]
-    sampler = WeightedRandomSampler(weights=sample_w.tolist(),
-                                    num_samples=len(train_ds), replacement=True)
+    sampler = WeightedRandomSampler(
+        weights=sample_w.tolist(), num_samples=len(train_ds), replacement=True
+    )
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, sampler=sampler,
-                              num_workers=cfg.num_workers, pin_memory=True, drop_last=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg.val_batch_size, shuffle=False,
-                            num_workers=cfg.num_workers, pin_memory=True)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.batch_size,
+        sampler=sampler,
+        num_workers=cfg.num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg.val_batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=True,
+    )
 
     model = build_model(cfg).to(cfg.device)
-    optim = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
-                              weight_decay=cfg.weight_decay, betas=(0.9, 0.999))
-    amp_dtype = (torch.bfloat16 if cfg.amp_dtype == "bf16" and torch.cuda.is_bf16_supported()
-                 else torch.float16)
+    optim = torch.optim.AdamW(
+        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.999)
+    )
+    amp_dtype = (
+        torch.bfloat16
+        if cfg.amp_dtype == "bf16" and torch.cuda.is_bf16_supported()
+        else torch.float16
+    )
 
     # Save config + class list up front so partial runs are inspectable.
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
@@ -408,7 +443,9 @@ def train(cfg: TrainConfig) -> dict:
             preds = logits.argmax(axis=1)
             top1 = float((preds == labels).mean())
             try:
-                top5 = float(top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes))))
+                top5 = float(
+                    top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes)))
+                )
             except ValueError:
                 top5 = float("nan")
             macro_f1 = float(f1_score(labels, preds, average="macro", zero_division=0))
@@ -417,33 +454,46 @@ def train(cfg: TrainConfig) -> dict:
 
         elapsed = time.monotonic() - t0
         row = {
-            "epoch": epoch, "train_loss": round(train_loss, 4),
+            "epoch": epoch,
+            "train_loss": round(train_loss, 4),
             "val_loss": round(val_loss, 4),
-            "val_top1": round(top1, 4), "val_top5": round(top5, 4),
+            "val_top1": round(top1, 4),
+            "val_top5": round(top5, 4),
             "val_macro_f1": round(macro_f1, 4),
             "lr": round(optim.param_groups[0]["lr"], 6),
             "elapsed_s": round(elapsed, 1),
         }
         history.append(row)
-        print(f"  ep{epoch:02d}  loss={train_loss:.3f}/{val_loss:.3f}  "
-              f"top1={top1:.3f}  top5={top5:.3f}  macroF1={macro_f1:.3f}  "
-              f"lr={row['lr']:.4f}  elapsed={elapsed:.0f}s")
+        print(
+            f"  ep{epoch:02d}  loss={train_loss:.3f}/{val_loss:.3f}  "
+            f"top1={top1:.3f}  top5={top5:.3f}  macroF1={macro_f1:.3f}  "
+            f"lr={row['lr']:.4f}  elapsed={elapsed:.0f}s"
+        )
 
         # Checkpoint best + last
-        torch.save({"model": model.state_dict(), "cfg": asdict(cfg),
-                    "classes": classes, "epoch": epoch}, run_dir / "checkpoint_last.pt")
+        torch.save(
+            {"model": model.state_dict(), "cfg": asdict(cfg), "classes": classes, "epoch": epoch},
+            run_dir / "checkpoint_last.pt",
+        )
         if macro_f1 > best_f1:
             best_f1 = macro_f1
-            torch.save({"model": model.state_dict(), "cfg": asdict(cfg),
-                        "classes": classes, "epoch": epoch,
-                        "val_macro_f1": macro_f1},
-                       run_dir / "checkpoint_best.pt")
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "cfg": asdict(cfg),
+                    "classes": classes,
+                    "epoch": epoch,
+                    "val_macro_f1": macro_f1,
+                },
+                run_dir / "checkpoint_best.pt",
+            )
 
         (run_dir / "train_history.json").write_text(json.dumps(history, indent=2))
 
     # Final eval: load best, dump per-class classification report
-    best_ckpt = torch.load(run_dir / "checkpoint_best.pt", map_location=cfg.device,
-                          weights_only=False)
+    best_ckpt = torch.load(
+        run_dir / "checkpoint_best.pt", map_location=cfg.device, weights_only=False
+    )
     model.load_state_dict(best_ckpt["model"])
     model.eval()
     final_logits: list[np.ndarray] = []
@@ -461,21 +511,28 @@ def train(cfg: TrainConfig) -> dict:
         labels = np.concatenate(final_labels)
         logits = np.concatenate(final_logits)
         preds = logits.argmax(axis=1)
-        metrics.update({
-            "val_top1": float((preds == labels).mean()),
-            "val_macro_f1": float(f1_score(labels, preds, average="macro", zero_division=0)),
-            "val_weighted_f1": float(f1_score(labels, preds, average="weighted", zero_division=0)),
-        })
+        metrics.update(
+            {
+                "val_top1": float((preds == labels).mean()),
+                "val_macro_f1": float(f1_score(labels, preds, average="macro", zero_division=0)),
+                "val_weighted_f1": float(
+                    f1_score(labels, preds, average="weighted", zero_division=0)
+                ),
+            }
+        )
         try:
-            metrics["val_top5"] = float(top_k_accuracy_score(
-                labels, logits, k=5, labels=list(range(cfg.num_classes))))
+            metrics["val_top5"] = float(
+                top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes)))
+            )
         except ValueError:
             pass
         report = classification_report(
-            labels, preds,
+            labels,
+            preds,
             labels=list(range(cfg.num_classes)),
             target_names=classes,
-            digits=3, zero_division=0,
+            digits=3,
+            zero_division=0,
         )
         (run_dir / "classification_report.txt").write_text(report)
 
@@ -496,16 +553,18 @@ def main() -> None:
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--smoke", action="store_true", help="run 3 epochs as a sanity check")
-    ap.add_argument("--split-mode",
-                    choices=("stratified", "by_source", "temporal_within_source"),
-                    default="stratified",
-                    help="stratified: random 80/20 with class balance "
-                         "(frame-level leakage → optimistic). "
-                         "by_source: 80/20 over source drive_ids; brutally "
-                         "honest but mostly zero-shot given our dataset. "
-                         "temporal_within_source: hold out the last 20% of "
-                         "frames from each video clip — same fish, different "
-                         "temporal segment, tests within-clip generalisation.")
+    ap.add_argument(
+        "--split-mode",
+        choices=("stratified", "by_source", "temporal_within_source"),
+        default="stratified",
+        help="stratified: random 80/20 with class balance "
+        "(frame-level leakage → optimistic). "
+        "by_source: 80/20 over source drive_ids; brutally "
+        "honest but mostly zero-shot given our dataset. "
+        "temporal_within_source: hold out the last 20% of "
+        "frames from each video clip — same fish, different "
+        "temporal segment, tests within-clip generalisation.",
+    )
     args = ap.parse_args()
 
     cfg = TrainConfig(

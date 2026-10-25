@@ -3,6 +3,7 @@
 Every state change writes a user_audit row. Without it, "who made this
 person an admin" has no answer, which is the question you only ask after
 something has already gone wrong."""
+
 from __future__ import annotations
 
 import asyncio
@@ -87,10 +88,14 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
     @router.get("/admin/users.html", response_class=HTMLResponse)
     async def users_page(request: Request, user=Depends(admin_only)):
         version = state.get("asset_version")
-        return templates.TemplateResponse(request, "users_admin.html", {
-            "me": user.username,
-            "asset_version": version() if version else "",
-        })
+        return templates.TemplateResponse(
+            request,
+            "users_admin.html",
+            {
+                "me": user.username,
+                "asset_version": version() if version else "",
+            },
+        )
 
     @router.get("/api/admin/users")
     async def list_users(status: str | None = None, user=Depends(admin_only)):
@@ -124,9 +129,14 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
                     """INSERT INTO users (username, display_name, email, password_hash,
                                           role, status, approved_at, approved_by)
                        VALUES (%s,%s,%s,%s,%s,'active',NOW(),%s) RETURNING id""",
-                    (body.username.strip().lower(), body.display_name.strip(),
-                     body.email.strip().lower(), password_hash,
-                     body.role, user.id),
+                    (
+                        body.username.strip().lower(),
+                        body.display_name.strip(),
+                        body.email.strip().lower(),
+                        password_hash,
+                        body.role,
+                        user.id,
+                    ),
                 )
                 new_id = (await cur.fetchone())[0]
                 await _audit(conn, user.id, "user.create", new_id, {"role": body.role})
@@ -135,8 +145,7 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
             # caller is an authenticated admin who can already list every
             # user, so a clear message is strictly more useful than an
             # enumeration-safe generic one.
-            return JSONResponse(
-                {"error": "username or email already exists"}, status_code=400)
+            return JSONResponse({"error": "username or email already exists"}, status_code=400)
         return JSONResponse({"id": new_id})
 
     @router.post("/api/admin/users/{user_id}/approve", dependencies=[Depends(require_csrf)])
@@ -152,8 +161,7 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
             )
             row = await cur.fetchone()
             if row is None:
-                return JSONResponse({"error": "no pending user with that id"},
-                                    status_code=404)
+                return JSONResponse({"error": "no pending user with that id"}, status_code=404)
             await _audit(conn, user.id, "user.approve", user_id, {"role": body.role})
         log.info("admin: user id=%s approved as %s by id=%s", user_id, body.role, user.id)
         # Tell them they're in (owner's request 2026-10-01). Off the event
@@ -171,8 +179,8 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
             return JSONResponse({"error": "unknown role"}, status_code=400)
         async with _pool().connection() as conn:
             cur = await conn.execute(
-                "UPDATE users SET role = %s WHERE id = %s RETURNING id",
-                (body.role, user_id))
+                "UPDATE users SET role = %s WHERE id = %s RETURNING id", (body.role, user_id)
+            )
             if await cur.fetchone() is None:
                 return JSONResponse({"error": "no user with that id"}, status_code=404)
             await _audit(conn, user.id, "user.role_change", user_id, {"role": body.role})
@@ -181,17 +189,20 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
     @router.post("/api/admin/users/{user_id}/deactivate", dependencies=[Depends(require_csrf)])
     async def deactivate(user_id: int, user=Depends(admin_only)):
         if user_id == user.id:
-            return JSONResponse({"error": "you cannot deactivate your own account"},
-                                status_code=400)
+            return JSONResponse(
+                {"error": "you cannot deactivate your own account"}, status_code=400
+            )
         async with _pool().connection() as conn:
             cur = await conn.execute(
-                "UPDATE users SET status = 'disabled' WHERE id = %s RETURNING id",
-                (user_id,))
+                "UPDATE users SET status = 'disabled' WHERE id = %s RETURNING id", (user_id,)
+            )
             if await cur.fetchone() is None:
                 return JSONResponse({"error": "no user with that id"}, status_code=404)
             await conn.execute(
                 "UPDATE user_sessions SET revoked_at = NOW() "
-                "WHERE user_id = %s AND revoked_at IS NULL", (user_id,))
+                "WHERE user_id = %s AND revoked_at IS NULL",
+                (user_id,),
+            )
             await _audit(conn, user.id, "user.deactivate", user_id, None)
         return JSONResponse({"ok": True})
 
@@ -204,11 +215,11 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
                               s.expires_at, s.revoked_at, s.user_agent, s.ip
                          FROM user_sessions s JOIN users u ON u.id = s.user_id
                         WHERE s.revoked_at IS NULL AND s.expires_at > NOW()
-                        ORDER BY s.last_seen_at DESC LIMIT 200""")
+                        ORDER BY s.last_seen_at DESC LIMIT 200"""
+                )
                 return JSONResponse(_jsonable_rows(await cur.fetchall()))
 
-    @router.post("/api/admin/sessions/{session_id}/revoke",
-                 dependencies=[Depends(require_csrf)])
+    @router.post("/api/admin/sessions/{session_id}/revoke", dependencies=[Depends(require_csrf)])
     async def revoke(session_id: int, user=Depends(admin_only)):
         # One connection/transaction for both the revoke and its audit
         # row, same race-safe UPDATE...RETURNING pattern as the other
@@ -221,10 +232,10 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
             cur = await conn.execute(
                 "UPDATE user_sessions SET revoked_at = NOW() "
                 "WHERE id = %s AND revoked_at IS NULL RETURNING id",
-                (session_id,))
+                (session_id,),
+            )
             if await cur.fetchone() is None:
-                return JSONResponse({"error": "no active session with that id"},
-                                    status_code=404)
+                return JSONResponse({"error": "no active session with that id"}, status_code=404)
             await _audit(conn, user.id, "session.revoke", None, {"session_id": session_id})
         return JSONResponse({"ok": True})
 
@@ -254,7 +265,8 @@ def build_admin_users_router(cfg, state, templates) -> APIRouter:
         # both redeemable at once.
         await invalidate_tokens(pool, user_id, "password_reset")
         token = await create_user_token(
-            pool, user_id, "password_reset", cfg.reset_ttl_min, _client_ip(request))
+            pool, user_id, "password_reset", cfg.reset_ttl_min, _client_ip(request)
+        )
         link = f"{cfg.public_base_url.rstrip('/')}/reset-password?token={token}"
 
         async with pool.connection() as conn:

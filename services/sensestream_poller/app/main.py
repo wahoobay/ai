@@ -41,6 +41,7 @@ Sonde parameter mapping (wahoo_2 EXO2):
     sPCond             -> spcond_ms_cm
     (NO3-N nitrate sensor was removed from the sonde 2026-05.)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,6 +76,7 @@ try:
         sys.path.insert(0, str(_REPO_ROOT / "scripts"))
     import gen_synthetic_sensor_data as _synth  # type: ignore
     import numpy as _np  # type: ignore
+
     _SYNTH_OK = True
 except Exception as _e:  # pragma: no cover
     log.warning("synthetic stub-mode generator unavailable: %s", _e)
@@ -99,22 +101,22 @@ def _int(key: str, default: int) -> int:
 @dataclass(frozen=True)
 class Config:
     base_url: str
-    auth_token: str                           # optional; legacy direct-SenseStream path uses this
-    deployment_uri: str                       # sonde deployment URI (defaults to wahoo_2; used as DB tag)
-    weather_deployment_uri: str               # weather-station deployment URI (defaults to wahoo_1)
+    auth_token: str  # optional; legacy direct-SenseStream path uses this
+    deployment_uri: str  # sonde deployment URI (defaults to wahoo_2; used as DB tag)
+    weather_deployment_uri: str  # weather-station deployment URI (defaults to wahoo_1)
     poll_interval_s: int
-    backfill_minutes: int                     # window to fetch each poll (overlap tolerated; UNIQUE prevents dupes)
-    initial_backfill_days: int                # one-shot historical window on first tick
-    source_tag: str                           # value written to *_readings.source for live data
-    measurements_path_template: str           # supports {uri} — legacy direct-SenseStream path
-    wahoobay_api_url: str                     # base URL for the public Wahoo Bay API
-    wahoobay_site_sonde: int                  # /api/v1/sitedata site id for the EXO2 sonde
-    wahoobay_site_weather: int                # /api/v1/sitedata site id for the weather station
+    backfill_minutes: int  # window to fetch each poll (overlap tolerated; UNIQUE prevents dupes)
+    initial_backfill_days: int  # one-shot historical window on first tick
+    source_tag: str  # value written to *_readings.source for live data
+    measurements_path_template: str  # supports {uri} — legacy direct-SenseStream path
+    wahoobay_api_url: str  # base URL for the public Wahoo Bay API
+    wahoobay_site_sonde: int  # /api/v1/sitedata site id for the EXO2 sonde
+    wahoobay_site_weather: int  # /api/v1/sitedata site id for the weather station
     wahoobay_enabled: bool
-    open_meteo_url: str                       # base URL for Open-Meteo forecast layer
-    nws_metar_station: str                    # ICAO station id for NWS text observations
-    nws_user_agent: str                       # required by api.weather.gov (rejects empty UAs)
-    site_latitude: float                      # Wahoo Bay location for Open-Meteo / NWS lookups
+    open_meteo_url: str  # base URL for Open-Meteo forecast layer
+    nws_metar_station: str  # ICAO station id for NWS text observations
+    nws_user_agent: str  # required by api.weather.gov (rejects empty UAs)
+    site_latitude: float  # Wahoo Bay location for Open-Meteo / NWS lookups
     site_longitude: float
     database_url: str
     http_host: str
@@ -144,7 +146,8 @@ class Config:
             wahoobay_api_url=_env("WAHOOBAY_API_URL", "https://api.wahoobay.net").rstrip("/"),
             wahoobay_site_sonde=_int("WAHOOBAY_SITE_SONDE", 3),
             wahoobay_site_weather=_int("WAHOOBAY_SITE_WEATHER", 1),
-            wahoobay_enabled=_env("WAHOOBAY_API_ENABLED", "1").lower() not in ("0", "false", "no", ""),
+            wahoobay_enabled=_env("WAHOOBAY_API_ENABLED", "1").lower()
+            not in ("0", "false", "no", ""),
             open_meteo_url=_env("OPEN_METEO_URL", "https://api.open-meteo.com").rstrip("/"),
             nws_metar_station=_env("NWS_METAR_STATION", "KPMP"),
             nws_user_agent=_env("NWS_USER_AGENT", "wahoobay-dashboard (scoopnisker@gmail.com)"),
@@ -169,15 +172,15 @@ class Config:
 # best understand them; values are our column names.
 CHANNEL_TO_COLUMN = {
     "water temperature": "water_temp_c",
-    "ph":                "ph",
-    "do":                "do_pct",
+    "ph": "ph",
+    "do": "do_pct",
     "chlorophyll (rfu)": "chlorophyll_rfu",
-    "chlorophyll":       "chlorophyll_rfu",
+    "chlorophyll": "chlorophyll_rfu",
     "phycoerythrin (rfu)": "phycoerythrin_rfu",
-    "phycoerythrin":     "phycoerythrin_rfu",
-    "turbidity (fnu)":   "turbidity_fnu",
-    "turbidity":         "turbidity_fnu",
-    "spcond":            "spcond_ms_cm",
+    "phycoerythrin": "phycoerythrin_rfu",
+    "turbidity (fnu)": "turbidity_fnu",
+    "turbidity": "turbidity_fnu",
+    "spcond": "spcond_ms_cm",
     "specific conductance": "spcond_ms_cm",
     # NO3-N nitrate sensor was removed from the sonde 2026-05; if a
     # future feed re-includes it, restore the mapping here.
@@ -185,8 +188,13 @@ CHANNEL_TO_COLUMN = {
 
 
 COLUMNS_ORDER = (
-    "water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
-    "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm",
+    "water_temp_c",
+    "ph",
+    "do_pct",
+    "chlorophyll_rfu",
+    "phycoerythrin_rfu",
+    "turbidity_fnu",
+    "spcond_ms_cm",
 )
 
 
@@ -361,13 +369,13 @@ def parse_wahoobay_sonde(payload: Any) -> list[tuple[datetime, dict]]:
     rows: list[tuple[datetime, dict]] = []
     for ts, r in _parse_readings_payload(payload):
         values = {
-            "water_temp_c":       _get(r, 0),
-            "ph":                 _get(r, 1),
-            "do_pct":             _get(r, 2),
-            "chlorophyll_rfu":    _get(r, 3),
-            "phycoerythrin_rfu":  _get(r, 4),
-            "turbidity_fnu":      _get(r, 5),
-            "spcond_ms_cm":       _get(r, 7),
+            "water_temp_c": _get(r, 0),
+            "ph": _get(r, 1),
+            "do_pct": _get(r, 2),
+            "chlorophyll_rfu": _get(r, 3),
+            "phycoerythrin_rfu": _get(r, 4),
+            "turbidity_fnu": _get(r, 5),
+            "spcond_ms_cm": _get(r, 7),
         }
         # Drop entirely-empty rows (sensor offline / payload junk).
         if any(v is not None for v in values.values()):
@@ -409,25 +417,27 @@ def parse_wahoobay_weather_station(payload: Any) -> list[tuple[datetime, dict]]:
         water_level_raw = _get(r, 18)
         solar_raw = _get(r, 19)
         values = {
-            "bar_press_hpa":       _get(r, 0),
-            "wind_dir_min_deg":    _get(r, 1),
-            "wind_dir_avg_deg":    _get(r, 2),
-            "wind_dir_max_deg":    _get(r, 3),
-            "wind_speed_min_ms":   _get(r, 4),
-            "wind_speed_avg_ms":   _get(r, 5),
-            "wind_speed_max_ms":   _get(r, 6),
-            "air_temp_c":          _get(r, 7),
-            "rel_humidity_pct":    _get(r, 9),
-            "rain_accum_mm":       _get(r, 10),
-            "rain_dur_frac_hr":    (rain_dur_raw / 3600.0) if rain_dur_raw is not None else None,
-            "rain_int_mm_hr":      _get(r, 12),
-            "hail_accum":          _get(r, 13),
-            "hail_dur":            (hail_dur_raw / 3600.0) if hail_dur_raw is not None else None,
-            "hail_int":            _get(r, 15),
+            "bar_press_hpa": _get(r, 0),
+            "wind_dir_min_deg": _get(r, 1),
+            "wind_dir_avg_deg": _get(r, 2),
+            "wind_dir_max_deg": _get(r, 3),
+            "wind_speed_min_ms": _get(r, 4),
+            "wind_speed_avg_ms": _get(r, 5),
+            "wind_speed_max_ms": _get(r, 6),
+            "air_temp_c": _get(r, 7),
+            "rel_humidity_pct": _get(r, 9),
+            "rain_accum_mm": _get(r, 10),
+            "rain_dur_frac_hr": (rain_dur_raw / 3600.0) if rain_dur_raw is not None else None,
+            "rain_int_mm_hr": _get(r, 12),
+            "hail_accum": _get(r, 13),
+            "hail_dur": (hail_dur_raw / 3600.0) if hail_dur_raw is not None else None,
+            "hail_int": _get(r, 15),
             "rain_peak_int_mm_hr": _get(r, 16),
-            "hail_peak_int":       _get(r, 17),
-            "water_level_mm":      (1024.0 * 10.0 * water_level_raw / 3.3) if water_level_raw is not None else None,
-            "solar_rad_wm2":       (solar_raw * 566.25) if solar_raw is not None else None,
+            "hail_peak_int": _get(r, 17),
+            "water_level_mm": (1024.0 * 10.0 * water_level_raw / 3.3)
+            if water_level_raw is not None
+            else None,
+            "solar_rad_wm2": (solar_raw * 566.25) if solar_raw is not None else None,
         }
         if any(v is not None for v in values.values()):
             rows.append((ts, values))
@@ -458,16 +468,16 @@ def parse_wahoobay_forecast(payload: Any) -> list[tuple[datetime, dict]]:
     for ts, r in _parse_readings_payload(payload):
         wc_raw = _get(r, 10)
         values = {
-            "cloud_cover_pct":        _get(r, 0),
-            "dew_point_c":            _get(r, 1),
-            "forecast_humidity_pct":  _get(r, 2),
+            "cloud_cover_pct": _get(r, 0),
+            "dew_point_c": _get(r, 1),
+            "forecast_humidity_pct": _get(r, 2),
             "precip_intensity_mm_hr": _get(r, 3),
-            "precip_prob_pct":        _get(r, 4),
-            "press_sea_level_hpa":    _get(r, 5),
-            "press_surface_hpa":      _get(r, 6),
-            "temp_apparent_c":        _get(r, 8),
-            "uv_index":               _get(r, 9),
-            "weather_code":           int(wc_raw) if wc_raw is not None else None,
+            "precip_prob_pct": _get(r, 4),
+            "press_sea_level_hpa": _get(r, 5),
+            "press_surface_hpa": _get(r, 6),
+            "temp_apparent_c": _get(r, 8),
+            "uv_index": _get(r, 9),
+            "weather_code": int(wc_raw) if wc_raw is not None else None,
         }
         if any(v is not None for v in values.values()):
             rows.append((ts, values))
@@ -521,8 +531,11 @@ class Poller:
             primary = "synthetic(stub)"
         log.info(
             "poller starting: primary=%s sonde=%s weather=%s interval=%ss backfill=%dd/%dmin",
-            primary, self.cfg.deployment_uri, self.cfg.weather_deployment_uri,
-            self.cfg.poll_interval_s, self.cfg.initial_backfill_days,
+            primary,
+            self.cfg.deployment_uri,
+            self.cfg.weather_deployment_uri,
+            self.cfg.poll_interval_s,
+            self.cfg.initial_backfill_days,
             self.cfg.backfill_minutes,
         )
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
@@ -546,12 +559,10 @@ class Poller:
     async def _tick(self, client: httpx.AsyncClient) -> None:
         cfg = self.cfg
         end = datetime.now(UTC).replace(microsecond=0, second=0)
-        first_run = (
-            self.stats.total_inserted == 0
-            and self.stats.weather_inserted_total == 0
-        )
+        first_run = self.stats.total_inserted == 0 and self.stats.weather_inserted_total == 0
         start = end - (
-            timedelta(days=cfg.initial_backfill_days) if first_run
+            timedelta(days=cfg.initial_backfill_days)
+            if first_run
             else timedelta(minutes=cfg.backfill_minutes)
         )
 
@@ -639,9 +650,13 @@ class Poller:
                 self.stats.total_inserted += inserted
                 if inserted:
                     self.stats.last_insert_at = datetime.now(UTC)
-                log.info("sensestream-direct sonde: %d row(s), %d inserted (%s..%s)",
-                         len(rows), inserted, start.isoformat(timespec="minutes"),
-                         end.isoformat(timespec="minutes"))
+                log.info(
+                    "sensestream-direct sonde: %d row(s), %d inserted (%s..%s)",
+                    len(rows),
+                    inserted,
+                    start.isoformat(timespec="minutes"),
+                    end.isoformat(timespec="minutes"),
+                )
             else:
                 log.warning("sensestream-direct sonde HTTP %s", r.status_code)
         except Exception as e:
@@ -689,9 +704,14 @@ class Poller:
 
         # Sonde (wahoo_2) → sensor_readings
         try:
-            r = await client.get(f"{base}/api/v1/sitedata", params={
-                "site": cfg.wahoobay_site_sonde, "start": start_ms, "end": end_ms,
-            })
+            r = await client.get(
+                f"{base}/api/v1/sitedata",
+                params={
+                    "site": cfg.wahoobay_site_sonde,
+                    "start": start_ms,
+                    "end": end_ms,
+                },
+            )
             if r.status_code == 200:
                 rows = parse_wahoobay_sonde(r.json())
                 inserted = self._upsert(rows, source=cfg.source_tag, uri=cfg.deployment_uri)
@@ -699,9 +719,13 @@ class Poller:
                 self.stats.total_inserted += inserted
                 if inserted:
                     self.stats.last_insert_at = datetime.now(UTC)
-                log.info("wahoobay sonde: %d row(s), %d inserted (%s..%s)",
-                         len(rows), inserted, start.isoformat(timespec="minutes"),
-                         end.isoformat(timespec="minutes"))
+                log.info(
+                    "wahoobay sonde: %d row(s), %d inserted (%s..%s)",
+                    len(rows),
+                    inserted,
+                    start.isoformat(timespec="minutes"),
+                    end.isoformat(timespec="minutes"),
+                )
                 self.stats.wahoobay_last_ok_at = datetime.now(UTC)
             else:
                 self.stats.wahoobay_last_error = f"sonde HTTP {r.status_code}"
@@ -713,9 +737,14 @@ class Poller:
         # Weather station (wahoo_1) — returned, not upserted yet
         station_rows: list[tuple[datetime, dict]] = []
         try:
-            r = await client.get(f"{base}/api/v1/sitedata", params={
-                "site": cfg.wahoobay_site_weather, "start": start_ms, "end": end_ms,
-            })
+            r = await client.get(
+                f"{base}/api/v1/sitedata",
+                params={
+                    "site": cfg.wahoobay_site_weather,
+                    "start": start_ms,
+                    "end": end_ms,
+                },
+            )
             if r.status_code == 200:
                 station_rows = parse_wahoobay_weather_station(r.json())
                 self.stats.wahoobay_last_ok_at = datetime.now(UTC)
@@ -759,12 +788,20 @@ class Poller:
                     "longitude": cfg.site_longitude,
                     "past_days": days_back,
                     "forecast_days": 1,
-                    "hourly": ",".join((
-                        "cloud_cover", "weather_code", "apparent_temperature",
-                        "dew_point_2m", "precipitation",
-                        "precipitation_probability", "pressure_msl",
-                        "surface_pressure", "uv_index", "relative_humidity_2m",
-                    )),
+                    "hourly": ",".join(
+                        (
+                            "cloud_cover",
+                            "weather_code",
+                            "apparent_temperature",
+                            "dew_point_2m",
+                            "precipitation",
+                            "precipitation_probability",
+                            "pressure_msl",
+                            "surface_pressure",
+                            "uv_index",
+                            "relative_humidity_2m",
+                        )
+                    ),
                     "timezone": "UTC",
                 },
             )
@@ -794,16 +831,16 @@ class Poller:
                 continue
             wc = _get(hourly.get("weather_code") or [], i)
             values = {
-                "cloud_cover_pct":        _get(hourly.get("cloud_cover") or [], i),
-                "dew_point_c":            _get(hourly.get("dew_point_2m") or [], i),
-                "forecast_humidity_pct":  _get(hourly.get("relative_humidity_2m") or [], i),
+                "cloud_cover_pct": _get(hourly.get("cloud_cover") or [], i),
+                "dew_point_c": _get(hourly.get("dew_point_2m") or [], i),
+                "forecast_humidity_pct": _get(hourly.get("relative_humidity_2m") or [], i),
                 "precip_intensity_mm_hr": _get(hourly.get("precipitation") or [], i),
-                "precip_prob_pct":        _get(hourly.get("precipitation_probability") or [], i),
-                "press_sea_level_hpa":    _get(hourly.get("pressure_msl") or [], i),
-                "press_surface_hpa":      _get(hourly.get("surface_pressure") or [], i),
-                "temp_apparent_c":        _get(hourly.get("apparent_temperature") or [], i),
-                "uv_index":               _get(hourly.get("uv_index") or [], i),
-                "weather_code":           int(wc) if wc is not None else None,
+                "precip_prob_pct": _get(hourly.get("precipitation_probability") or [], i),
+                "press_sea_level_hpa": _get(hourly.get("pressure_msl") or [], i),
+                "press_surface_hpa": _get(hourly.get("surface_pressure") or [], i),
+                "temp_apparent_c": _get(hourly.get("apparent_temperature") or [], i),
+                "uv_index": _get(hourly.get("uv_index") or [], i),
+                "weather_code": int(wc) if wc is not None else None,
             }
             if any(v is not None for v in values.values()):
                 rows.append((ts, values))
@@ -878,14 +915,19 @@ class Poller:
             merged[nearest_idx][1]["weather_description"] = desc
         if not merged:
             return
-        inserted = self._upsert_weather(merged, source=cfg.source_tag,
-                                        uri=cfg.weather_deployment_uri)
+        inserted = self._upsert_weather(
+            merged, source=cfg.source_tag, uri=cfg.weather_deployment_uri
+        )
         self.stats.weather_inserted_total += inserted
         if inserted:
             self.stats.last_weather_insert_at = datetime.now(UTC)
-        log.info("forecast layer: station=%d open-meteo=%d nws=%s upserted=%d",
-                 len(station_rows), len(forecast_rows),
-                 "ok" if metar else "—", inserted)
+        log.info(
+            "forecast layer: station=%d open-meteo=%d nws=%s upserted=%d",
+            len(station_rows),
+            len(forecast_rows),
+            "ok" if metar else "—",
+            inserted,
+        )
 
     @staticmethod
     def _merge_weather_rows(
@@ -932,7 +974,9 @@ class Poller:
                 cand_idx.append(i)
             if not cand_idx:
                 continue
-            nearest_idx = min(cand_idx, key=lambda j: abs((s_ts - forecast_keys[j]).total_seconds()))
+            nearest_idx = min(
+                cand_idx, key=lambda j: abs((s_ts - forecast_keys[j]).total_seconds())
+            )
             if abs((s_ts - forecast_keys[nearest_idx]).total_seconds()) <= snap_seconds:
                 for k, v in forecast_vals[nearest_idx].items():
                     if v is not None:
@@ -977,10 +1021,19 @@ class Poller:
         if arrays is not None:
             n = len(arrays["ts"])
             rows: list[tuple[datetime, dict]] = []
-            keys = ("water_temp_c", "ph", "do_pct", "chlorophyll_rfu",
-                    "phycoerythrin_rfu", "turbidity_fnu", "spcond_ms_cm")
+            keys = (
+                "water_temp_c",
+                "ph",
+                "do_pct",
+                "chlorophyll_rfu",
+                "phycoerythrin_rfu",
+                "turbidity_fnu",
+                "spcond_ms_cm",
+            )
             for i in range(n):
-                t = datetime.utcfromtimestamp(int(arrays["ts"][i].astype("int64"))).replace(tzinfo=UTC)
+                t = datetime.utcfromtimestamp(int(arrays["ts"][i].astype("int64"))).replace(
+                    tzinfo=UTC
+                )
                 rows.append((t, {k: float(arrays[k][i]) for k in keys}))
             try:
                 inserted = self._upsert(rows, source="synthetic")
@@ -990,8 +1043,13 @@ class Poller:
             self.stats.total_inserted += inserted
             if inserted:
                 self.stats.last_insert_at = datetime.now(UTC)
-            log.info("synthetic stub (sonde): upserted %d row(s) over %d %s window (total=%d)",
-                     inserted, days_or_hours[0], days_or_hours[1], self.stats.total_inserted)
+            log.info(
+                "synthetic stub (sonde): upserted %d row(s) over %d %s window (total=%d)",
+                inserted,
+                days_or_hours[0],
+                days_or_hours[1],
+                self.stats.total_inserted,
+            )
 
         # ---- weather readings ----
         if not hasattr(_synth, "synthesize_weather"):
@@ -1004,18 +1062,39 @@ class Poller:
         w_n = len(w_arrays["ts"])
         w_rows: list[tuple[datetime, dict]] = []
         w_keys = (
-            "bar_press_hpa", "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
-            "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
-            "air_temp_c", "rel_humidity_pct",
-            "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
-            "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
-            "water_level_mm", "solar_rad_wm2",
-            "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
-            "precip_intensity_mm_hr", "precip_prob_pct",
-            "press_sea_level_hpa", "press_surface_hpa", "temp_apparent_c", "uv_index",
+            "bar_press_hpa",
+            "wind_dir_avg_deg",
+            "wind_dir_min_deg",
+            "wind_dir_max_deg",
+            "wind_speed_avg_ms",
+            "wind_speed_min_ms",
+            "wind_speed_max_ms",
+            "air_temp_c",
+            "rel_humidity_pct",
+            "rain_accum_mm",
+            "rain_dur_frac_hr",
+            "rain_int_mm_hr",
+            "rain_peak_int_mm_hr",
+            "hail_accum",
+            "hail_dur",
+            "hail_int",
+            "hail_peak_int",
+            "water_level_mm",
+            "solar_rad_wm2",
+            "cloud_cover_pct",
+            "dew_point_c",
+            "forecast_humidity_pct",
+            "precip_intensity_mm_hr",
+            "precip_prob_pct",
+            "press_sea_level_hpa",
+            "press_surface_hpa",
+            "temp_apparent_c",
+            "uv_index",
         )
         for i in range(w_n):
-            t = datetime.utcfromtimestamp(int(w_arrays["ts"][i].astype("int64"))).replace(tzinfo=UTC)
+            t = datetime.utcfromtimestamp(int(w_arrays["ts"][i].astype("int64"))).replace(
+                tzinfo=UTC
+            )
             vals: dict = {k: float(w_arrays[k][i]) for k in w_keys}
             vals["weather_code"] = int(w_arrays["weather_code"][i])
             w_rows.append((t, vals))
@@ -1027,8 +1106,11 @@ class Poller:
         self.stats.weather_inserted_total += w_inserted
         if w_inserted:
             self.stats.last_weather_insert_at = datetime.now(UTC)
-        log.info("synthetic stub (weather): upserted %d row(s) (total=%d)",
-                 w_inserted, self.stats.weather_inserted_total)
+        log.info(
+            "synthetic stub (weather): upserted %d row(s) (total=%d)",
+            w_inserted,
+            self.stats.weather_inserted_total,
+        )
 
     async def _probe_deployment(self, client: httpx.AsyncClient) -> None:
         url = f"{self.cfg.base_url}/manager/deployments/by-uri/{self.cfg.deployment_uri}"
@@ -1094,17 +1176,20 @@ class Poller:
         deploy_uri = uri if uri is not None else cfg.deployment_uri
         payload = []
         for ts, values in rows:
-            payload.append((
-                ts, deploy_uri,
-                values.get("water_temp_c"),
-                values.get("ph"),
-                values.get("do_pct"),
-                values.get("chlorophyll_rfu"),
-                values.get("phycoerythrin_rfu"),
-                values.get("turbidity_fnu"),
-                values.get("spcond_ms_cm"),
-                src,
-            ))
+            payload.append(
+                (
+                    ts,
+                    deploy_uri,
+                    values.get("water_temp_c"),
+                    values.get("ph"),
+                    values.get("do_pct"),
+                    values.get("chlorophyll_rfu"),
+                    values.get("phycoerythrin_rfu"),
+                    values.get("turbidity_fnu"),
+                    values.get("spcond_ms_cm"),
+                    src,
+                )
+            )
         if not payload:
             return 0
         with psycopg.connect(cfg.database_url) as conn, conn.cursor() as cur:
@@ -1125,16 +1210,34 @@ class Poller:
     # Column order in the INSERT must match this tuple exactly.
     _WEATHER_INSERT_COLS = (
         "bar_press_hpa",
-        "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
-        "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
-        "air_temp_c", "rel_humidity_pct",
-        "rain_accum_mm", "rain_dur_frac_hr", "rain_int_mm_hr", "rain_peak_int_mm_hr",
-        "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
-        "water_level_mm", "solar_rad_wm2",
-        "cloud_cover_pct", "dew_point_c", "forecast_humidity_pct",
-        "precip_intensity_mm_hr", "precip_prob_pct",
-        "press_sea_level_hpa", "press_surface_hpa",
-        "temp_apparent_c", "uv_index", "weather_code",
+        "wind_dir_avg_deg",
+        "wind_dir_min_deg",
+        "wind_dir_max_deg",
+        "wind_speed_avg_ms",
+        "wind_speed_min_ms",
+        "wind_speed_max_ms",
+        "air_temp_c",
+        "rel_humidity_pct",
+        "rain_accum_mm",
+        "rain_dur_frac_hr",
+        "rain_int_mm_hr",
+        "rain_peak_int_mm_hr",
+        "hail_accum",
+        "hail_dur",
+        "hail_int",
+        "hail_peak_int",
+        "water_level_mm",
+        "solar_rad_wm2",
+        "cloud_cover_pct",
+        "dew_point_c",
+        "forecast_humidity_pct",
+        "precip_intensity_mm_hr",
+        "precip_prob_pct",
+        "press_sea_level_hpa",
+        "press_surface_hpa",
+        "temp_apparent_c",
+        "uv_index",
+        "weather_code",
         "weather_description",
     )
 
@@ -1162,8 +1265,7 @@ class Poller:
         # COALESCE preserves the existing value when the new one is NULL so a
         # forecast-only update can't wipe a station-only column.
         update_clause = ", ".join(
-            f"{c} = COALESCE(EXCLUDED.{c}, weather_readings.{c})"
-            for c in self._WEATHER_INSERT_COLS
+            f"{c} = COALESCE(EXCLUDED.{c}, weather_readings.{c})" for c in self._WEATHER_INSERT_COLS
         )
         sql = (
             f"INSERT INTO weather_readings ({col_list}) "
@@ -1179,6 +1281,8 @@ class Poller:
 # helper referenced inside run()
 def _token_configured_effective(self: Config) -> bool:
     return bool(self.auth_token)
+
+
 Config.token_configured_effective = _token_configured_effective  # type: ignore[attr-defined]
 
 
@@ -1213,31 +1317,40 @@ def build_app(cfg: Config | None = None) -> FastAPI:
     @app.get("/status")
     async def status() -> JSONResponse:
         s = poller.stats
-        return JSONResponse({
-            "running": s.running,
-            "data_source": s.last_data_source or ("wahoobay" if s.wahoobay_enabled else "synthetic"),
-            "deployment_uri": cfg.deployment_uri,
-            "weather_deployment_uri": cfg.weather_deployment_uri,
-            "token_configured": s.token_configured,
-            "deployment_active": s.deployment_active,
-            "last_status_code": s.last_status_code,
-            "started_at": s.started_at.isoformat(),
-            "last_probe_ok_at": s.last_probe_ok_at.isoformat() if s.last_probe_ok_at else None,
-            "last_fetch_attempt_at": s.last_fetch_attempt_at.isoformat() if s.last_fetch_attempt_at else None,
-            "last_insert_at": s.last_insert_at.isoformat() if s.last_insert_at else None,
-            "last_weather_insert_at": s.last_weather_insert_at.isoformat() if s.last_weather_insert_at else None,
-            "total_inserted": s.total_inserted,
-            "weather_inserted_total": s.weather_inserted_total,
-            "last_error": s.last_error,
-            "wahoobay": {
-                "enabled": s.wahoobay_enabled,
-                "api_url": cfg.wahoobay_api_url,
-                "last_ok_at": s.wahoobay_last_ok_at.isoformat() if s.wahoobay_last_ok_at else None,
-                "last_error": s.wahoobay_last_error,
-                "sonde_inserted_total": s.wahoobay_sonde_inserted_total,
-                "weather_inserted_total": s.wahoobay_weather_inserted_total,
-            },
-        })
+        return JSONResponse(
+            {
+                "running": s.running,
+                "data_source": s.last_data_source
+                or ("wahoobay" if s.wahoobay_enabled else "synthetic"),
+                "deployment_uri": cfg.deployment_uri,
+                "weather_deployment_uri": cfg.weather_deployment_uri,
+                "token_configured": s.token_configured,
+                "deployment_active": s.deployment_active,
+                "last_status_code": s.last_status_code,
+                "started_at": s.started_at.isoformat(),
+                "last_probe_ok_at": s.last_probe_ok_at.isoformat() if s.last_probe_ok_at else None,
+                "last_fetch_attempt_at": s.last_fetch_attempt_at.isoformat()
+                if s.last_fetch_attempt_at
+                else None,
+                "last_insert_at": s.last_insert_at.isoformat() if s.last_insert_at else None,
+                "last_weather_insert_at": s.last_weather_insert_at.isoformat()
+                if s.last_weather_insert_at
+                else None,
+                "total_inserted": s.total_inserted,
+                "weather_inserted_total": s.weather_inserted_total,
+                "last_error": s.last_error,
+                "wahoobay": {
+                    "enabled": s.wahoobay_enabled,
+                    "api_url": cfg.wahoobay_api_url,
+                    "last_ok_at": s.wahoobay_last_ok_at.isoformat()
+                    if s.wahoobay_last_ok_at
+                    else None,
+                    "last_error": s.wahoobay_last_error,
+                    "sonde_inserted_total": s.wahoobay_sonde_inserted_total,
+                    "weather_inserted_total": s.wahoobay_weather_inserted_total,
+                },
+            }
+        )
 
     return app
 

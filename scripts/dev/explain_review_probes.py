@@ -8,6 +8,7 @@ means a probe would read hundreds of millions of rows.
 
     python scripts/dev/explain_review_probes.py --env /raid/scratch/dzimmerman2021/wahoobay/.env
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,16 +55,17 @@ def main() -> int:
         conn.read_only = True
         status = conn.execute("SHOW transaction_read_only").fetchone()[0]
         if status != "on":
-            print(f"RESULT: read-only guard failed (transaction_read_only={status}); "
-                  "refusing to run EXPLAIN against this database")
+            print(
+                f"RESULT: read-only guard failed (transaction_read_only={status}); "
+                "refusing to run EXPLAIN against this database"
+            )
             return 1
         for title, sql, params in probes:
             plan = "\n".join(r[0] for r in conn.execute("EXPLAIN " + sql, params))
             print(f"== {title}\n{plan}\n")
             if "Seq Scan on detection_events" in plan or "Seq Scan on saved_frames" in plan:
                 bad = True
-    print("RESULT:", "SEQUENTIAL SCAN FOUND: do not enable the pool" if bad
-          else "index scans only")
+    print("RESULT:", "SEQUENTIAL SCAN FOUND: do not enable the pool" if bad else "index scans only")
     return 1 if bad else 0
 
 

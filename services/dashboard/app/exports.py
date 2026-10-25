@@ -9,6 +9,7 @@ to keep the UI simple. Server-side rendering means we never load the whole
 result set into memory at once — psycopg streams rows from the cursor, we
 write each one as it comes in.
 """
+
 from __future__ import annotations
 
 import csv
@@ -38,14 +39,15 @@ def _format(v) -> str:
     if isinstance(v, datetime):
         return v.isoformat()
     if isinstance(v, list | tuple):
-        return ",".join(map(str, v))         # bbox arrays etc. — flatten to "x1,y1,x2,y2"
+        return ",".join(map(str, v))  # bbox arrays etc. — flatten to "x1,y1,x2,y2"
     if isinstance(v, dict):
         return json.dumps(v, separators=(",", ":"), default=str)
     return str(v)
 
 
-async def _stream(pool: AsyncConnectionPool, sql: str, params: tuple,
-                  columns: list[str]) -> AsyncIterator[str]:
+async def _stream(
+    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str]
+) -> AsyncIterator[str]:
     yield _csv_line(columns)
     async with pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
@@ -58,8 +60,9 @@ async def _stream(pool: AsyncConnectionPool, sql: str, params: tuple,
                     yield _csv_line(r[c] for c in columns)
 
 
-async def _fetch_all(pool: AsyncConnectionPool, sql: str, params: tuple,
-                     columns: list[str]) -> list[dict]:
+async def _fetch_all(
+    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str]
+) -> list[dict]:
     """Used by the Parquet path — needs all rows materialised before write."""
     rows: list[dict] = []
     async with pool.connection() as conn:
@@ -90,8 +93,10 @@ def hide_pending_spot_checks(alias: str) -> str:
     answer on a box whose spot-check is waiting or being answered. The
     second volunteer is shown the box's event id, so a public list naming
     that event's first answer would let them look it up."""
-    return (f"NOT EXISTS (SELECT 1 FROM review_items ri WHERE ri.event_id = {alias}.event_id"
-            " AND ri.pass = 2 AND ri.status IN ('open', 'claimed'))")
+    return (
+        f"NOT EXISTS (SELECT 1 FROM review_items ri WHERE ri.event_id = {alias}.event_id"
+        " AND ri.pass = 2 AND ri.status IN ('open', 'claimed'))"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,10 +104,10 @@ def hide_pending_spot_checks(alias: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def export_events(pool: AsyncConnectionPool, hours: int,
-                  species_id: str | None, min_accuracy: float):
-    where = ["ts >= NOW() - (%s::int || ' hours')::interval",
-             "best_accuracy >= %s"]
+def export_events(
+    pool: AsyncConnectionPool, hours: int, species_id: str | None, min_accuracy: float
+):
+    where = ["ts >= NOW() - (%s::int || ' hours')::interval", "best_accuracy >= %s"]
     params: list = [hours, min_accuracy]
     if species_id:
         where.append("best_species_id = %s")
@@ -118,12 +123,24 @@ def export_events(pool: AsyncConnectionPool, hours: int,
          WHERE {' AND '.join(where)}
          ORDER BY ts DESC
     """
-    cols = ["id", "ts", "frame_id", "source_name",
-            "det_conf", "bbox",
-            "best_name", "best_species_id", "best_accuracy",
-            "topk", "image_path",
-            "model_version", "detector_sha256", "classifier_sha256",
-            "config_hash", "pipeline_git_sha"]
+    cols = [
+        "id",
+        "ts",
+        "frame_id",
+        "source_name",
+        "det_conf",
+        "bbox",
+        "best_name",
+        "best_species_id",
+        "best_accuracy",
+        "topk",
+        "image_path",
+        "model_version",
+        "detector_sha256",
+        "classifier_sha256",
+        "config_hash",
+        "pipeline_git_sha",
+    ]
     return _stream(pool, sql, tuple(params), cols)
 
 
@@ -143,9 +160,16 @@ def export_species_counts(pool: AsyncConnectionPool, hours: int):
          GROUP BY 1, 2
          ORDER BY n DESC
     """
-    cols = ["species_id", "name", "n",
-            "mean_accuracy", "min_accuracy", "max_accuracy",
-            "first_seen", "last_seen"]
+    cols = [
+        "species_id",
+        "name",
+        "n",
+        "mean_accuracy",
+        "min_accuracy",
+        "max_accuracy",
+        "first_seen",
+        "last_seen",
+    ]
     return _stream(pool, sql, (hours,), cols)
 
 
@@ -160,10 +184,18 @@ def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str)
            AND ts >= NOW() - (%s::int || ' hours')::interval
          ORDER BY ts ASC
     """
-    cols = ["ts", "deployment_uri", "source",
-            "water_temp_c", "ph", "do_pct",
-            "chlorophyll_rfu", "phycoerythrin_rfu",
-            "turbidity_fnu", "spcond_ms_cm"]
+    cols = [
+        "ts",
+        "deployment_uri",
+        "source",
+        "water_temp_c",
+        "ph",
+        "do_pct",
+        "chlorophyll_rfu",
+        "phycoerythrin_rfu",
+        "turbidity_fnu",
+        "spcond_ms_cm",
+    ]
     return _stream(pool, sql, (deployment, hours), cols)
 
 
@@ -192,20 +224,41 @@ def export_weather(pool: AsyncConnectionPool, hours: int, deployment: str):
            AND ts >= NOW() - (%s::int || ' hours')::interval
          ORDER BY ts ASC
     """
-    cols = ["ts", "deployment_uri", "source",
-            "bar_press_hpa",
-            "wind_dir_avg_deg", "wind_dir_min_deg", "wind_dir_max_deg",
-            "wind_speed_avg_ms", "wind_speed_min_ms", "wind_speed_max_ms",
-            "air_temp_c", "rel_humidity_pct",
-            "rain_accum_mm", "rain_dur_frac_hr",
-            "rain_int_mm_hr", "rain_peak_int_mm_hr",
-            "hail_accum", "hail_dur", "hail_int", "hail_peak_int",
-            "water_level_mm", "solar_rad_wm2",
-            "cloud_cover_pct", "dew_point_c",
-            "forecast_humidity_pct", "precip_intensity_mm_hr", "precip_prob_pct",
-            "press_sea_level_hpa", "press_surface_hpa",
-            "temp_apparent_c", "uv_index",
-            "weather_code", "weather_description"]
+    cols = [
+        "ts",
+        "deployment_uri",
+        "source",
+        "bar_press_hpa",
+        "wind_dir_avg_deg",
+        "wind_dir_min_deg",
+        "wind_dir_max_deg",
+        "wind_speed_avg_ms",
+        "wind_speed_min_ms",
+        "wind_speed_max_ms",
+        "air_temp_c",
+        "rel_humidity_pct",
+        "rain_accum_mm",
+        "rain_dur_frac_hr",
+        "rain_int_mm_hr",
+        "rain_peak_int_mm_hr",
+        "hail_accum",
+        "hail_dur",
+        "hail_int",
+        "hail_peak_int",
+        "water_level_mm",
+        "solar_rad_wm2",
+        "cloud_cover_pct",
+        "dew_point_c",
+        "forecast_humidity_pct",
+        "precip_intensity_mm_hr",
+        "precip_prob_pct",
+        "press_sea_level_hpa",
+        "press_surface_hpa",
+        "temp_apparent_c",
+        "uv_index",
+        "weather_code",
+        "weather_description",
+    ]
     return _stream(pool, sql, (deployment, hours), cols)
 
 
@@ -219,10 +272,20 @@ def export_frame_stats(pool: AsyncConnectionPool, hours: int):
          WHERE ts >= NOW() - (%s::int || ' hours')::interval
          ORDER BY ts ASC
     """
-    cols = ["ts", "source_name", "frame_id",
-            "mean_luma", "mean_r", "mean_g", "mean_b", "std_luma",
-            "num_detections", "mean_det_conf",
-            "model_version", "config_hash"]
+    cols = [
+        "ts",
+        "source_name",
+        "frame_id",
+        "mean_luma",
+        "mean_r",
+        "mean_g",
+        "mean_b",
+        "std_luma",
+        "num_detections",
+        "mean_det_conf",
+        "model_version",
+        "config_hash",
+    ]
     return _stream(pool, sql, (hours,), cols)
 
 
@@ -235,14 +298,28 @@ def export_saved_frames(pool: AsyncConnectionPool, hours: int):
          WHERE ts >= NOW() - (%s::int || ' hours')::interval
          ORDER BY ts DESC
     """
-    cols = ["id", "ts", "frame_id", "source_name", "reason",
-            "num_fish", "image_path", "coco_path",
-            "model_version", "config_hash", "pipeline_git_sha"]
+    cols = [
+        "id",
+        "ts",
+        "frame_id",
+        "source_name",
+        "reason",
+        "num_fish",
+        "image_path",
+        "coco_path",
+        "model_version",
+        "config_hash",
+        "pipeline_git_sha",
+    ]
     return _stream(pool, sql, (hours,), cols)
 
 
-def export_corrections(pool: AsyncConnectionPool, hours: int | None,
-                       reviewer: str | None, include_identity: bool = False):
+def export_corrections(
+    pool: AsyncConnectionPool,
+    hours: int | None,
+    reviewer: str | None,
+    include_identity: bool = False,
+):
     # include_identity: an admin is asking; they also see answers under a
     # pending spot-check.
     where = []
@@ -268,17 +345,34 @@ def export_corrections(pool: AsyncConnectionPool, hours: int | None,
           {where_sql}
          ORDER BY c.created_at DESC
     """
-    cols = ["id", "created_at", "event_id",
-            "corrected_name", "corrected_species_id", "not_a_fish", "unidentifiable",
-            "confidence", "reviewer", "notes", "user_id", "session_id",
-            "event_ts", "source_name", "frame_id",
-            "original_name", "original_species_id",
-            "original_accuracy", "bbox", "image_path"]
+    cols = [
+        "id",
+        "created_at",
+        "event_id",
+        "corrected_name",
+        "corrected_species_id",
+        "not_a_fish",
+        "unidentifiable",
+        "confidence",
+        "reviewer",
+        "notes",
+        "user_id",
+        "session_id",
+        "event_ts",
+        "source_name",
+        "frame_id",
+        "original_name",
+        "original_species_id",
+        "original_accuracy",
+        "bbox",
+        "image_path",
+    ]
     return _stream(pool, sql, tuple(params), _without_identity(cols, include_identity))
 
 
-def export_alerts(pool: AsyncConnectionPool, include_resolved: bool,
-                  include_identity: bool = False):
+def export_alerts(
+    pool: AsyncConnectionPool, include_resolved: bool, include_identity: bool = False
+):
     where = "" if include_resolved else "WHERE resolved_at IS NULL"
     sql = f"""
         SELECT id, name, severity, message, details,
@@ -288,9 +382,18 @@ def export_alerts(pool: AsyncConnectionPool, include_resolved: bool,
           {where}
          ORDER BY last_seen DESC
     """
-    cols = ["id", "name", "severity", "message", "details",
-            "first_seen", "last_seen", "resolved_at",
-            "acknowledged_by", "acknowledged_at"]
+    cols = [
+        "id",
+        "name",
+        "severity",
+        "message",
+        "details",
+        "first_seen",
+        "last_seen",
+        "resolved_at",
+        "acknowledged_by",
+        "acknowledged_at",
+    ]
     return _stream(pool, sql, tuple(), _without_identity(cols, include_identity))
 
 
@@ -334,11 +437,19 @@ def export_sightings(pool: AsyncConnectionPool, hours: int, min_frames: int):
            AND s.frame_count >= %s
          ORDER BY s.first_seen DESC
     """
-    cols = ["track_id", "source_name", "species_id", "name",
-            "frame_count", "duration_s",
-            "first_seen", "last_seen",
-            "mean_accuracy", "peak_accuracy",
-            "top3_species"]
+    cols = [
+        "track_id",
+        "source_name",
+        "species_id",
+        "name",
+        "frame_count",
+        "duration_s",
+        "first_seen",
+        "last_seen",
+        "mean_accuracy",
+        "peak_accuracy",
+        "top3_species",
+    ]
     return _stream(pool, sql, (hours, min_frames), cols)
 
 
@@ -389,11 +500,22 @@ def export_hourly_summary(pool: AsyncConnectionPool, hours: int, deployment: str
           LEFT JOIN wq_buckets wq USING (hour)
          ORDER BY db.hour ASC, db.event_count DESC
     """
-    cols = ["hour", "source_name", "species_id", "name",
-            "event_count", "sighting_count", "mean_accuracy",
-            "water_temp_c", "ph", "do_pct",
-            "chlorophyll_rfu", "phycoerythrin_rfu", "turbidity_fnu",
-            "spcond_ms_cm"]
+    cols = [
+        "hour",
+        "source_name",
+        "species_id",
+        "name",
+        "event_count",
+        "sighting_count",
+        "mean_accuracy",
+        "water_temp_c",
+        "ph",
+        "do_pct",
+        "chlorophyll_rfu",
+        "phycoerythrin_rfu",
+        "turbidity_fnu",
+        "spcond_ms_cm",
+    ]
     return _stream(pool, sql, (hours, deployment, hours), cols)
 
 
@@ -431,10 +553,24 @@ def export_tracks_timeline(pool: AsyncConnectionPool, hours: int, min_frames: in
          WHERE e.ts >= NOW() - (%s::int || ' hours')::interval
          ORDER BY e.track_id, e.ts ASC
     """
-    cols = ["track_id", "step", "event_id", "ts", "frame_id", "source_name",
-            "bbox", "bbox_cx", "bbox_cy", "bbox_w", "bbox_h",
-            "det_conf", "best_name", "best_species_id", "best_accuracy",
-            "image_path"]
+    cols = [
+        "track_id",
+        "step",
+        "event_id",
+        "ts",
+        "frame_id",
+        "source_name",
+        "bbox",
+        "bbox_cx",
+        "bbox_cy",
+        "bbox_w",
+        "bbox_h",
+        "det_conf",
+        "best_name",
+        "best_species_id",
+        "best_accuracy",
+        "image_path",
+    ]
     return _stream(pool, sql, (hours, min_frames, hours), cols)
 
 
@@ -462,8 +598,18 @@ def export_topk_long(pool: AsyncConnectionPool, hours: int, min_accuracy: float)
            AND (kv.value->>'accuracy')::real >= %s
          ORDER BY e.ts DESC, e.id DESC, rank ASC
     """
-    cols = ["event_id", "ts", "frame_id", "source_name", "track_id",
-            "det_conf", "rank", "name", "species_id", "accuracy"]
+    cols = [
+        "event_id",
+        "ts",
+        "frame_id",
+        "source_name",
+        "track_id",
+        "det_conf",
+        "rank",
+        "name",
+        "species_id",
+        "accuracy",
+    ]
     return _stream(pool, sql, (hours, min_accuracy), cols)
 
 
@@ -509,18 +655,43 @@ def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool
           {where_sql}
          ORDER BY c.created_at DESC
     """
-    cols = ["correction_id", "created_at", "event_id",
-            "corrected_name", "corrected_species_id", "not_a_fish", "unidentifiable",
-            "is_endorsement", "corrected_bbox", "life_stage", "label_source",
-            "review_item_id", "is_adjudication",
-            "confidence", "reviewer", "notes", "user_id", "session_id",
-            "event_ts", "source_name", "frame_id", "track_id",
-            "bbox", "det_conf",
-            "original_name", "original_species_id", "original_accuracy",
-            "original_topk",
-            "frame_image_path", "frame_coco_path",
-            "model_version", "detector_sha256", "classifier_sha256",
-            "config_hash", "pipeline_git_sha"]
+    cols = [
+        "correction_id",
+        "created_at",
+        "event_id",
+        "corrected_name",
+        "corrected_species_id",
+        "not_a_fish",
+        "unidentifiable",
+        "is_endorsement",
+        "corrected_bbox",
+        "life_stage",
+        "label_source",
+        "review_item_id",
+        "is_adjudication",
+        "confidence",
+        "reviewer",
+        "notes",
+        "user_id",
+        "session_id",
+        "event_ts",
+        "source_name",
+        "frame_id",
+        "track_id",
+        "bbox",
+        "det_conf",
+        "original_name",
+        "original_species_id",
+        "original_accuracy",
+        "original_topk",
+        "frame_image_path",
+        "frame_coco_path",
+        "model_version",
+        "detector_sha256",
+        "classifier_sha256",
+        "config_hash",
+        "pipeline_git_sha",
+    ]
     return _stream(pool, sql, tuple(), _without_identity(cols, include_identity))
 
 
@@ -530,10 +701,18 @@ def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool
 
 
 KNOWN_RESOURCES = {
-    "events", "species_counts", "water_quality",
-    "frame_stats", "saved_frames", "corrections", "alerts",
-    "sightings", "hourly_summary", "tracks_timeline",
-    "topk_long", "labeled_corrections",
+    "events",
+    "species_counts",
+    "water_quality",
+    "frame_stats",
+    "saved_frames",
+    "corrections",
+    "alerts",
+    "sightings",
+    "hourly_summary",
+    "tracks_timeline",
+    "topk_long",
+    "labeled_corrections",
 }
 
 
@@ -544,11 +723,13 @@ KNOWN_RESOURCES = {
 # ---------------------------------------------------------------------------
 
 
-async def fetch_parquet_bytes(pool: AsyncConnectionPool, sql: str,
-                              params: tuple, columns: list[str]) -> bytes:
+async def fetch_parquet_bytes(
+    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str]
+) -> bytes:
     import io
 
     import pandas as pd
+
     rows = await _fetch_all(pool, sql, params, columns)
     df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
     # JSONB / list columns need stringification for parquet portability
@@ -564,6 +745,7 @@ async def fetch_parquet_bytes(pool: AsyncConnectionPool, sql: str,
 # /api/export/<resource>.<format> path. The `_request_export()` helper in
 # main.py dispatches; here we keep query construction self-contained.
 
+
 def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
     """Centralised query builder so CSV and Parquet share SQL logic.
 
@@ -573,8 +755,7 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
         hours = kwargs["hours"]
         species_id = kwargs.get("species_id")
         min_accuracy = kwargs.get("min_accuracy", 0.0)
-        where = ["ts >= NOW() - (%s::int || ' hours')::interval",
-                 "best_accuracy >= %s"]
+        where = ["ts >= NOW() - (%s::int || ' hours')::interval", "best_accuracy >= %s"]
         params: list = [hours, min_accuracy]
         if species_id:
             where.append("best_species_id = %s")
@@ -590,12 +771,25 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
              WHERE {' AND '.join(where)}
              ORDER BY ts DESC
         """
-        cols = ["id", "ts", "frame_id", "source_name",
-                "det_conf", "bbox",
-                "best_name", "best_species_id", "best_accuracy",
-                "topk", "image_path", "track_id",
-                "model_version", "detector_sha256", "classifier_sha256",
-                "config_hash", "pipeline_git_sha"]
+        cols = [
+            "id",
+            "ts",
+            "frame_id",
+            "source_name",
+            "det_conf",
+            "bbox",
+            "best_name",
+            "best_species_id",
+            "best_accuracy",
+            "topk",
+            "image_path",
+            "track_id",
+            "model_version",
+            "detector_sha256",
+            "classifier_sha256",
+            "config_hash",
+            "pipeline_git_sha",
+        ]
         return sql, tuple(params), cols
 
     if resource == "tracks_timeline":
@@ -625,10 +819,24 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
              WHERE e.ts >= NOW() - (%s::int || ' hours')::interval
              ORDER BY e.track_id, e.ts ASC
         """
-        cols = ["track_id", "step", "event_id", "ts", "frame_id", "source_name",
-                "bbox", "bbox_cx", "bbox_cy", "bbox_w", "bbox_h",
-                "det_conf", "best_name", "best_species_id", "best_accuracy",
-                "image_path"]
+        cols = [
+            "track_id",
+            "step",
+            "event_id",
+            "ts",
+            "frame_id",
+            "source_name",
+            "bbox",
+            "bbox_cx",
+            "bbox_cy",
+            "bbox_w",
+            "bbox_h",
+            "det_conf",
+            "best_name",
+            "best_species_id",
+            "best_accuracy",
+            "image_path",
+        ]
         return sql, (hours, min_frames, hours), cols
 
     if resource == "topk_long":
@@ -647,8 +855,18 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
                AND (kv.value->>'accuracy')::real >= %s
              ORDER BY e.ts DESC, e.id DESC, rank ASC
         """
-        cols = ["event_id", "ts", "frame_id", "source_name", "track_id",
-                "det_conf", "rank", "name", "species_id", "accuracy"]
+        cols = [
+            "event_id",
+            "ts",
+            "frame_id",
+            "source_name",
+            "track_id",
+            "det_conf",
+            "rank",
+            "name",
+            "species_id",
+            "accuracy",
+        ]
         return sql, (hours, min_accuracy), cols
 
     if resource == "hourly_summary":
@@ -691,11 +909,22 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
               LEFT JOIN wq_buckets wq USING (hour)
              ORDER BY db.hour ASC, db.event_count DESC
         """
-        cols = ["hour", "source_name", "species_id", "name",
-                "event_count", "sighting_count", "mean_accuracy",
-                "water_temp_c", "ph", "do_pct",
-                "chlorophyll_rfu", "phycoerythrin_rfu", "turbidity_fnu",
-                "spcond_ms_cm"]
+        cols = [
+            "hour",
+            "source_name",
+            "species_id",
+            "name",
+            "event_count",
+            "sighting_count",
+            "mean_accuracy",
+            "water_temp_c",
+            "ph",
+            "do_pct",
+            "chlorophyll_rfu",
+            "phycoerythrin_rfu",
+            "turbidity_fnu",
+            "spcond_ms_cm",
+        ]
         return sql, (hours, deployment, hours), cols
 
     raise ValueError(f"resource '{resource}' has no query builder")

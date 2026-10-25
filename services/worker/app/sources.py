@@ -25,6 +25,7 @@ vars (or falls back to the URL's hostname).
 The autoswitch logic — including the strict "no video-data writes
 during fallback" rule — is documented in `docs/data_pipeline.md`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -74,10 +75,7 @@ class PlaylistSource(VideoSource):
     def _list_videos(self) -> list[Path]:
         if not self.directory.exists():
             raise FileNotFoundError(f"Video directory not found: {self.directory}")
-        files = sorted(
-            p for p in self.directory.iterdir()
-            if p.suffix.lower() in self.VIDEO_EXTS
-        )
+        files = sorted(p for p in self.directory.iterdir() if p.suffix.lower() in self.VIDEO_EXTS)
         if not files:
             raise FileNotFoundError(f"No videos in {self.directory}")
         if self.shuffle:
@@ -238,6 +236,7 @@ class AutoswitchSource(VideoSource):
         window_samples: int = 60,
     ) -> None:
         from collections import deque
+
         self.primary = primary
         self.fallback = fallback
         self.dark_threshold = dark_threshold
@@ -268,11 +267,7 @@ class AutoswitchSource(VideoSource):
                 _, img, _ = pframe
                 small = cv2.resize(img, (160, 90), interpolation=cv2.INTER_AREA)
                 # BT.601 luma on BGR
-                luma = (
-                    0.114 * small[..., 0]
-                    + 0.587 * small[..., 1]
-                    + 0.299 * small[..., 2]
-                )
+                luma = 0.114 * small[..., 0] + 0.587 * small[..., 1] + 0.299 * small[..., 2]
                 m = float(luma.mean())
                 self.last_luma = m
                 self._window.append(m)
@@ -282,11 +277,17 @@ class AutoswitchSource(VideoSource):
                     if not self.is_dark and avg < self.dark_threshold:
                         self.is_dark = True
                         self.switches += 1
-                        log.info("autoswitch: primary went dark (avg luma %.1f), switching to fallback", avg)
+                        log.info(
+                            "autoswitch: primary went dark (avg luma %.1f), switching to fallback",
+                            avg,
+                        )
                     elif self.is_dark and avg > self.light_threshold:
                         self.is_dark = False
                         self.switches += 1
-                        log.info("autoswitch: primary recovered (avg luma %.1f), switching back to primary", avg)
+                        log.info(
+                            "autoswitch: primary recovered (avg luma %.1f), switching back to primary",
+                            avg,
+                        )
 
             if self.is_dark:
                 try:
@@ -324,7 +325,7 @@ def _build_one(cfg, spec: str, label: str | None = None) -> VideoSource:
     if spec.startswith("http://") or spec.startswith("https://"):
         return HTTPSource(spec, source_name=label)
     if spec.startswith("file://"):
-        directory = spec[len("file://"):]
+        directory = spec[len("file://") :]
     else:
         directory = spec
     return PlaylistSource(

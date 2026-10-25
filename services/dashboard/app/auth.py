@@ -13,6 +13,7 @@ Password hashes are stored self-describing —
 be raised later without invalidating existing accounts: verification
 reads the parameters out of the stored value rather than assuming the
 current constants."""
+
 from __future__ import annotations
 
 import base64
@@ -26,14 +27,14 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCRYPT_N = 16384          # 128 * n * r = 16 MB, under scrypt's default maxmem
+SCRYPT_N = 16384  # 128 * n * r = 16 MB, under scrypt's default maxmem
 SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
 SALT_BYTES = 16
 
 MIN_PASSWORD_LEN = 12
-MAX_PASSWORD_LEN = 1024   # bounds the work an anonymous caller can ask for
+MAX_PASSWORD_LEN = 1024  # bounds the work an anonymous caller can ask for
 
 _DENYLIST_PATH = Path(__file__).with_name("common_passwords.txt")
 
@@ -48,8 +49,12 @@ def hash_password(password: str, *, n: int = SCRYPT_N) -> str:
         raise ValueError(f"password exceeds {MAX_PASSWORD_LEN} characters")
     salt = secrets.token_bytes(SALT_BYTES)
     digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt,
-        n=n, r=SCRYPT_R, p=SCRYPT_P, dklen=SCRYPT_DKLEN,
+        password.encode("utf-8"),
+        salt=salt,
+        n=n,
+        r=SCRYPT_R,
+        p=SCRYPT_P,
+        dklen=SCRYPT_DKLEN,
     )
     return f"scrypt${n}${SCRYPT_R}${SCRYPT_P}${_b64(salt)}${_b64(digest)}"
 
@@ -70,8 +75,12 @@ def verify_password(password: str, stored: str) -> bool:
         return False
     try:
         digest = hashlib.scrypt(
-            password.encode("utf-8"), salt=salt,
-            n=n, r=r, p=p, dklen=len(expected),
+            password.encode("utf-8"),
+            salt=salt,
+            n=n,
+            r=r,
+            p=p,
+            dklen=len(expected),
         )
     except ValueError:
         return False
@@ -85,8 +94,7 @@ def _denylist() -> frozenset[str]:
     except OSError:
         return frozenset()
     return frozenset(
-        line.strip().lower() for line in lines
-        if line.strip() and not line.startswith("#")
+        line.strip().lower() for line in lines if line.strip() and not line.startswith("#")
     )
 
 
@@ -155,8 +163,17 @@ AWAITING_APPROVAL = "your account is waiting for approval"
 # 2026-09-30): sign in, sign up, forgot password and the email links they
 # send, the waiting page, and a bare health check. Static files are a mount,
 # not a route, so the site gate never sees them: they hold no data.
-OPEN_PATHS = frozenset({"/login", "/register", "/forgot-password", "/reset-password",
-                        "/verify-email", "/waiting", "/healthz"})
+OPEN_PATHS = frozenset(
+    {
+        "/login",
+        "/register",
+        "/forgot-password",
+        "/reset-password",
+        "/verify-email",
+        "/waiting",
+        "/healthz",
+    }
+)
 OPEN_PREFIXES = ("/api/auth/",)
 
 
@@ -168,8 +185,7 @@ def needs_touch(last_seen_at: datetime, now: datetime) -> bool:
     return (now - last_seen_at).total_seconds() >= TOUCH_THROTTLE_S
 
 
-async def create_session(pool, user_id, ttl_hours, abs_ttl_days,
-                         user_agent, ip) -> tuple[str, int]:
+async def create_session(pool, user_id, ttl_hours, abs_ttl_days, user_agent, ip) -> tuple[str, int]:
     raw = mint_token()
     now = datetime.now(UTC)
     expires = min(now + timedelta(hours=ttl_hours), now + timedelta(days=abs_ttl_days))
@@ -200,8 +216,13 @@ async def load_session(pool, raw_token: str) -> CurrentUser | None:
     if row is None or row[6] == "disabled":
         return None
     return CurrentUser(
-        id=row[2], username=row[3], display_name=row[4],
-        role=row[5], status=row[6], session_id=row[0], last_seen_at=row[1],
+        id=row[2],
+        username=row[3],
+        display_name=row[4],
+        role=row[5],
+        status=row[6],
+        session_id=row[0],
+        last_seen_at=row[1],
     )
 
 
@@ -323,21 +344,26 @@ def make_require_role(cfg, state):
                 # signal you most want after opening a public signup form.
                 log.info(
                     "require_role: 403 user_id=%s role=%s path=%s",
-                    user.id, role, request.url.path,
+                    user.id,
+                    role,
+                    request.url.path,
                 )
                 raise HTTPException(status_code=403, detail="insufficient role")
             if needs_touch(user.last_seen_at, datetime.now(UTC)):
-                await touch_session(
-                    pool, user.session_id, cfg.session_ttl_h, cfg.session_abs_ttl_d
-                )
+                await touch_session(pool, user.session_id, cfg.session_ttl_h, cfg.session_abs_ttl_d)
                 # Slide the cookie's own max_age along with the server-side
                 # session on the same throttled touch, so an actively-used
                 # session doesn't get signed out by the browser dropping an
                 # unrefreshed cookie at exactly session_ttl_h from login,
                 # despite a still-valid (and just-extended) server session.
                 response.set_cookie(
-                    COOKIE_NAME, raw_token, httponly=True, samesite="Lax", path="/",
-                    secure=cfg.cookie_secure, max_age=cfg.session_ttl_h * 3600,
+                    COOKIE_NAME,
+                    raw_token,
+                    httponly=True,
+                    samesite="Lax",
+                    path="/",
+                    secure=cfg.cookie_secure,
+                    max_age=cfg.session_ttl_h * 3600,
                 )
             return user
 

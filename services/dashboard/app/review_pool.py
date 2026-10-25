@@ -38,6 +38,7 @@ and note, nothing partially written. A run is also capped in probes and
 wall time -- checked before every probe, not only between species -- and
 a run that finds the previous one still going returns at once.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -132,15 +133,17 @@ class PoolSettings:
 
     @classmethod
     def from_cfg(cls, cfg) -> PoolSettings:
-        return cls(interval_s=cfg.review_pool_interval_s,
-                   max_probes=cfg.review_pool_max_probes,
-                   max_run_s=cfg.review_pool_max_run_s,
-                   check_open_per_species=cfg.review_check_open_per_species,
-                   identify_open=cfg.review_identify_open,
-                   spacing_s=cfg.review_spacing_s,
-                   min_box_px=cfg.review_min_box_px,
-                   identify_min_det_conf=cfg.review_identify_min_det_conf,
-                   target=cfg.review_target)
+        return cls(
+            interval_s=cfg.review_pool_interval_s,
+            max_probes=cfg.review_pool_max_probes,
+            max_run_s=cfg.review_pool_max_run_s,
+            check_open_per_species=cfg.review_check_open_per_species,
+            identify_open=cfg.review_identify_open,
+            spacing_s=cfg.review_spacing_s,
+            min_box_px=cfg.review_min_box_px,
+            identify_min_det_conf=cfg.review_identify_min_det_conf,
+            target=cfg.review_target,
+        )
 
 
 def big_enough(bbox, min_px: int) -> bool:
@@ -170,20 +173,27 @@ async def retire_outside_window(conn, start: datetime, end: datetime) -> int:
         await cur.execute(
             """UPDATE review_items SET status = 'retired', retired_reason = 'outside_window'
                 WHERE status = 'open' AND pass = 1 AND (ts < %s OR ts > %s)""",
-            (start, end))
+            (start, end),
+        )
         return cur.rowcount
 
 
 class ReviewPool:
-    def __init__(self, db, settings: PoolSettings, catalogue_store, baseline_path,
-                 rng: random.Random | None = None) -> None:
+    def __init__(
+        self,
+        db,
+        settings: PoolSettings,
+        catalogue_store,
+        baseline_path,
+        rng: random.Random | None = None,
+    ) -> None:
         self.db = db
         self.s = settings
         self.catalogue_store = catalogue_store
         self.baseline_path = Path(baseline_path)
         self.rng = rng or random.Random()
         self._lock = asyncio.Lock()
-        self._runs = 0              # which lane goes first alternates per run
+        self._runs = 0  # which lane goes first alternates per run
         self._baseline: dict[str, int] = {}
         self._baseline_stamp: object = None
         self._baseline_catalogue: object = None
@@ -205,8 +215,9 @@ class ReviewPool:
             stamp = self.baseline_path.stat().st_mtime_ns
         except FileNotFoundError:
             if self._baseline_stamp != "missing":
-                log.warning("review pool: %s not found; training-set counts taken as 0",
-                            self.baseline_path)
+                log.warning(
+                    "review pool: %s not found; training-set counts taken as 0", self.baseline_path
+                )
             self._baseline = {}
             self._baseline_stamp, self._baseline_catalogue = "missing", None
             return
@@ -237,15 +248,18 @@ class ReviewPool:
         # catalogue, and may parse the whole baseline JSON.
         await asyncio.to_thread(self._load_baseline)
         async with self.db.connection() as conn, conn.transaction():
-            await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                               (str(self.s.statement_timeout_ms),))
+            await conn.execute(
+                "SELECT set_config('statement_timeout', %s, true)",
+                (str(self.s.statement_timeout_ms),),
+            )
             resolved = await resolve_all(conn)
             async with conn.cursor() as cur:
                 await cur.execute(
                     """SELECT label, count(*) FROM review_added_boxes
                         WHERE removed_at IS NULL AND outcome = 'species'
                           AND confidence <> 'uncertain'
-                        GROUP BY label""")
+                        GROUP BY label"""
+                )
                 added = await cur.fetchall()
         verified: dict[str, int] = {}
         for r in resolved.values():
@@ -276,8 +290,9 @@ class ReviewPool:
     # ---- the run ------------------------------------------------------------
 
     async def run_forever(self) -> None:
-        log.info("review pool: every %.0fs, target %d per species",
-                 self.s.interval_s, self.s.target)
+        log.info(
+            "review pool: every %.0fs, target %d per species", self.s.interval_s, self.s.target
+        )
         while True:
             try:
                 log.info("review pool: %s", await self.run_once())
@@ -292,8 +307,14 @@ class ReviewPool:
             return {"skipped": "previous run still going"}
         async with self._lock:
             t0 = time.monotonic()
-            stats = {"check_added": 0, "identify_added": 0, "probes": 0, "retired": 0,
-                     "timeouts": 0, "errors": 0}
+            stats = {
+                "check_added": 0,
+                "identify_added": 0,
+                "probes": 0,
+                "retired": 0,
+                "timeouts": 0,
+                "errors": 0,
+            }
             try:
                 await self.refresh_progress()
                 async with self.db.connection() as conn:
@@ -312,7 +333,8 @@ class ReviewPool:
                         async with conn.transaction():
                             await conn.execute(
                                 "SELECT set_config('statement_timeout', %s, true)",
-                                (str(self.s.statement_timeout_ms),))
+                                (str(self.s.statement_timeout_ms),),
+                            )
                             stats["retired"] = await retire_outside_window(conn, *window)
                         # The lanes share one probe budget, so they take turns going
                         # first: the check lane alone can spend it all, which left
@@ -335,8 +357,11 @@ class ReviewPool:
                 # attempted, and the next scheduled run retries.
                 stats["timeouts"] += 1
                 stats["note"] = "a statement timed out; ending this run"
-                log.warning("review pool: a statement hit the %d ms statement timeout; "
-                            "ending this run cleanly", self.s.statement_timeout_ms)
+                log.warning(
+                    "review pool: a statement hit the %d ms statement timeout; "
+                    "ending this run cleanly",
+                    self.s.statement_timeout_ms,
+                )
             except Exception:
                 stats["errors"] += 1
                 log.exception("review pool: run failed")
@@ -345,16 +370,19 @@ class ReviewPool:
             self.last_run = stats
             return stats
 
-    async def _window(self, conn) -> tuple[tuple[datetime, datetime] | None,
-                                           tuple[datetime | None, datetime | None]]:
+    async def _window(
+        self, conn
+    ) -> tuple[tuple[datetime, datetime] | None, tuple[datetime | None, datetime | None]]:
         """(effective, admin). `effective` is the window probes and retire
         use -- start falls back to min(saved_frames.ts) when unset, end is
         clamped to now - recent_exclusion_s -- or None when there's
         nothing to work with yet. `admin` is exactly what's stored in
         review_settings, unclamped, for run_once's change detection."""
         async with conn.transaction():
-            await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                               (str(self.s.statement_timeout_ms),))
+            await conn.execute(
+                "SELECT set_config('statement_timeout', %s, true)",
+                (str(self.s.statement_timeout_ms),),
+            )
             admin_start, admin_end = await read_window(conn)
             start = admin_start
             if start is None:
@@ -367,8 +395,7 @@ class ReviewPool:
         return effective, (admin_start, admin_end)
 
     def _exhausted(self, stats: dict, t0: float) -> bool:
-        return (stats["probes"] >= self.s.max_probes
-                or time.monotonic() - t0 >= self.s.max_run_s)
+        return stats["probes"] >= self.s.max_probes or time.monotonic() - t0 >= self.s.max_run_s
 
     def _probe_time(self, window) -> datetime:
         start, end = window
@@ -386,8 +413,10 @@ class ReviewPool:
         stats["probes"] += 1
         try:
             async with conn.transaction():
-                await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                                   (str(self.s.statement_timeout_ms),))
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', %s, true)",
+                    (str(self.s.statement_timeout_ms),),
+                )
                 async with conn.cursor(row_factory=dict_row) as cur:
                     # Never server-side prepared: after prepare_threshold
                     # runs on a pooled connection PostgreSQL could switch
@@ -397,8 +426,9 @@ class ReviewPool:
                     return await cur.fetchall()
         except psycopg.errors.QueryCanceled:
             stats["timeouts"] += 1
-            log.warning("review pool: a probe hit the %d ms statement timeout",
-                        self.s.statement_timeout_ms)
+            log.warning(
+                "review pool: a probe hit the %d ms statement timeout", self.s.statement_timeout_ms
+            )
             return None
 
     async def _rows(self, conn, sql: str, params, *, lock_event: int | None = None) -> list:
@@ -415,8 +445,10 @@ class ReviewPool:
         (follow-up C4): _insert uses this so its conditional INSERT sees
         any verdict already committed, and waits for one still in flight."""
         async with conn.transaction():
-            await conn.execute("SELECT set_config('statement_timeout', %s, true)",
-                               (str(self.s.statement_timeout_ms),))
+            await conn.execute(
+                "SELECT set_config('statement_timeout', %s, true)",
+                (str(self.s.statement_timeout_ms),),
+            )
             if lock_event is not None:
                 await conn.execute(EVENT_LOCK_SQL, (lock_event,))
             async with conn.cursor() as cur:
@@ -428,30 +460,70 @@ class ReviewPool:
             return set()
         return {r[0] for r in await self._rows(conn, _FREE_EVENTS_SQL, (ids, ids, ids))}
 
-    async def _too_close(self, conn, *, source: str, lane: str, ts: datetime,
-                         species: str | None) -> bool:
+    async def _too_close(
+        self, conn, *, source: str, lane: str, ts: datetime, species: str | None
+    ) -> bool:
         gap = timedelta(seconds=self.s.spacing_s)
-        return bool(await self._rows(conn, _TOO_CLOSE_SQL,
-                                     (source, lane, ts - gap, ts + gap, species, species)))
+        return bool(
+            await self._rows(
+                conn, _TOO_CLOSE_SQL, (source, lane, ts - gap, ts + gap, species, species)
+            )
+        )
 
-    async def _insert(self, conn, *, event_id, lane, saved_frame_id, source, ts, bbox,
-                      predicted, predicted_p, route) -> bool:
-        return bool(await self._rows(conn, _INSERT_ITEM_SQL, (
-            event_id, lane, saved_frame_id, source, ts, list(bbox), predicted, predicted_p,
-            route, event_id), lock_event=event_id))
+    async def _insert(
+        self,
+        conn,
+        *,
+        event_id,
+        lane,
+        saved_frame_id,
+        source,
+        ts,
+        bbox,
+        predicted,
+        predicted_p,
+        route,
+    ) -> bool:
+        return bool(
+            await self._rows(
+                conn,
+                _INSERT_ITEM_SQL,
+                (
+                    event_id,
+                    lane,
+                    saved_frame_id,
+                    source,
+                    ts,
+                    list(bbox),
+                    predicted,
+                    predicted_p,
+                    route,
+                    event_id,
+                ),
+                lock_event=event_id,
+            )
+        )
 
     async def _fill_check(self, conn, window, stats: dict, t0: float) -> None:
         catalogue = await self.catalogue_store.aget()
-        open_counts = {name: n for name, n in await self._rows(conn, """
+        open_counts = {
+            name: n
+            for name, n in await self._rows(
+                conn,
+                """
             SELECT route_species, count(*) FROM review_items
              WHERE lane = 'check' AND pass = 1 AND status IN ('open', 'claimed')
-             GROUP BY route_species""", None)}
+             GROUP BY route_species""",
+                None,
+            )
+        }
         # The model writes class names with spaces (classifier_v2.py): folder
         # 'Pomatomus_saltarix' appears in detection_events as 'Pomatomus
         # saltarix' and counts toward the accepted name.
-        classes = sorted({(e.name, e.class_dir.replace("_", " "))
-                          for e in catalogue.entries if e.class_dir},
-                         key=lambda p: (self.count(p[0]), p[0]))
+        classes = sorted(
+            {(e.name, e.class_dir.replace("_", " ")) for e in catalogue.entries if e.class_dir},
+            key=lambda p: (self.count(p[0]), p[0]),
+        )
         now = time.time()
         for name, raw in classes:
             if self._exhausted(stats, t0):
@@ -461,18 +533,24 @@ class ReviewPool:
             need = self.s.check_open_per_species - open_counts.get(name, 0)
             if need > 0:
                 open_counts[name] = open_counts.get(name, 0) + await self._probe_check(
-                    conn, window, name, raw, need, stats, t0)
+                    conn, window, name, raw, need, stats, t0
+                )
 
-    async def _probe_check(self, conn, window, name: str, raw: str, need: int,
-                           stats: dict, t0: float) -> int:
-        rows = await self._probe(conn, CHECK_PROBE_SQL,
-                                 (raw, self._probe_time(window), window[0]), stats)
+    async def _probe_check(
+        self, conn, window, name: str, raw: str, need: int, stats: dict, t0: float
+    ) -> int:
+        rows = await self._probe(
+            conn, CHECK_PROBE_SQL, (raw, self._probe_time(window), window[0]), stats
+        )
         if rows is None:
             # Timed out, not "found nothing" -- the fallback probe would
             # only spend more of the run's budget on the same question.
             # Back off briefly and let a later run try again.
-            log.warning("review pool: check-lane probe for %r timed out; backing off %d s",
-                        raw, TIMEOUT_BACKOFF_S)
+            log.warning(
+                "review pool: check-lane probe for %r timed out; backing off %d s",
+                raw,
+                TIMEOUT_BACKOFF_S,
+            )
             self._empty_until[raw] = time.time() + TIMEOUT_BACKOFF_S
             return 0
         if rows == []:
@@ -485,7 +563,9 @@ class ReviewPool:
             if rows is None:
                 log.warning(
                     "review pool: check-lane fallback probe for %r timed out; backing off %d s",
-                    raw, TIMEOUT_BACKOFF_S)
+                    raw,
+                    TIMEOUT_BACKOFF_S,
+                )
                 self._empty_until[raw] = time.time() + TIMEOUT_BACKOFF_S
                 return 0
             if rows == []:
@@ -499,32 +579,55 @@ class ReviewPool:
             if added >= need:
                 break
             if r["id"] not in free or await self._too_close(
-                    conn, source=r["source_name"], lane="check", ts=r["ts"], species=name):
+                conn, source=r["source_name"], lane="check", ts=r["ts"], species=name
+            ):
                 continue
-            if await self._insert(conn, event_id=r["id"], lane="check",
-                                  saved_frame_id=r["saved_frame_id"], source=r["source_name"],
-                                  ts=r["ts"], bbox=r["bbox"], predicted=name,
-                                  predicted_p=r["best_accuracy"], route=name):
+            if await self._insert(
+                conn,
+                event_id=r["id"],
+                lane="check",
+                saved_frame_id=r["saved_frame_id"],
+                source=r["source_name"],
+                ts=r["ts"],
+                bbox=r["bbox"],
+                predicted=name,
+                predicted_p=r["best_accuracy"],
+                route=name,
+            ):
                 added += 1
         stats["check_added"] += added
         return added
 
     async def _fill_identify(self, conn, window, stats: dict, t0: float) -> None:
-        open_n = (await self._rows(conn, """
+        open_n = (
+            await self._rows(
+                conn,
+                """
             SELECT count(*) FROM review_items
              WHERE lane = 'identify' AND pass = 1 AND status IN ('open', 'claimed')""",
-                                   None))[0][0]
+                None,
+            )
+        )[0][0]
         while open_n < self.s.identify_open and not self._exhausted(stats, t0):
-            frames = await self._probe(conn, IDENTIFY_FRAMES_SQL,
-                                       (self._probe_time(window), window[0]), stats)
+            frames = await self._probe(
+                conn, IDENTIFY_FRAMES_SQL, (self._probe_time(window), window[0]), stats
+            )
             if not frames:
                 continue
             if self._exhausted(stats, t0):
                 break
-            boxes = await self._probe(conn, IDENTIFY_BOXES_SQL, (
-                [f["id"] for f in frames], [f["source_name"] for f in frames],
-                [f["ts"] for f in frames], [f["frame_id"] for f in frames],
-                self.s.identify_min_det_conf), stats)
+            boxes = await self._probe(
+                conn,
+                IDENTIFY_BOXES_SQL,
+                (
+                    [f["id"] for f in frames],
+                    [f["source_name"] for f in frames],
+                    [f["ts"] for f in frames],
+                    [f["frame_id"] for f in frames],
+                    self.s.identify_min_det_conf,
+                ),
+                stats,
+            )
             if not boxes:
                 continue
             boxes = [b for b in boxes if big_enough(b["bbox"], self.s.min_box_px)]
@@ -532,18 +635,28 @@ class ReviewPool:
             best: dict[int, dict] = {}
             for b in boxes:
                 current = best.get(b["saved_frame_id"])
-                if b["id"] in free and (current is None
-                                        or _area(b["bbox"]) > _area(current["bbox"])):
+                if b["id"] in free and (
+                    current is None or _area(b["bbox"]) > _area(current["bbox"])
+                ):
                     best[b["saved_frame_id"]] = b
             for saved_frame_id, b in best.items():
                 if open_n >= self.s.identify_open:
                     break
-                if await self._too_close(conn, source=b["source_name"], lane="identify",
-                                         ts=b["ts"], species=None):
+                if await self._too_close(
+                    conn, source=b["source_name"], lane="identify", ts=b["ts"], species=None
+                ):
                     continue
-                if await self._insert(conn, event_id=b["id"], lane="identify",
-                                      saved_frame_id=saved_frame_id, source=b["source_name"],
-                                      ts=b["ts"], bbox=b["bbox"], predicted=None,
-                                      predicted_p=None, route=None):
+                if await self._insert(
+                    conn,
+                    event_id=b["id"],
+                    lane="identify",
+                    saved_frame_id=saved_frame_id,
+                    source=b["source_name"],
+                    ts=b["ts"],
+                    bbox=b["bbox"],
+                    predicted=None,
+                    predicted_p=None,
+                    route=None,
+                ):
                     open_n += 1
                     stats["identify_added"] += 1

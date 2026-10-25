@@ -8,6 +8,7 @@ Endpoints:
   GET /live.json        latest frame metadata + detections
   GET /stats            runtime counters
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -200,8 +201,8 @@ def build_app(cfg: Config | None = None) -> FastAPI:
             }
         return {
             "running": True,
-            "frames_seen": s.frames_seen,         # grabbed at native fps
-            "frames_inferred": s.frames_inferred, # processed by detector+classifier
+            "frames_seen": s.frames_seen,  # grabbed at native fps
+            "frames_inferred": s.frames_inferred,  # processed by detector+classifier
             "frames_with_fish": s.frames_with_fish,
             "detections_total": s.detections_total,
             "last_infer_ms": s.last_infer_ms,
@@ -218,6 +219,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
     def _mjpeg_streaming_response(buffer: LiveBuffer, pick_jpeg) -> StreamingResponse:
         """Shared MJPEG generator parameterised on which buffer to drain and
         which JPEG byte-payload to send. `pick_jpeg(LiveFrame) -> bytes`."""
+
         async def gen() -> AsyncIterator[bytes]:
             last = -1
             loop = asyncio.get_running_loop()
@@ -229,7 +231,10 @@ def build_app(cfg: Config | None = None) -> FastAPI:
                     yield _mjpeg_chunk(payload, BOUNDARY)
             while True:
                 current = await loop.run_in_executor(
-                    None, buffer.wait_for_next, last, 10.0,
+                    None,
+                    buffer.wait_for_next,
+                    last,
+                    10.0,
                 )
                 if current is None:
                     continue
@@ -237,6 +242,7 @@ def build_app(cfg: Config | None = None) -> FastAPI:
                 payload = pick_jpeg(current)
                 if payload:
                     yield _mjpeg_chunk(payload, BOUNDARY)
+
         return StreamingResponse(
             gen(),
             media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY.decode()}",
@@ -263,8 +269,7 @@ def _mjpeg_chunk(jpeg: bytes, boundary: bytes) -> bytes:
     return (
         b"--" + boundary + b"\r\n"
         b"Content-Type: image/jpeg\r\n"
-        b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
-        + jpeg + b"\r\n"
+        b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n"
     )
 
 
@@ -276,6 +281,7 @@ def main() -> None:
     def _shutdown(signum, _frame):
         log.info("received signal %s, exiting", signum)
         sys.exit(0)
+
     signal.signal(signal.SIGTERM, _shutdown)
 
     app = build_app(cfg)

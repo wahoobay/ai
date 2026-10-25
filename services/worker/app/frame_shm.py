@@ -35,13 +35,13 @@ when inference falls behind the camera.
 filled_q, one being written. More slots just adds end-to-end latency
 without extra throughput.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from multiprocessing.shared_memory import SharedMemory
 
 import numpy as np
-
 
 # Sized for 1080p RGB so a future flip back to 1920x1080 doesn't need
 # a re-alloc. 1920 * 1080 * 3 = 6,220,800 bytes per slot. At 3 slots,
@@ -59,6 +59,7 @@ class FrameShmDescriptor:
     it can attach to the same shared-memory segments. Contains only the
     OS-level shm names + sizing — no numpy / SharedMemory objects, which
     don't survive the spawn-context pickle reliably."""
+
     names: list[str]
     slot_bytes: int
 
@@ -80,8 +81,7 @@ class FrameShmPool:
         # Cache numpy views per slot so write_into doesn't re-construct one
         # every frame. Views are zero-copy; mutating them mutates the shm.
         self._views = [
-            np.ndarray((slot_bytes,), dtype=np.uint8, buffer=shm.buf)
-            for shm in self.shms
+            np.ndarray((slot_bytes,), dtype=np.uint8, buffer=shm.buf) for shm in self.shms
         ]
 
     @property
@@ -134,9 +134,7 @@ class FrameShmReader:
 
     def __init__(self, descriptor: FrameShmDescriptor) -> None:
         self.slot_bytes = descriptor.slot_bytes
-        self.shms: list[SharedMemory] = [
-            SharedMemory(name=name) for name in descriptor.names
-        ]
+        self.shms: list[SharedMemory] = [SharedMemory(name=name) for name in descriptor.names]
 
     def view(self, slot_idx: int, shape: tuple[int, int, int]) -> np.ndarray:
         """Return a numpy view of the slot at the given shape (H, W, C).

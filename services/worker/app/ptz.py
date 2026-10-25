@@ -25,6 +25,7 @@ Disabled by default. To turn on, set:
 Until URL is provided the poller logs once and stays idle (no DB writes,
 no retries) — safe to leave running.
 """
+
 from __future__ import annotations
 
 import logging
@@ -41,20 +42,20 @@ log = logging.getLogger(__name__)
 @dataclass
 class PTZPollerStats:
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    poll_count:    int = 0
+    poll_count: int = 0
     success_count: int = 0
     last_success_at: datetime | None = None
-    last_pan_deg:  float | None = None
+    last_pan_deg: float | None = None
     last_tilt_deg: float | None = None
-    last_zoom:     float | None = None
-    last_error:    str = ""
-    enabled:       bool = False
+    last_zoom: float | None = None
+    last_error: str = ""
+    enabled: bool = False
 
 
 class PTZPoller:
     def __init__(self, cfg, pg) -> None:
         self.cfg = cfg
-        self.pg  = pg
+        self.pg = pg
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.stats = PTZPollerStats(enabled=cfg.ptz_poll_enabled and bool(cfg.ptz_poll_url))
@@ -70,7 +71,8 @@ class PTZPoller:
         self._thread.start()
         log.info(
             "PTZ poller started (backend=%s, interval=%.1fs, source=%s)",
-            self.cfg.ptz_poll_backend, self.cfg.ptz_poll_interval_s,
+            self.cfg.ptz_poll_backend,
+            self.cfg.ptz_poll_interval_s,
             self.cfg.ptz_source_name,
         )
 
@@ -125,10 +127,10 @@ class PTZPoller:
 
         self.stats.success_count += 1
         self.stats.last_success_at = ts
-        self.stats.last_pan_deg  = state.get("pan_deg")
+        self.stats.last_pan_deg = state.get("pan_deg")
         self.stats.last_tilt_deg = state.get("tilt_deg")
-        self.stats.last_zoom     = state.get("zoom")
-        self.stats.last_error    = ""
+        self.stats.last_zoom = state.get("zoom")
+        self.stats.last_error = ""
 
     @staticmethod
     def _poll_vapix(client: httpx.Client) -> dict | None:
@@ -167,9 +169,9 @@ def _vapix_state(client: httpx.Client, url: str) -> dict | None:
     tilt = parsed.get("tilt")
     zoom = parsed.get("zoom")
     return {
-        "pan_deg":  float(pan)  if isinstance(pan,  int | float) else None,
+        "pan_deg": float(pan) if isinstance(pan, int | float) else None,
         "tilt_deg": float(tilt) if isinstance(tilt, int | float) else None,
-        "zoom":     float(zoom) if isinstance(zoom, int | float) else None,
+        "zoom": float(zoom) if isinstance(zoom, int | float) else None,
         "raw": parsed,
     }
 

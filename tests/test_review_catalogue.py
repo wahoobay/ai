@@ -1,5 +1,6 @@
 """The species catalogue (spec §9): Species Log + classifier classes +
 WoRMS names + photos + named individuals."""
+
 from __future__ import annotations
 
 import json
@@ -41,23 +42,23 @@ def test_life_stages_are_separate_entries(cat):
     assert cat.entry("Pomacanthus paru", "adult").common_name == "Adult French Angelfish"
     assert cat.entry("Pomacanthus paru", "juvenile").common_name == "Juvenile French Angelfish"
     assert cat.entry("Pomacanthus paru", None) is None
-    assert cat.entry("Seriola zonata", None) is not None     # 'unknown' stage means none
+    assert cat.entry("Seriola zonata", None) is not None  # 'unknown' stage means none
     assert cat.class_dir("Pomacanthus paru") == "Pomacanthus_paru"
 
 
 def test_classifier_only_and_unresolved_entries(cat):
     neo = cat.entry("Neopomacentrus cyanomos", None)
     assert neo.in_classifier and not neo.in_species_log
-    assert neo.common_name == "Regal Demoiselle"              # from the iNat manifest
+    assert neo.common_name == "Regal Demoiselle"  # from the iNat manifest
     ani = cat.entry("Anilocra ./Renocila", None)
     assert ani is not None and not ani.resolved and not ani.in_classifier
-    assert len(cat.entries) == 7                               # the row with no binomial is skipped
+    assert len(cat.entries) == 7  # the row with no binomial is skipped
 
 
 def test_photos_carry_credit_and_never_leave_the_photo_root(cat):
     path, credit = cat.photo(slug("Seriola zonata"))
     assert path.name == "11.jpg" and "CC BY-NC" in credit
-    assert cat.photo(slug("Acanthurus coeruleus")) is None     # its local_path escapes the root
+    assert cat.photo(slug("Acanthurus coeruleus")) is None  # its local_path escapes the root
 
 
 def test_named_individuals_attach_to_their_species(cat):
@@ -81,8 +82,9 @@ def test_store_rebuilds_when_a_source_file_changes(tmp_path):
     assert store.get() is first
     manifest = info["assets"] / "species_manifest.json"
     data = json.loads(manifest.read_text())
-    data.append({"binomial": "Caranx crysos", "common_name": "Blue Runner",
-                 "life_stage": "unknown"})
+    data.append(
+        {"binomial": "Caranx crysos", "common_name": "Blue Runner", "life_stage": "unknown"}
+    )
     manifest.write_text(json.dumps(data))
     later = time.time_ns() + 10**9
     os.utime(manifest, ns=(later, later))
@@ -91,8 +93,14 @@ def test_store_rebuilds_when_a_source_file_changes(tmp_path):
 
 
 def test_missing_files_give_an_empty_working_catalogue(tmp_path):
-    paths = CataloguePaths(tmp_path / "a.json", tmp_path / "b.json", tmp_path / "c.csv",
-                           tmp_path / "d.json", tmp_path / "e.json", photo_root=tmp_path)
+    paths = CataloguePaths(
+        tmp_path / "a.json",
+        tmp_path / "b.json",
+        tmp_path / "c.csv",
+        tmp_path / "d.json",
+        tmp_path / "e.json",
+        photo_root=tmp_path,
+    )
     cat = load_catalogue(paths)
     assert cat.entries == [] and cat.accepted("X y") == "X y"
 
@@ -122,8 +130,9 @@ def test_a_store_whose_first_load_fails_serves_an_empty_catalogue(review_assets)
 
 
 @pytest.mark.anyio
-async def test_aget_rebuilds_off_the_event_loop_and_current_never_rebuilds(review_assets,
-                                                                          monkeypatch):
+async def test_aget_rebuilds_off_the_event_loop_and_current_never_rebuilds(
+    review_assets, monkeypatch
+):
     from app import review_catalogue
 
     seen = []

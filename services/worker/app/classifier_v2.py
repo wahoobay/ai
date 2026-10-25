@@ -23,6 +23,7 @@ that cost. Batched inference fall-through means N detections in a
 frame go through one forward pass, not N — meaningful when the reef
 is busy.
 """
+
 from __future__ import annotations
 
 import json
@@ -52,7 +53,7 @@ def _strip_module_prefix(state_dict: dict) -> dict:
     if not state_dict:
         return state_dict
     if all(k.startswith("module.") for k in state_dict.keys()):
-        return {k[len("module."):]: v for k, v in state_dict.items()}
+        return {k[len("module.") :]: v for k, v in state_dict.items()}
     return state_dict
 
 
@@ -91,7 +92,7 @@ def _preprocess_crop(
     # Centre crop to out_size.
     top = (new_h - out_size) // 2
     left = (new_w - out_size) // 2
-    crop = crop[top:top + out_size, left:left + out_size]
+    crop = crop[top : top + out_size, left : left + out_size]
     if crop.shape[:2] != (out_size, out_size):
         # Edge case (1px rounding): pad-then-trim.
         canvas = np.zeros((out_size, out_size, 3), dtype=crop.dtype)
@@ -117,9 +118,12 @@ class ClassifierV2Pipeline:
         self.detector.to(self.device)
         dummy = np.zeros((cfg.det_imgsz, cfg.det_imgsz, 3), dtype=np.uint8)
         self.detector.predict(
-            source=dummy, imgsz=cfg.det_imgsz,
-            conf=cfg.det_conf_threshold, iou=cfg.det_iou_threshold,
-            device=self.device, verbose=False,
+            source=dummy,
+            imgsz=cfg.det_imgsz,
+            conf=cfg.det_conf_threshold,
+            iou=cfg.det_iou_threshold,
+            device=self.device,
+            verbose=False,
         )
         log.info("v2: detector loaded %s on %s", cfg.detector_path, self.device)
 
@@ -150,7 +154,8 @@ class ClassifierV2Pipeline:
         if missing or unexpected:
             log.warning(
                 "v2: load_state_dict — %d missing, %d unexpected (likely harmless tags)",
-                len(missing), len(unexpected),
+                len(missing),
+                len(unexpected),
             )
         self.model = self.model.to(self.device).eval()
 
@@ -182,14 +187,18 @@ class ClassifierV2Pipeline:
                 torch.cuda.synchronize()
             log.info(
                 "v2: torch.compile warmup done in %.1fs (batches=%s)",
-                time.time() - t_c0, warmup_batches,
+                time.time() - t_c0,
+                warmup_batches,
             )
         else:
             log.info("v2: torch.compile disabled (CLASSIFIER_V2_COMPILE=0)")
 
         log.info(
             "v2: classifier ready — arch=%s, classes=%d, img_size=%d, dtype=%s",
-            backbone, num_classes, self.img_size, self.autocast_dtype or "fp32",
+            backbone,
+            num_classes,
+            self.img_size,
+            self.autocast_dtype or "fp32",
         )
 
     def _autocast_dtype(self) -> torch.dtype | None:
@@ -273,23 +282,30 @@ class ClassifierV2Pipeline:
                     if acc < min_acc:
                         continue
                     name = self.class_names[int(k)]
-                    topk.append(Prediction(
-                        name=name,
-                        # No external taxonomy ID source for v2 yet — use the
-                        # binomial as the species_id so detection_events
-                        # group/filter queries (best_species_id) stay sane.
-                        # Pre-cutover Fishial events keep their UUIDs.
-                        species_id=name,
-                        accuracy=acc,
-                    ))
-            out.append(FishDetection(
-                bbox=(int(x1), int(y1), int(x2), int(y2)),
-                det_conf=float(conf),
-                topk=topk,
-            ))
+                    topk.append(
+                        Prediction(
+                            name=name,
+                            # No external taxonomy ID source for v2 yet — use the
+                            # binomial as the species_id so detection_events
+                            # group/filter queries (best_species_id) stay sane.
+                            # Pre-cutover Fishial events keep their UUIDs.
+                            species_id=name,
+                            accuracy=acc,
+                        )
+                    )
+            out.append(
+                FishDetection(
+                    bbox=(int(x1), int(y1), int(x2), int(y2)),
+                    det_conf=float(conf),
+                    topk=topk,
+                )
+            )
 
         log.debug(
             "v2 frame: %d fish (%d classified, det=%.1fms, cls=%.1fms)",
-            len(out), len(keep_idx), (t1 - t0) * 1000, (t2 - t1) * 1000,
+            len(out),
+            len(keep_idx),
+            (t1 - t0) * 1000,
+            (t2 - t1) * 1000,
         )
         return out

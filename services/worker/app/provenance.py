@@ -10,6 +10,7 @@ Threaded through onto every detection_events / saved_frames / frame_stats row,
 and included in the JSONL event log. Makes every record reproducible: given
 a row, you can identify exactly which weights + code + settings produced it.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -25,7 +26,7 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Provenance:
-    model_version: str          # "det:v26_n3/cls:v0.10.2" etc
+    model_version: str  # "det:v26_n3/cls:v0.10.2" etc
     detector_sha256: str
     classifier_sha256: str
     config_hash: str
@@ -50,9 +51,16 @@ def _canonical_config_hash(cfg) -> str:
     """
     d = dataclasses.asdict(cfg)
     # drop fields that shouldn't invalidate the hash (ports, hosts, log-level)
-    for k in ("worker_http_host", "worker_http_port", "log_level",
-              "events_log_dir", "frames_dir", "database_url",
-              "live_stream_max_fps", "jpeg_quality"):
+    for k in (
+        "worker_http_host",
+        "worker_http_port",
+        "log_level",
+        "events_log_dir",
+        "frames_dir",
+        "database_url",
+        "live_stream_max_fps",
+        "jpeg_quality",
+    ):
         d.pop(k, None)
     payload = json.dumps(d, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -128,7 +136,10 @@ def compute(cfg) -> Provenance:
     )
     log.info(
         "provenance: %s | det=%s | cls=%s | cfg=%s | git=%s",
-        prov.model_version, prov.detector_sha256, prov.classifier_sha256,
-        prov.config_hash, prov.pipeline_git_sha,
+        prov.model_version,
+        prov.detector_sha256,
+        prov.classifier_sha256,
+        prov.config_hash,
+        prov.pipeline_git_sha,
     )
     return prov

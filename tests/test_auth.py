@@ -2,6 +2,7 @@
 
 Pure functions only — no database, no FastAPI client. The DB-backed
 session and token stores are covered in tests/test_auth_db.py."""
+
 from __future__ import annotations
 
 import re
@@ -97,11 +98,14 @@ def test_the_sign_up_email_says_the_request_is_waiting_for_approval():
     assert body.index("waiting for an administrator") < body.index("https://example.org")
 
 
-@pytest.mark.parametrize("role, says", [
-    ("viewer", "live cameras"),
-    ("reviewer", "review site"),
-    ("admin", "manage accounts"),
-])
+@pytest.mark.parametrize(
+    "role, says",
+    [
+        ("viewer", "live cameras"),
+        ("reviewer", "review site"),
+        ("admin", "manage accounts"),
+    ],
+)
 def test_the_approval_email_says_what_the_account_can_do(role, says):
     subject, body = approved_email("https://example.org/login", role)
     assert "approved" in subject.lower()
@@ -113,8 +117,7 @@ def test_manual_backend_does_not_attempt_smtp(monkeypatch):
         raise AssertionError("SMTP must not be contacted in manual mode")
 
     monkeypatch.setattr("smtplib.SMTP", explode)
-    m = Mailer(backend="manual", smtp=None, from_addr="x@y.org",
-               base_url="https://example.org")
+    m = Mailer(backend="manual", smtp=None, from_addr="x@y.org", base_url="https://example.org")
     assert m.send("someone@example.org", "Subject", "Body") == "manual"
 
 
@@ -143,8 +146,7 @@ def test_smtp_backend_sends_one_message(monkeypatch):
     monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
     m = Mailer(
         backend="smtp",
-        smtp={"host": "relay.fau.edu", "port": 587, "user": "u",
-              "password": "p", "starttls": True},
+        smtp={"host": "relay.fau.edu", "port": 587, "user": "u", "password": "p", "starttls": True},
         from_addr="noreply@example.org",
         base_url="https://example.org",
     )
@@ -195,8 +197,12 @@ def test_smtp_messages_carry_a_date_and_a_message_id(monkeypatch):
             sent.append(msg)
 
     monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
-    m = Mailer(backend="smtp", smtp={"host": "h", "port": 587, "starttls": True},
-               from_addr="noreply@wahoobay.org", base_url="https://example.org")
+    m = Mailer(
+        backend="smtp",
+        smtp={"host": "h", "port": 587, "starttls": True},
+        from_addr="noreply@wahoobay.org",
+        base_url="https://example.org",
+    )
     m.send("a@example.org", "One", "Body")
     m.send("a@example.org", "Two", "Body")
     first, second = sent
@@ -211,9 +217,12 @@ def test_smtp_failure_falls_back_to_manual_rather_than_raising(monkeypatch):
         raise OSError("relay refused")
 
     monkeypatch.setattr("smtplib.SMTP", explode)
-    m = Mailer(backend="smtp", smtp={"host": "h", "port": 25, "user": None,
-                                     "password": None, "starttls": False},
-               from_addr="x@y.org", base_url="https://example.org")
+    m = Mailer(
+        backend="smtp",
+        smtp={"host": "h", "port": 25, "user": None, "password": None, "starttls": False},
+        from_addr="x@y.org",
+        base_url="https://example.org",
+    )
     # A dead relay must not turn a password reset into a 500.
     assert m.send("someone@example.org", "S", "B") == "manual"
 
@@ -226,22 +235,25 @@ def test_reset_email_contains_the_link_and_no_token_elsewhere():
 
 
 def test_unrecognized_backend_logs_warning_and_falls_back_to_manual(caplog):
-    m = Mailer(backend="SMTP", smtp={"host": "h", "port": 25}, from_addr="x@y.org",
-               base_url="https://example.org")
+    m = Mailer(
+        backend="SMTP",
+        smtp={"host": "h", "port": 25},
+        from_addr="x@y.org",
+        base_url="https://example.org",
+    )
     assert m.backend == "manual"
     assert "unrecognized backend 'SMTP'" in caplog.text
     assert "falling back to manual" in caplog.text
 
 
-def test_smtp_missing_config_logs_error_and_falls_back_to_manual(
-    monkeypatch, caplog
-):
+def test_smtp_missing_config_logs_error_and_falls_back_to_manual(monkeypatch, caplog):
     def explode(*a, **k):
         raise AssertionError("SMTP must not be contacted when config invalid")
 
     monkeypatch.setattr("smtplib.SMTP", explode)
-    m = Mailer(backend="smtp", smtp={"port": 587}, from_addr="x@y.org",
-               base_url="https://example.org")
+    m = Mailer(
+        backend="smtp", smtp={"port": 587}, from_addr="x@y.org", base_url="https://example.org"
+    )
     assert m.backend == "manual"
     assert "required config missing" in caplog.text
     assert "host" in caplog.text

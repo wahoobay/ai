@@ -4,6 +4,7 @@ forgot-password pages (and the email links they send) answer. An account
 waiting for approval sees only the waiting page. Viewers get the
 dashboard, reviewers the dashboard and the review site, admins
 everything."""
+
 from __future__ import annotations
 
 import re
@@ -15,8 +16,15 @@ from review_fixtures import CSRF, PASSWORD, login, make_user
 pytestmark = pytest.mark.anyio
 
 # Every path a signed-out visitor may reach. Everything else answers 401.
-OPEN_PATHS = {"/login", "/register", "/forgot-password", "/reset-password", "/verify-email",
-              "/waiting", "/healthz"}
+OPEN_PATHS = {
+    "/login",
+    "/register",
+    "/forgot-password",
+    "/reset-password",
+    "/verify-email",
+    "/waiting",
+    "/healthz",
+}
 OPEN_PREFIXES = ("/api/auth/",)
 JSON = {"Accept": "application/json"}
 HTML = {"Accept": "text/html,application/xhtml+xml"}
@@ -64,9 +72,18 @@ async def test_signed_out_pages_go_to_sign_in_and_come_back(rdb, rclient):
 
 
 async def test_the_sign_in_pages_and_their_assets_stay_open(rdb, rclient):
-    for path in ("/login", "/register", "/forgot-password", "/reset-password?token=x",
-                 "/verify-email?token=x", "/healthz", "/static/style.css", "/static/auth.js",
-                 "/static/theme.css", "/static/theme.js"):
+    for path in (
+        "/login",
+        "/register",
+        "/forgot-password",
+        "/reset-password?token=x",
+        "/verify-email?token=x",
+        "/healthz",
+        "/static/style.css",
+        "/static/auth.js",
+        "/static/theme.css",
+        "/static/theme.js",
+    ):
         assert rclient.get(path, follow_redirects=False).status_code == 200, path
     assert rclient.get("/api/auth/me").json()["authenticated"] is False
 
@@ -104,16 +121,23 @@ async def test_the_waiting_page_sends_everyone_else_on(rdb, rclient):
 
 DASHBOARD = ["/", "/api/species_counts", "/api/export/README.md", "/api/celebrities"]
 REVIEW = ["/review", "/api/review/species", "/api/review/mine/recent"]
-ADMIN = ["/admin/users.html", "/api/admin/users", "/admin/regions.html", "/api/admin/negative_regions"]
+ADMIN = [
+    "/admin/users.html",
+    "/api/admin/users",
+    "/admin/regions.html",
+    "/api/admin/negative_regions",
+]
 
 
-@pytest.mark.parametrize("role, allowed, refused", [
-    ("viewer", DASHBOARD, REVIEW + ADMIN),
-    ("reviewer", DASHBOARD + REVIEW, ADMIN),
-    ("admin", DASHBOARD + REVIEW + ADMIN, []),
-])
-async def test_each_role_reaches_exactly_its_part_of_the_site(rdb, rclient, role, allowed,
-                                                              refused):
+@pytest.mark.parametrize(
+    "role, allowed, refused",
+    [
+        ("viewer", DASHBOARD, REVIEW + ADMIN),
+        ("reviewer", DASHBOARD + REVIEW, ADMIN),
+        ("admin", DASHBOARD + REVIEW + ADMIN, []),
+    ],
+)
+async def test_each_role_reaches_exactly_its_part_of_the_site(rdb, rclient, role, allowed, refused):
     await make_user(rdb, "someone", role=role)
     login(rclient, "someone")
     for path in allowed:
@@ -131,7 +155,14 @@ async def test_a_refused_page_says_so_in_the_sites_style(rdb, rclient):
 
 
 async def test_signing_up_still_works_signed_out(rdb, rclient):
-    r = rclient.post("/api/auth/register", headers=CSRF, json={
-        "username": "fresh", "display_name": "Fresh", "email": "fresh@example.org",
-        "password": PASSWORD})
+    r = rclient.post(
+        "/api/auth/register",
+        headers=CSRF,
+        json={
+            "username": "fresh",
+            "display_name": "Fresh",
+            "email": "fresh@example.org",
+            "password": PASSWORD,
+        },
+    )
     assert r.status_code == 200, r.text

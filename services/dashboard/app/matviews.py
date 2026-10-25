@@ -10,6 +10,7 @@ Refresh uses `CONCURRENTLY` so reads are never blocked. That requires a
 unique index on the matview, which db/init.sql already creates on
 track_id.
 """
+
 from __future__ import annotations
 
 import asyncio
