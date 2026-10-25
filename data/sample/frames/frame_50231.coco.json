@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50231.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    38,
+    25,
+    31,
+    31
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    171,
+    34,
+    42,
+    36
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    39,
+    115,
+    56,
+    33
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    192,
+    72,
+    43,
+    21
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    208,
+    21,
+    41,
+    30
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    164,
+    127,
+    53,
+    23
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    141,
+    15,
+    32,
+    24
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    175,
+    105,
+    36,
+    17
+   ],
+   "category": "Acanthurus coeruleus"
+  }
+ ]
+}

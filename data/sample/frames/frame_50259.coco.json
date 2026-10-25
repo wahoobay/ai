@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50259.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    113,
+    135,
+    48,
+    16
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    165,
+    29,
+    58,
+    38
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    18,
+    144,
+    64,
+    31
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    156,
+    94,
+    66,
+    26
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    95,
+    105,
+    55,
+    14
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    63,
+    27,
+    32,
+    29
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    174,
+    75,
+    34,
+    37
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    111,
+    74,
+    68,
+    31
+   ],
+   "category": "Acanthurus coeruleus"
+  }
+ ]
+}

@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50273.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    57,
+    51,
+    40,
+    31
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    184,
+    152,
+    51,
+    26
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    38,
+    104,
+    61,
+    27
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    186,
+    51,
+    50,
+    31
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    142,
+    133,
+    68,
+    22
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    218,
+    73,
+    55,
+    21
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    97,
+    156,
+    53,
+    19
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    206,
+    143,
+    35,
+    26
+   ],
+   "category": "Lutjanus griseus"
+  }
+ ]
+}

@@ -20,12 +20,9 @@ from alembic.script import ScriptDirectory
 def alembic_ini() -> Path:
     here = Path(__file__).resolve()
     candidates = [Path(p) for p in (os.environ.get("ALEMBIC_INI"),) if p]
-    candidates += [
-        here.parents[1] / "db" / "alembic.ini",  # the image: /app/app/migrate.py -> /app/db
-        here.parents[3]
-        / "db"
-        / "alembic.ini",  # the repository: services/dashboard/app -> <root>/db
-    ]
+    if here.parents[2].name == "services":  # a checkout: services/dashboard/app -> <root>/db
+        candidates.append(here.parents[3] / "db" / "alembic.ini")
+    candidates.append(here.parents[1] / "db" / "alembic.ini")  # the image: /app/app -> /app/db
     for candidate in candidates:
         if candidate.is_file():
             return candidate

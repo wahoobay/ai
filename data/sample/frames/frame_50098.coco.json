@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50098.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    82,
+    141,
+    51,
+    20
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    190,
+    14,
+    41,
+    15
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    136,
+    81,
+    33,
+    35
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    14,
+    138,
+    24,
+    24
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    81,
+    153,
+    56,
+    18
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    225,
+    85,
+    54,
+    21
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    169,
+    46,
+    55,
+    21
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    249,
+    22,
+    45,
+    16
+   ],
+   "category": "Acanthurus coeruleus"
+  }
+ ]
+}

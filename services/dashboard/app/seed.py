@@ -28,7 +28,13 @@ from psycopg.types.json import Jsonb
 from .config import settings
 from .frames import frames_url
 
-REPO_SAMPLE = Path(__file__).resolve().parents[3] / "data" / "sample"
+_HERE = Path(__file__).resolve()
+# A checkout (three levels down) or the image (/app/app, with data/ beside app/).
+REPO_SAMPLE = (
+    (_HERE.parents[3] if _HERE.parents[2].name == "services" else _HERE.parents[1])
+    / "data"
+    / "sample"
+)
 TABLES = ("detection_events", "saved_frames", "sensor_readings", "weather_readings", "alerts")
 SENSOR_COLUMNS = (
     "water_temp_c",

@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50028.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    188,
+    144,
+    67,
+    32
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    79,
+    109,
+    54,
+    25
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    221,
+    92,
+    40,
+    39
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    259,
+    104,
+    37,
+    29
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    50,
+    127,
+    55,
+    35
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    96,
+    109,
+    48,
+    31
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    270,
+    114,
+    25,
+    22
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    246,
+    72,
+    51,
+    20
+   ],
+   "category": "Holacanthus bermudensis"
+  }
+ ]
+}

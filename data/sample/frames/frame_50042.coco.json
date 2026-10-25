@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50042.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    258,
+    143,
+    45,
+    26
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    136,
+    50,
+    27,
+    19
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    236,
+    66,
+    61,
+    29
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    104,
+    1,
+    58,
+    30
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    95,
+    52,
+    40,
+    20
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    110,
+    128,
+    32,
+    28
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    117,
+    101,
+    57,
+    30
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    37,
+    70,
+    49,
+    38
+   ],
+   "category": "Stegastes partitus"
+  }
+ ]
+}

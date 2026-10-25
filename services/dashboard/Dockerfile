@@ -29,6 +29,9 @@ COPY services/dashboard/app /app/app
 # Schema migrations: `python -m app.migrate` (and the migrate Lambda) run them.
 COPY db /app/db
 
+# Catalogues the page and the review tool read: species sheet, celebrities, taxonomy.
+COPY assets /app/assets
+
 # Static sidecar served by /api/export/camera_metadata.json. Ships with
 # the image so the dashboard works without bind-mounts.
 COPY data/camera_metadata.json /data/camera_metadata.json

@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50238.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    174,
+    79,
+    34,
+    35
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    188,
+    21,
+    65,
+    26
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    96,
+    84,
+    57,
+    24
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    209,
+    143,
+    34,
+    16
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    39,
+    54,
+    60,
+    35
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    116,
+    120,
+    53,
+    14
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    168,
+    145,
+    48,
+    26
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    168,
+    22,
+    39,
+    24
+   ],
+   "category": "Pomacanthus paru"
+  }
+ ]
+}

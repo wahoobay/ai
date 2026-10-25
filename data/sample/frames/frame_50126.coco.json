@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50126.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    99,
+    85,
+    69,
+    21
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    197,
+    33,
+    30,
+    14
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    118,
+    28,
+    43,
+    25
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    115,
+    147,
+    54,
+    28
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    160,
+    65,
+    69,
+    31
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    207,
+    18,
+    65,
+    33
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    247,
+    122,
+    38,
+    26
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    123,
+    101,
+    43,
+    34
+   ],
+   "category": "Lutjanus griseus"
+  }
+ ]
+}

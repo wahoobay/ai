@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50133.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    6,
+    154,
+    60,
+    16
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    83,
+    139,
+    30,
+    25
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    249,
+    71,
+    28,
+    29
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    64,
+    16,
+    33,
+    27
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    4,
+    28,
+    35,
+    19
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    86,
+    115,
+    54,
+    33
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    90,
+    78,
+    40,
+    30
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    144,
+    102,
+    41,
+    22
+   ],
+   "category": "Haemulon flavolineatum"
+  }
+ ]
+}

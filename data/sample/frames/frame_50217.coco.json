@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50217.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    142,
+    73,
+    45,
+    26
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    74,
+    131,
+    43,
+    38
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    130,
+    44,
+    42,
+    14
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    177,
+    79,
+    50,
+    15
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    203,
+    91,
+    24,
+    20
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    25,
+    101,
+    52,
+    36
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    53,
+    89,
+    27,
+    25
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    32,
+    95,
+    64,
+    31
+   ],
+   "category": "Haemulon flavolineatum"
+  }
+ ]
+}

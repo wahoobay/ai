@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50224.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    127,
+    41,
+    47,
+    30
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    76,
+    109,
+    32,
+    28
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    241,
+    85,
+    34,
+    38
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    74,
+    93,
+    67,
+    19
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    176,
+    22,
+    49,
+    30
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    205,
+    130,
+    58,
+    16
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    128,
+    81,
+    51,
+    21
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    272,
+    135,
+    47,
+    25
+   ],
+   "category": "Acanthurus coeruleus"
+  }
+ ]
+}

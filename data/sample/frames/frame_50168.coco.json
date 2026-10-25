@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50168.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    46,
+    151,
+    46,
+    21
+   ],
+   "category": "Acanthurus coeruleus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    176,
+    129,
+    32,
+    30
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    111,
+    44,
+    42,
+    20
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    216,
+    95,
+    47,
+    24
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    117,
+    135,
+    32,
+    29
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    64,
+    95,
+    56,
+    30
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    142,
+    148,
+    43,
+    28
+   ],
+   "category": "Pomacanthus paru"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    189,
+    51,
+    50,
+    26
+   ],
+   "category": "Haemulon flavolineatum"
+  }
+ ]
+}

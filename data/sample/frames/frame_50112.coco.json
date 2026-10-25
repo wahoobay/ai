@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50112.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    249,
+    140,
+    47,
+    20
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    159,
+    80,
+    32,
+    25
+   ],
+   "category": "Holacanthus bermudensis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    245,
+    30,
+    67,
+    28
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    219,
+    36,
+    63,
+    37
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    58,
+    104,
+    62,
+    20
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    118,
+    3,
+    57,
+    26
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    10,
+    14,
+    27,
+    38
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    97,
+    3,
+    31,
+    34
+   ],
+   "category": "Pomacanthus paru"
+  }
+ ]
+}

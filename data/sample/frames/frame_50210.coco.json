@@ -1,0 +1,100 @@
+{
+ "images": [
+  {
+   "id": 1,
+   "file_name": "frame_50210.jpg",
+   "width": 320,
+   "height": 180
+  }
+ ],
+ "annotations": [
+  {
+   "id": 1,
+   "image_id": 1,
+   "bbox": [
+    200,
+    101,
+    66,
+    37
+   ],
+   "category": "Sparisoma viride"
+  },
+  {
+   "id": 2,
+   "image_id": 1,
+   "bbox": [
+    6,
+    120,
+    25,
+    36
+   ],
+   "category": "Abudefduf saxatilis"
+  },
+  {
+   "id": 3,
+   "image_id": 1,
+   "bbox": [
+    272,
+    39,
+    29,
+    17
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 4,
+   "image_id": 1,
+   "bbox": [
+    84,
+    97,
+    34,
+    29
+   ],
+   "category": "Lutjanus griseus"
+  },
+  {
+   "id": 5,
+   "image_id": 1,
+   "bbox": [
+    126,
+    11,
+    53,
+    31
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 6,
+   "image_id": 1,
+   "bbox": [
+    58,
+    141,
+    43,
+    36
+   ],
+   "category": "Stegastes partitus"
+  },
+  {
+   "id": 7,
+   "image_id": 1,
+   "bbox": [
+    209,
+    46,
+    42,
+    35
+   ],
+   "category": "Haemulon flavolineatum"
+  },
+  {
+   "id": 8,
+   "image_id": 1,
+   "bbox": [
+    153,
+    60,
+    42,
+    23
+   ],
+   "category": "Sparisoma viride"
+  }
+ ]
+}
