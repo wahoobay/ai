@@ -28,7 +28,7 @@
     49,
     22
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Abudefduf saxatilis"
   },
   {
    "id": 3,
@@ -39,7 +39,7 @@
     57,
     30
    ],
-   "category": "Stegastes partitus"
+   "category": "Sparisoma viride"
   },
   {
    "id": 4,
@@ -50,7 +50,7 @@
     26,
     33
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Haemulon flavolineatum"
   },
   {
    "id": 5,
@@ -61,7 +61,7 @@
     57,
     22
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Pomacanthus paru"
   },
   {
    "id": 6,
@@ -83,7 +83,7 @@
     66,
     16
    ],
-   "category": "Holacanthus bermudensis"
+   "category": "Sparisoma viride"
   },
   {
    "id": 8,
@@ -94,7 +94,7 @@
     35,
     28
    ],
-   "category": "Abudefduf saxatilis"
+   "category": "Lutjanus griseus"
   }
  ]
 }

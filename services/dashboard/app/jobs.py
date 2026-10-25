@@ -66,7 +66,7 @@ async def record_poller_status(
     await conn.execute(POLLER_STATUS_SQL, {"name": name, "ok": ok, "error": error})
 
 
-async def seed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
+async def seed_sample(pool: AsyncConnectionPool, *, force: bool = False) -> dict[str, Any]:
     """Load the sample dataset from SAMPLE_URL into an empty database (staging's first fill)."""
     from .frames import frames_url
     from .seed import default_source, seed
@@ -80,7 +80,13 @@ async def seed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
         frames_url=frames_url(),
         deployment_uri=site.deployment_uri,
         admin_password=os.environ.get("ADMIN_PASSWORD") or None,
+        force=force,
     )
+
+
+async def reseed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Reload the sample over an earlier one (its rows are replaced; accounts stay)."""
+    return await seed_sample(pool, force=True)
 
 
 async def status(pool: AsyncConnectionPool) -> dict[str, Any]:
@@ -118,6 +124,7 @@ JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "refresh_matviews": refresh_matviews,
     "alert_rules": alert_rules,
     "seed": seed_sample,
+    "reseed": reseed_sample,
     "status": status,
 }
 READ_ONLY = {"status"}  # not recorded in job_runs

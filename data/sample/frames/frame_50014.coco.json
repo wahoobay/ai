@@ -12,43 +12,43 @@
    "id": 1,
    "image_id": 1,
    "bbox": [
-    203,
-    60,
-    56,
-    19
+    106,
+    137,
+    64,
+    14
    ],
-   "category": "Lutjanus griseus"
+   "category": "Haemulon flavolineatum"
   },
   {
    "id": 2,
    "image_id": 1,
    "bbox": [
-    74,
-    99,
-    29,
-    16
+    1,
+    128,
+    24,
+    27
    ],
-   "category": "Holacanthus bermudensis"
+   "category": "Abudefduf saxatilis"
   },
   {
    "id": 3,
    "image_id": 1,
    "bbox": [
-    218,
-    57,
-    62,
-    19
+    0,
+    5,
+    47,
+    23
    ],
-   "category": "Abudefduf saxatilis"
+   "category": "Sparisoma viride"
   },
   {
    "id": 4,
    "image_id": 1,
    "bbox": [
-    184,
-    88,
-    26,
-    15
+    32,
+    104,
+    63,
+    17
    ],
    "category": "Haemulon flavolineatum"
   },
@@ -56,45 +56,45 @@
    "id": 5,
    "image_id": 1,
    "bbox": [
-    19,
-    70,
-    50,
+    63,
+    53,
+    60,
     17
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Pomacanthus paru"
   },
   {
    "id": 6,
    "image_id": 1,
    "bbox": [
-    147,
-    83,
-    59,
-    33
+    40,
+    7,
+    67,
+    31
    ],
-   "category": "Haemulon flavolineatum"
+   "category": "Sparisoma viride"
   },
   {
    "id": 7,
    "image_id": 1,
    "bbox": [
-    174,
-    135,
-    64,
-    33
+    203,
+    60,
+    56,
+    19
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Sparisoma viride"
   },
   {
    "id": 8,
    "image_id": 1,
    "bbox": [
-    117,
-    20,
-    39,
-    30
+    74,
+    99,
+    29,
+    16
    ],
-   "category": "Sparisoma viride"
+   "category": "Lutjanus griseus"
   }
  ]
 }

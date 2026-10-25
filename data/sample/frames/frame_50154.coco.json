@@ -12,89 +12,89 @@
    "id": 1,
    "image_id": 1,
    "bbox": [
-    21,
-    91,
-    50,
-    37
+    47,
+    7,
+    31,
+    38
    ],
-   "category": "Lutjanus griseus"
+   "category": "Pomacanthus paru"
   },
   {
    "id": 2,
    "image_id": 1,
    "bbox": [
-    89,
-    41,
-    64,
-    38
+    69,
+    97,
+    45,
+    34
    ],
-   "category": "Sparisoma viride"
+   "category": "Stegastes partitus"
   },
   {
    "id": 3,
    "image_id": 1,
    "bbox": [
-    90,
-    82,
-    25,
-    30
+    271,
+    70,
+    35,
+    35
    ],
-   "category": "Stegastes partitus"
+   "category": "Pomacanthus paru"
   },
   {
    "id": 4,
    "image_id": 1,
    "bbox": [
-    253,
-    66,
-    30,
-    16
+    28,
+    63,
+    27,
+    15
    ],
-   "category": "Abudefduf saxatilis"
+   "category": "Stegastes partitus"
   },
   {
    "id": 5,
    "image_id": 1,
    "bbox": [
-    199,
-    88,
-    60,
-    32
+    122,
+    86,
+    57,
+    26
    ],
-   "category": "Holacanthus bermudensis"
+   "category": "Lutjanus griseus"
   },
   {
    "id": 6,
    "image_id": 1,
    "bbox": [
-    76,
-    71,
-    36,
-    18
+    180,
+    144,
+    50,
+    35
    ],
-   "category": "Stegastes partitus"
+   "category": "Sparisoma viride"
   },
   {
    "id": 7,
    "image_id": 1,
    "bbox": [
-    110,
-    10,
-    66,
-    16
+    186,
+    112,
+    32,
+    20
    ],
-   "category": "Pomacanthus paru"
+   "category": "Lutjanus griseus"
   },
   {
    "id": 8,
    "image_id": 1,
    "bbox": [
-    170,
-    41,
-    52,
-    30
+    234,
+    134,
+    30,
+    37
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Lutjanus griseus"
   }
  ]
 }

@@ -53,6 +53,35 @@ def test_seed_loads_the_sample_into_an_empty_database(pg_url, tmp_path):
     assert query(pg_url, "SELECT count(*) FROM detection_events")[0][0] == out["detection_events"]
 
 
+def test_reseed_replaces_the_sample_instead_of_stacking_it(pg_url, tmp_path):
+    """Staging's first fill came from a sample whose tracks did not read as sightings;
+    reloading a corrected sample must replace the old rows, not add to them, and must
+    leave the accounts alone."""
+    from app.seed import seed
+
+    alembic("upgrade", "head", url=pg_url)
+    frames_url = f"file://{tmp_path}/frames"
+    first = seed(
+        pg_url,
+        f"file://{SAMPLE}",
+        location_id="reef_b",
+        frames_url=frames_url,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    again = seed(
+        pg_url, f"file://{SAMPLE}", location_id="reef_b", frames_url=frames_url, force=True
+    )
+    assert again["replaced"] is True and again["detection_events"] == first["detection_events"]
+    assert query(pg_url, "SELECT count(*) FROM detection_events")[0][0] == first["detection_events"]
+    assert query(pg_url, "SELECT count(*) FROM saved_frames")[0][0] == first["saved_frames"]
+    assert query(pg_url, "SELECT count(*) FROM sensor_readings")[0][0] == first["sensor_readings"]
+    assert query(pg_url, "SELECT count(*) FROM weather_readings")[0][0] == first["weather_readings"]
+    newest = query(pg_url, "SELECT max(ts) FROM detection_events")[0][0]
+    assert (
+        datetime.now(UTC) - newest
+    ).total_seconds() < 3600  # re-anchored to now, not to 2026-01-01
+
+
 def test_seed_is_a_job(pg_url, tmp_path, monkeypatch):
     from app.jobs import run_job
 
@@ -63,7 +92,16 @@ def test_seed_is_a_job(pg_url, tmp_path, monkeypatch):
     monkeypatch.setenv("SAMPLE_URL", f"file://{SAMPLE}")
     out = run_job("seed")
     assert out["ok"] is True and out["detail"]["saved_frames"] >= 40
-    assert query(pg_url, "SELECT job, ok FROM job_runs") == [("seed", True)]
+    again = run_job("reseed")
+    assert again["ok"] is True and again["detail"]["replaced"] is True
+    assert (
+        query(pg_url, "SELECT count(*) FROM detection_events")[0][0]
+        == out["detail"]["detection_events"]
+    )
+    assert query(pg_url, "SELECT job, ok FROM job_runs ORDER BY id") == [
+        ("seed", True),
+        ("reseed", True),
+    ]
 
 
 def test_the_first_admin_comes_from_the_environment(pg_url):

@@ -64,7 +64,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .alerts import SLO_RULES
 from .common_names import common as common_name
 from .common_names import reload_manifest_names
-from .config import settings
+from .config import autoplay_embed, settings
 from .exports import (
     export_alerts,
     export_corrections,
@@ -749,7 +749,7 @@ def build_app() -> FastAPI:
             "index.html",
             {
                 "worker_url": cfg.worker_url,
-                "live_video_embed_url": cfg.live_video_embed_url,
+                "live_video_embed_url": autoplay_embed(cfg.live_video_embed_url),
                 "asset_version": _asset_version(),
                 "deployment": cfg.deployment_uri,
             },

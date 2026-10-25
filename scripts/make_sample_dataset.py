@@ -73,6 +73,11 @@ def make(out: Path) -> dict[str, int]:
     detections: list[dict] = []
     frames: list[dict] = []
     track_id = 1000
+    # One slot per fish a camera sees at a time. A fish stays for three to eight of its
+    # camera's frames under one track id and one species -- the sightings view counts a
+    # track only when its frames agree on a species three or more times -- and when it
+    # leaves, a new fish takes the slot.
+    fish_by_camera: dict[str, list[dict]] = {s: [] for s in SOURCES}
     for i in range(FRAMES):
         ts = END - timedelta(minutes=36 * (FRAMES - 1 - i))
         source = SOURCES[i % 2]
@@ -85,15 +90,24 @@ def make(out: Path) -> dict[str, int]:
         frame_file, coco_file = f"frame_{frame_id}.jpg", f"frame_{frame_id}.coco.json"
         (frames_dir / frame_file).write_bytes(_draw_frame(rng, boxes))
         annotations = []
+        fish = fish_by_camera[source]
+        while len(fish) < FISH_PER_FRAME:
+            track_id += 1
+            fish.append(
+                {
+                    "track_id": track_id,
+                    "picks": rng.choice(len(SPECIES), size=3, replace=False),
+                    "left": int(rng.integers(3, 9)),
+                }
+            )
         for n, (x1, y1, x2, y2) in enumerate(boxes):
-            picks = rng.choice(len(SPECIES), size=3, replace=False)
+            one = fish[n]
             scores = sorted(rng.dirichlet(np.ones(3) * 0.6), reverse=True)
             topk = [
                 {"name": SPECIES[p][0], "species_id": SPECIES[p][1], "accuracy": round(float(s), 3)}
-                for p, s in zip(picks, scores, strict=True)
+                for p, s in zip(one["picks"], scores, strict=True)
             ]
-            # A fish lingers: the same track id over a couple of frames of the same camera.
-            track_id += 1 if rng.random() < 0.6 else 0
+            one["left"] -= 1
             detections.append(
                 {
                     "ts": _iso(ts + timedelta(milliseconds=int(n * 40))),
@@ -105,7 +119,7 @@ def make(out: Path) -> dict[str, int]:
                     "best_name": topk[0]["name"],
                     "best_species_id": topk[0]["species_id"],
                     "best_accuracy": topk[0]["accuracy"],
-                    "track_id": track_id,
+                    "track_id": one["track_id"],
                     "model_version": "sample",
                 }
             )
@@ -117,6 +131,7 @@ def make(out: Path) -> dict[str, int]:
                     "category": topk[0]["name"],
                 }
             )
+        fish_by_camera[source] = [one for one in fish if one["left"] > 0]
         (frames_dir / coco_file).write_text(
             json.dumps(
                 {
