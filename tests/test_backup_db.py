@@ -7,8 +7,10 @@ import csv
 import gzip
 import os
 import re
+import shutil
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -17,7 +19,22 @@ from review_fixtures import TEST_DSN, add_verdict, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "backup_db.sh"
-PG_RESTORE = "/raid/scratch/dzimmerman2021/miniconda3/envs/wahoobay/bin/pg_restore"
+
+
+def _pg_restore() -> str:
+    """pg_restore from PG_BIN, the PATH, or the DGX conda environment (where the
+    backup cron runs); the backup script finds pg_dump the same way."""
+    for candidate in (
+        Path(os.environ["PG_BIN"]) / "pg_restore" if os.environ.get("PG_BIN") else None,
+        Path(shutil.which("pg_restore")) if shutil.which("pg_restore") else None,
+        Path("/raid/scratch/dzimmerman2021/miniconda3/envs/wahoobay/bin/pg_restore"),
+    ):
+        if candidate and candidate.exists():
+            return str(candidate)
+    pytest.skip("pg_restore not found (set PG_BIN)")
+
+
+PG_RESTORE = _pg_restore() if TEST_DSN else ""
 
 
 def _run(tmp_path, **env):
@@ -26,6 +43,7 @@ def _run(tmp_path, **env):
         "BACKUP_DATABASE_URL": TEST_DSN,
         "BACKUP_DIR": str(tmp_path / "main"),
         "BACKUP_COPY_DIR": str(tmp_path / "copy"),
+        "PYTHON": sys.executable,
         **env,
     }
     return subprocess.run(
@@ -86,7 +104,9 @@ async def test_by_default_there_is_no_second_copy(rdb, tmp_path):
     # 2026-10-01: the home directory is on the nearly full root disk and must
     # hold no project data, so a copy is made only when BACKUP_COPY_DIR is set.
     env = {k: v for k, v in os.environ.items() if k != "BACKUP_COPY_DIR"}
-    env.update(BACKUP_DATABASE_URL=TEST_DSN, BACKUP_DIR=str(tmp_path / "main"))
+    env.update(
+        BACKUP_DATABASE_URL=TEST_DSN, BACKUP_DIR=str(tmp_path / "main"), PYTHON=sys.executable
+    )
     r = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr
     assert r.stdout.rstrip().endswith(str(tmp_path / "main")), "no '+ <copy>' in the log line"

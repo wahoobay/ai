@@ -51,13 +51,26 @@ jobs:
       # land in one focused commit, then re-enable.
 
   # -------------------------------------------------------------------
-  # Smoke-import the dashboard + poller modules. Catches obvious Python
-  # errors (missing imports, syntax issues) before paying for a 5–15 min
-  # container build. Worker is excluded — it imports torch / cuda which
-  # we don't want on a CPU runner.
+  # Smoke-import the dashboard + poller modules, then run the test suite
+  # against a real PostgreSQL (the schema comes from the Alembic
+  # migrations). Worker is excluded from the imports — it needs torch /
+  # cuda, which a CPU runner does not have.
   # -------------------------------------------------------------------
   smoke-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ai
+          POSTGRES_PASSWORD: ai
+          POSTGRES_DB: ai_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ai -d ai_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,13 +90,12 @@ jobs:
         env:
           PYTHONPATH: services/sensestream_poller
         run: python -c "from app import main; print('poller ok')"
-      - name: Run pytest (anything we've collected so far)
+      - name: Run the test suite against a real database
+        env:
+          TEST_DATABASE_URL: postgresql://ai:ai@localhost:5432/ai_test
         run: |
           pip install pytest
-          # Pass if there are no tests collected yet — Phase 2 deliverable
-          # is the harness, not the suite.
-          pytest --collect-only -q || true
-          pytest -q || [ "$?" -eq 5 ]   # exit 5 == "no tests collected"
+          pytest -q
 
   # -------------------------------------------------------------------
   # Build (and on main, push) container images. Matrix over the three

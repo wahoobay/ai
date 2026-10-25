@@ -1,4 +1,8 @@
--- Wahoo Bay fish detection schema
+-- Baseline schema (Alembic revision 0001): the schema db/init.sql used to
+-- build, with the saved_frames ALTERs placed after the table they alter so a
+-- fresh database gets every column. Every statement is idempotent, so a
+-- database that already has the schema can run this (or be stamped at 0001).
+-- Later changes are their own revisions; this file is history, not a target.
 
 CREATE TABLE IF NOT EXISTS detection_events (
     id              BIGSERIAL PRIMARY KEY,
@@ -26,10 +30,6 @@ ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS detector_sha256    TEXT;
 ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS classifier_sha256  TEXT;
 ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS config_hash        TEXT;
 ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS pipeline_git_sha   TEXT;
-
-ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS model_version      TEXT;
-ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS config_hash        TEXT;
-ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS pipeline_git_sha   TEXT;
 
 -- Track id from the smoother — lets us treat a single fish across many frames
 -- as one "sighting" instead of N independent events. NULL when the smoother
@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS saved_frames (
     num_fish    INTEGER     NOT NULL
 );
 
+-- Model-ops provenance columns (added after the table shipped; kept as
+-- idempotent ALTERs, now placed after the CREATE they alter).
+ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS model_version      TEXT;
+ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS config_hash        TEXT;
+ALTER TABLE saved_frames     ADD COLUMN IF NOT EXISTS pipeline_git_sha   TEXT;
+
 CREATE INDEX IF NOT EXISTS saved_frames_ts_desc ON saved_frames (ts DESC);
 -- Lookups by (frame_id, source_name) join detection_events back to its source
 -- frame for ROI review. Without this index the dashboard's /api/events JOIN
@@ -75,7 +81,7 @@ CREATE INDEX IF NOT EXISTS saved_frames_ts_desc ON saved_frames (ts DESC);
 CREATE INDEX IF NOT EXISTS saved_frames_frame_source
     ON saved_frames (frame_id, source_name);
 
--- Water-quality sonde readings (sensestream.org wahoo_2 deployment).
+-- Water-quality sonde readings (the site's SenseStream sonde deployment).
 -- Populated either from a live poller or from the synthetic data generator
 -- at scripts/gen_synthetic_sensor_data.py. Units match the sonde's native output.
 CREATE TABLE IF NOT EXISTS sensor_readings (

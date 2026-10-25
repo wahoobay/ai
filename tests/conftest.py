@@ -9,6 +9,7 @@ to apply — is the fix."""
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,20 +46,23 @@ if os.environ.get("TEST_DATABASE_URL"):
 
 from review_fixtures import rclient, rdb, review_assets  # noqa: E402,F401
 
-MIGRATION = REPO_ROOT / "db" / "migrations" / "2026-09-24-review-tool.sql"
+ALEMBIC_INI = REPO_ROOT / "db" / "alembic.ini"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _review_schema():
-    """Bring the test database up to the review-tool schema once per run.
-    The migration is idempotent, so after the first run this is a no-op."""
+def _schema_at_head():
+    """Bring the test database to the current schema (Alembic head) once per run;
+    an empty database is built from nothing, an existing one only gains what is new."""
     dsn = os.environ.get("TEST_DATABASE_URL")
     if not dsn:
         return
-    import psycopg
-
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute(MIGRATION.read_text())
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
+        check=True,
+        cwd=REPO_ROOT,
+        env={**os.environ, "DATABASE_URL": dsn},
+        capture_output=True,
+    )
 
 
 @pytest.fixture(autouse=True)

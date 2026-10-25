@@ -26,9 +26,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-wahoobay}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # init.sql runs once on first boot of an empty pgdata volume.
-      # Fully idempotent so repeated bind-mount runs are safe.
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # The schema is applied by the `migrate` service (Alembic), not at boot.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wahoobay} -d ${POSTGRES_DB:-wahoobay}"]
       interval: 5s
@@ -82,6 +80,23 @@ services:
       # for direct-poke debugging only (curl /stats, /healthz from host).
       - "127.0.0.1:8081:8081"
     restart: unless-stopped
+
+  migrate:
+    # One shot: brings the database to the current schema (Alembic head) and
+    # exits. `make up` runs it before the long-running services; by hand:
+    #   docker compose --profile web run --rm migrate
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    profiles: ["web"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
+    command: ["python", "-m", "app.migrate"]
+    restart: "no"
 
   dashboard:
     build:

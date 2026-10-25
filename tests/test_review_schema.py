@@ -1,5 +1,5 @@
 """Schema for the review tool (spec §5): tables, columns, constraints,
-and that db/init.sql carries the same statements as the migration."""
+and that the Alembic baseline carries the same statements as the migration."""
 
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ from review_fixtures import TEST_DSN
 
 REPO = Path(__file__).resolve().parents[1]
 MIGRATION = REPO / "db" / "migrations" / "2026-09-24-review-tool.sql"
+BASELINE = REPO / "db" / "migrations" / "versions" / "0001_baseline.sql"
 needs_db = pytest.mark.skipif(not TEST_DSN, reason="TEST_DATABASE_URL not set")
 
 
 def _body(sql: str) -> str:
     """The migration minus its header comments and the SET line, with
-    whitespace collapsed, so it can be looked for inside init.sql."""
+    whitespace collapsed, so it can be looked for inside the baseline."""
     lines = [
         ln
         for ln in sql.splitlines()
@@ -26,13 +27,13 @@ def _body(sql: str) -> str:
     return re.sub(r"\s+", " ", "\n".join(lines)).strip()
 
 
-def test_migration_is_mirrored_in_init_sql():
-    init = re.sub(r"\s+", " ", (REPO / "db" / "init.sql").read_text())
+def test_migration_is_mirrored_in_the_baseline():
+    init = re.sub(r"\s+", " ", BASELINE.read_text())
     assert _body(MIGRATION.read_text()) in init
 
 
-def test_init_sql_creates_verdicts_with_restrict():
-    init = (REPO / "db" / "init.sql").read_text()
+def test_baseline_creates_verdicts_with_restrict():
+    init = BASELINE.read_text()
     block = init[init.index("CREATE TABLE IF NOT EXISTS detection_corrections") :]
     block = block[: block.index(");")]
     assert "ON DELETE RESTRICT" in block and "ON DELETE CASCADE" not in block
@@ -101,17 +102,17 @@ def test_a_verdict_blocks_deleting_its_detection():
             "INSERT INTO detection_corrections (event_id, not_a_fish) VALUES (%s, true)", (eid,)
         )
         conn.commit()
-        # An explicit ON DELETE RESTRICT (required by
-        # test_init_sql_creates_verdicts_with_restrict below, and by Step 7
-        # of the task brief) raises SQLSTATE 23001 (restrict_violation),
-        # not 23503 (foreign_key_violation): PostgreSQL reserves
-        # foreign_key_violation for the default ON DELETE NO ACTION.
-        # psycopg.errors.RestrictViolation is a sibling of
-        # ForeignKeyViolation under IntegrityError, not a subclass of it,
-        # so the two are not interchangeable here.
-        with pytest.raises(psycopg.errors.RestrictViolation):
+        # The constraint is ON DELETE RESTRICT (test_baseline_creates_verdicts_
+        # with_restrict below). PostgreSQL reports the blocked delete as an
+        # integrity error: 23503 (foreign_key_violation) on the versions this
+        # project runs (16 does, measured), 23001 (restrict_violation) by the
+        # letter of the standard; what matters is that the delete is refused
+        # and the detection is still there.
+        with pytest.raises(psycopg.errors.IntegrityError) as blocked:
             conn.execute("DELETE FROM detection_events WHERE id = %s", (eid,))
+        assert blocked.value.sqlstate in ("23001", "23503")
         conn.rollback()
+        assert conn.execute("SELECT count(*) FROM detection_events").fetchone()[0] == 1
 
 
 @needs_db

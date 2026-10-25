@@ -143,8 +143,9 @@ when the disk is slow.
 
 ## Postgres schema (column-by-column)
 
-All tables, views, and indexes are defined in `db/init.sql`, which is
-idempotent and safe to re-run.
+All tables, views, and indexes are defined by the Alembic migrations in
+`db/migrations/versions/` (`0001_baseline.sql` is the full schema; later
+revisions add to it).
 
 ### `detection_events`
 

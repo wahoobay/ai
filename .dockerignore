@@ -47,7 +47,7 @@ frames/
 logs/
 eval/reports/
 
-# docs / scratch (keep db/init.sql etc — they're not .md)
+# docs / scratch (db/ stays: the dashboard image carries the migrations)
 docs/
 README.md
 PLAN.md
