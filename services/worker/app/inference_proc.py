@@ -275,7 +275,9 @@ def run_inference_worker(
             slot_idx = getattr(item, "slot_idx", None)
             slot_released = False
 
-            def _release_slot(slot_idx=slot_idx) -> None:  # bound per item: the closure outlives the loop variable
+            def _release_slot(
+                slot_idx=slot_idx,
+            ) -> None:  # bound per item: the closure outlives the loop variable
                 nonlocal slot_released
                 if slot_released:
                     return
