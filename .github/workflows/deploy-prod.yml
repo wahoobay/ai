@@ -40,6 +40,7 @@ jobs:
       SERVICE_ARN: ${{ vars.PROD_SERVICE_ARN }}
       HOSTNAME: ${{ vars.PROD_HOSTNAME }}
       SERVICE_URL: ${{ vars.PROD_SERVICE_URL }}
+      GPU_INSTANCE_ID: ${{ vars.PROD_GPU_INSTANCE_ID }}  # empty until the environment has a GPU host (the stack's GpuInstanceId output)
     steps:
       - name: Guard
         if: inputs.confirm != 'deploy'
