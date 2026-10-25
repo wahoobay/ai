@@ -191,7 +191,8 @@ jobs:
     needs: build-image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.STAGING_ROLE_ARN != ''
     runs-on: ubuntu-latest
-    environment: staging
+    # No GitHub environment on purpose: the deploy role in infra trusts the ref:refs/heads/main OIDC
+    # subject, and a job that names an environment gets environment:<name> as its subject instead.
     concurrency:
       group: ai-deploy-staging
       cancel-in-progress: false

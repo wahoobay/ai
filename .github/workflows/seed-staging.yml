@@ -15,7 +15,8 @@ permissions:
 jobs:
   seed:
     runs-on: ubuntu-latest
-    environment: staging
+    # No GitHub environment on purpose: the deploy role in infra trusts the ref:refs/heads/main OIDC
+    # subject, and a job that names an environment gets environment:<name> as its subject instead.
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
