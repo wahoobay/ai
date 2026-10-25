@@ -39,5 +39,5 @@ export DATABASE_URL="${DATABASE_URL:-postgresql://wahoobay:wahoobay@127.0.0.1:54
 export DEVICE="${DEVICE:-cuda:0}"
 export WORKER_HTTP_PORT="${WORKER_HTTP_PORT:-8081}"
 
-export PYTHONPATH="$(pwd)/services/worker:${PYTHONPATH:-}"
+export PYTHONPATH="$(pwd)/services/worker:$(pwd)/services:${PYTHONPATH:-}"
 exec python -m app.main

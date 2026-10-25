@@ -240,6 +240,27 @@ IDs restart at 1 after the restart.
 | Curated `COMMON_NAMES` dict in `common_names.py` | dashboard | **Yes** — Python code change, restart |
 | New classifier checkpoint at `data/models/classifier_v2/checkpoint_best.pt` | worker(s) | **Yes** — restart worker(s); torch.compile re-warms (~25 s) |
 
+### Frames and models behind URLs
+
+Frames are written and read through `FRAMES_URL` (`file:///data/frames` in a
+container, `file://<repo>/frames` from `run_dashboard.sh` / `run_worker.sh`,
+`s3://…` on AWS) under `<location>/YYYY/MM/DD/HH/<name>.jpg`;
+`saved_frames.image_path` holds that key. Rows from before this change hold
+absolute paths and still open. Model weights come from `MODELS_URL`
+(`<model>/<version>/` + `SHA256SUMS`, published by the infra repository's
+`scripts/publish_models.py`); a worker container fetches them at start with
+`scripts/fetch_models.py` unless `/data/models` already holds files.
+
+**DGX, one-time after the pull that removed it from git:**
+`data/models/classifier_v2/checkpoint_best.pt` is no longer tracked (it lives
+in the models bucket as `classifier_v2/dgx-2026-10-24`), so `git pull` deletes
+the working-tree copy. Restore it before the next worker restart:
+
+    git show dgx-2026-10-24:data/models/classifier_v2/checkpoint_best.pt > data/models/classifier_v2/checkpoint_best.pt
+
+It is ignored from then on. The running worker is unaffected (the weights are
+in memory).
+
 ### Applying a schema change to the live database
 
 The schema is owned by Alembic: `db/alembic.ini` and `db/migrations/versions/`.

@@ -4,10 +4,9 @@
 # Runs on the host's GPU (`docker run --gpus`); the FrameTap thread reads
 # the source while a separate inference subprocess does inference.
 #
-# Models are baked in (`COPY data/models/...`) so the image is
-# self-contained for production deployment. For dev, override by
-# bind-mounting host `data/models` over `/data/models` — the contents
-# of the baked layer are masked.
+# No weights in the image: the entrypoint fetches them from MODELS_URL
+# (file:///data/models, s3://... on AWS) into /data/models at start, unless
+# they are already there -- a bind-mounted host data/models wins.
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -43,15 +42,12 @@ WORKDIR /app
 COPY services/worker/requirements.txt /app/requirements.txt
 RUN python -m pip install --no-cache-dir -r /app/requirements.txt
 
-# Model artifacts. We bake in both the v2 (DINOv2 ViT-S/14, from-scratch
-# Wahoo Bay classifier — the default backend) and the legacy Fishial
-# bundle so reverting is a single env-var flip (CLASSIFIER_BACKEND=fishial)
-# instead of a rebuild. Detector is shared by both.
-COPY data/models/detector_v26       /data/models/detector_v26
-COPY data/models/classifier_v2      /data/models/classifier_v2
-COPY data/models/classifier_v0_10_2 /data/models/classifier_v0_10_2
-
-# Application code last so dev rebuilds skip the slow layers above.
+# Application code last so dev rebuilds skip the slow layers above. Both
+# classifier backends (v2, the DINOv2 default; fishial, the legacy bundle) are
+# fetched at start, so reverting stays a single env-var flip.
+COPY services/common /app/common
+COPY scripts/fetch_models.py /app/fetch_models.py
+COPY services/worker/entrypoint.sh /app/entrypoint.sh
 COPY services/worker/app /app/app
 
 # Sensible runtime defaults; everything is overridable via env or .env.
@@ -65,7 +61,9 @@ ENV PYTHONPATH=/app \
     CLASSIFIER_V2_CHECKPOINT=/data/models/classifier_v2/checkpoint_best.pt \
     CLASSIFIER_V2_CLASSES_JSON=/data/models/classifier_v2/classes.json \
     EVENTS_LOG_DIR=/data/logs/events \
-    FRAMES_DIR=/data/frames
+    FRAMES_URL=file:///data/frames \
+    MODELS_URL=file:///data/models \
+    MODELS_DIR=/data/models
 
 EXPOSE 8081
 
@@ -74,4 +72,5 @@ EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8081/healthz || exit 1
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "app.main"]

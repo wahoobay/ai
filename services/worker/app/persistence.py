@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import cv2
+from common.storage import frame_key, join, put
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -216,9 +217,9 @@ class SaveJob:
 
     frame_bgr: object  # np.ndarray, kept lightly typed to avoid import here
     annotated_bgr: object
-    img_path: Path
-    ann_path: Path
-    coco_path: Path
+    img_key: str  # under FRAMES_URL; what saved_frames.image_path records
+    ann_key: str
+    coco_key: str
     coco: dict
     reason: str
     frame_id: int
@@ -232,8 +233,10 @@ class ImageSaver:
 
     def __init__(self, cfg) -> None:
         self.cfg = cfg
-        self.root = Path(cfg.frames_dir)
-        self.root.mkdir(parents=True, exist_ok=True)
+        # Frames go to FRAMES_URL (file:///data/frames locally, s3://... on AWS)
+        # under <location>/YYYY/MM/DD/HH/<name>; the database records the key.
+        self.frames_url = cfg.frames_url
+        self.location_id = cfg.location_id
         self._last_timelapse = 0.0
         self._last_any_save_ts = 0.0
         self._species_seen_today: set[str] = set()
@@ -248,6 +251,12 @@ class ImageSaver:
         # so the dict doesn't grow unbounded for the lifetime of the process.
         self._last_track_save_mono: dict[int, float] = {}
         self._track_gc_next = 0.0
+
+    def keys(self, ts: datetime, frame_id: int, source_name: str) -> tuple[str, str, str]:
+        """Keys under FRAMES_URL for a frame, its annotated copy and its COCO sidecar."""
+        img = frame_key(self.location_id, ts, frame_id, source_name)
+        stem = img[: -len(".jpg")]
+        return img, f"{stem}.annotated.jpg", f"{stem}.coco.json"
 
     def _reset_today(self, ts: datetime) -> None:
         d = ts.astimezone(UTC).date()
@@ -359,16 +368,11 @@ class ImageSaver:
                 }
                 self._track_gc_next = now_mono + 30.0
 
-        day_dir = self.root / ts.strftime("%Y/%m/%d/%H")
-        day_dir.mkdir(parents=True, exist_ok=True)
-        stem = f"{ts.strftime('%Y%m%dT%H%M%SZ')}_f{frame_id:010d}_{source_name}"
-        img_path = day_dir / f"{stem}.jpg"
-        ann_path = day_dir / f"{stem}.annotated.jpg"
-        coco_path = day_dir / f"{stem}.coco.json"
+        img_key, ann_key, coco_key = self.keys(ts, frame_id, source_name)
 
         h, w = frame_bgr.shape[:2]
         coco = self._build_coco(
-            image_path=img_path.name,
+            image_path=img_key.rsplit("/", 1)[-1],
             width=w,
             height=h,
             frame_id=frame_id,
@@ -380,9 +384,9 @@ class ImageSaver:
         return SaveJob(
             frame_bgr=frame_bgr,
             annotated_bgr=annotated_bgr,
-            img_path=img_path,
-            ann_path=ann_path,
-            coco_path=coco_path,
+            img_key=img_key,
+            ann_key=ann_key,
+            coco_key=coco_key,
             coco=coco,
             reason=reason,
             frame_id=frame_id,
@@ -392,11 +396,18 @@ class ImageSaver:
         )
 
     def write(self, job: SaveJob) -> None:
-        """Materialise a SaveJob to disk. Called from a worker thread."""
+        """Materialise a SaveJob under FRAMES_URL. Called from a worker thread."""
         q = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality]
-        cv2.imwrite(str(job.img_path), job.frame_bgr, q)
-        cv2.imwrite(str(job.ann_path), job.annotated_bgr, q)
-        job.coco_path.write_text(json.dumps(job.coco, indent=2))
+        for key, image in ((job.img_key, job.frame_bgr), (job.ann_key, job.annotated_bgr)):
+            ok, buf = cv2.imencode(".jpg", image, q)
+            if not ok:
+                raise RuntimeError(f"JPEG encode failed for {key}")
+            put(join(self.frames_url, key), buf.tobytes(), "image/jpeg")
+        put(
+            join(self.frames_url, job.coco_key),
+            json.dumps(job.coco, indent=2).encode(),
+            "application/json",
+        )
 
     def _build_coco(
         self,

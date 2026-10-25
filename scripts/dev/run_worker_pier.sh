@@ -64,5 +64,5 @@ export DEVICE="${DEVICE:-cuda:0}"
 # toggle. Suppress autoswitch entirely on this worker.
 unset FALLBACK_VIDEO_SOURCE
 
-export PYTHONPATH="$(pwd)/services/worker:${PYTHONPATH:-}"
+export PYTHONPATH="$(pwd)/services/worker:$(pwd)/services:${PYTHONPATH:-}"
 exec python -m app.main

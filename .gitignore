@@ -4,6 +4,8 @@ data/test_videos/*.info.json
 data/models/*.zip
 data/models/detector_v26/
 data/models/classifier_v0_10_2/
+# Weights live in the models bucket (infra: scripts/publish_models.py); fetch_models.py brings them in.
+data/models/classifier_v2/*.pt
 data/synthetic/*.csv
 
 # Derived outputs of scripts/build_species_manifest.py — reproducible from

@@ -237,8 +237,8 @@ def run_inference_worker(
                         job.frame_id,
                         job.source_name,
                         job.reason,
-                        str(job.img_path),
-                        str(job.coco_path),
+                        job.img_key,
+                        job.coco_key,
                         num_fish=job.n_fish,
                     )
             except Exception:

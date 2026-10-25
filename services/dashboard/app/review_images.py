@@ -15,25 +15,34 @@ from functools import lru_cache
 
 from PIL import Image
 
+from .frames import frame_exists, frame_url, open_frame
+
 ZOOM_MARGIN = 0.5
 ZOOM_MAX_SCALE = 3.0
 ZOOM_MAX_EDGE = 960
 
 
-def frame_size(path: str) -> tuple[int, int]:
-    """(width, height), read from the file header. Raises OSError for a
-    missing, zero-byte or corrupt file -- FileNotFoundError for a plain
-    missing one, PIL's UnidentifiedImageError (an OSError subclass) for a
-    zero-byte or corrupt one -- or ValueError for a header PIL parses but
-    cannot size sensibly. Cached per (path, modification time), so a frame
-    deleted or replaced by hand is noticed (follow-up C5, phase-1 triage
-    146): a deleted one fails the stat here with FileNotFoundError."""
-    return _frame_size_at(path, os.stat(path).st_mtime_ns)
+def frame_size(image_path: str) -> tuple[int, int]:
+    """(width, height), read from the file header through FRAMES_URL (a key) or a
+    legacy absolute path. Raises FileNotFoundError for a missing frame, PIL's
+    UnidentifiedImageError (an OSError subclass) for a zero-byte or corrupt one,
+    or ValueError for a header PIL parses but cannot size sensibly. Cached per
+    frame: a local file by its modification time, so one replaced by hand is
+    noticed (follow-up C5, phase-1 triage 146); an object by its key, since
+    objects are written once."""
+    url = frame_url(image_path)
+    if url.startswith("file://"):
+        stamp = os.stat(url.removeprefix("file://")).st_mtime_ns
+    else:
+        if not frame_exists(image_path):
+            raise FileNotFoundError(image_path)
+        stamp = 0
+    return _frame_size_at(image_path, stamp)
 
 
 @lru_cache(maxsize=4096)
-def _frame_size_at(path: str, mtime_ns: int) -> tuple[int, int]:
-    with Image.open(path) as im:
+def _frame_size_at(image_path: str, stamp: int) -> tuple[int, int]:
+    with Image.open(open_frame(image_path)) as im:
         return im.size
 
 
@@ -57,17 +66,17 @@ def _jpeg(im: Image.Image, quality: int) -> bytes:
     return buf.getvalue()
 
 
-def render_zoom(path: str, region) -> bytes:
+def render_zoom(image_path: str, region) -> bytes:
     scale = zoom_scale(region)
-    with Image.open(path) as src:
+    with Image.open(open_frame(image_path)) as src:
         crop = src.convert("RGB").crop(tuple(region))
     w, h = crop.size
     crop = crop.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
     return _jpeg(crop, 88)
 
 
-def render_frame(path: str, max_edge: int) -> bytes:
-    with Image.open(path) as src:
+def render_frame(image_path: str, max_edge: int) -> bytes:
+    with Image.open(open_frame(image_path)) as src:
         im = src.convert("RGB")
     if max(im.size) > max_edge:
         im.thumbnail((max_edge, max_edge), Image.LANCZOS)
