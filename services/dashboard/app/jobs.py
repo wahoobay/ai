@@ -1,6 +1,6 @@
 """Periodic work, run from an event rather than inside the web process.
 
-    python -m app.jobs refresh_matviews|alert_rules|migrate|seed|all
+    python -m app.jobs refresh_matviews|alert_rules|migrate|seed|status|all
     app.lambda_entry.handler({"job": "..."})   the jobs and migrate Lambdas
 
 The dashboard holds no loops: the materialized-view refresh and the alert rules
@@ -83,11 +83,44 @@ async def seed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
     )
 
 
+async def status(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """What is going on inside: the schema revision, the last job runs, the pollers,
+    row counts. A read for the platform's verify script; not recorded as a run."""
+    from psycopg.rows import dict_row
+
+    async with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute("SELECT version_num FROM alembic_version")
+        revision = (await cur.fetchone() or {}).get("version_num")
+        await cur.execute(
+            "SELECT job, ran_at, ok, detail FROM job_runs ORDER BY ran_at DESC, id DESC LIMIT 10"
+        )
+        runs = [{**r, "ran_at": r["ran_at"].isoformat()} for r in await cur.fetchall()]
+        await cur.execute("SELECT name, last_ok, last_error FROM poller_status ORDER BY name")
+        pollers = [
+            {**r, "last_ok": r["last_ok"].isoformat() if r["last_ok"] else None}
+            for r in await cur.fetchall()
+        ]
+        counts = {}
+        for table in (
+            "detection_events",
+            "saved_frames",
+            "sensor_readings",
+            "weather_readings",
+            "users",
+            "species_sightings_mat",
+        ):
+            await cur.execute(f"SELECT count(*) AS n FROM {table}")
+            counts[table] = (await cur.fetchone())["n"]
+    return {"revision": revision, "job_runs": runs, "pollers": pollers, "counts": counts}
+
+
 JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "refresh_matviews": refresh_matviews,
     "alert_rules": alert_rules,
     "seed": seed_sample,
+    "status": status,
 }
+READ_ONLY = {"status"}  # not recorded in job_runs
 ALL = ("refresh_matviews", "alert_rules")
 
 
@@ -130,7 +163,8 @@ async def _run(name: str) -> dict[str, Any]:
             except Exception as e:  # noqa: BLE001
                 log.exception("job %s failed", name)
                 ok, detail = False, {"error": f"{type(e).__name__}: {e}"}
-        await _record(pool, name, ok, detail)
+        if name not in READ_ONLY:
+            await _record(pool, name, ok, detail)
     finally:
         await pool.close()
     log.info("job %s: ok=%s %s", name, ok, json.dumps(detail, default=str))

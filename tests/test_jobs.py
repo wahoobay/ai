@@ -100,3 +100,27 @@ def test_the_cli_runs_a_job(pg_url):
     )
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout.splitlines()[-1])["ok"] is True
+
+
+def test_status_reports_the_last_runs_and_the_pollers(pg_url, monkeypatch):
+    # Plan 2b: `{"job": "status"}` is how the platform's verify script reads the
+    # inside of an environment without a database connection of its own.
+    from app.lambda_entry import handler
+
+    _site(monkeypatch, pg_url)
+    assert handler({"job": "migrate"}, None)["ok"] is True
+    handler({"job": "refresh_matviews"}, None)
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO poller_status (name, last_ok, last_error) VALUES ('sensestream', NOW(), '')"
+        )
+    out = handler({"job": "status"}, None)
+    assert out["ok"] is True
+    detail = out["detail"]
+    assert detail["revision"] == "0003"
+    assert [r["job"] for r in detail["job_runs"]][:2] == ["refresh_matviews", "migrate"]
+    assert detail["pollers"][0]["name"] == "sensestream" and detail["pollers"][0]["last_ok"]
+    assert detail["counts"]["detection_events"] == 0 and "species_sightings_mat" in detail["counts"]
+    # A status report is a read: it is not itself recorded as a run.
+    assert [r["job"] for r in detail["job_runs"]].count("status") == 0
+    assert query(pg_url, "SELECT count(*) FROM job_runs WHERE job = 'status'") == [(0,)]
