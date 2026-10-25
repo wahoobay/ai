@@ -116,10 +116,13 @@ RV.toast = function toast(message) {
 
 RV.pct = (p) => (p === null || p === undefined ? "" : `${Math.round(p * 100)}%`);
 
-// Every time on this page is shown in Wahoo Bay's own time, US Eastern, with
-// daylight saving applied from the browser's time-zone data and marked
-// EDT/EST -- whatever zone the viewer's computer is set to.
-RV.TIME_ZONE = "America/New_York";
+// Every time on this page is shown in the site's own time zone -- the one the
+// server puts on <html data-tz> from TZ -- with daylight saving applied from
+// the browser's time-zone data and the zone's abbreviation shown, whatever
+// zone the viewer's computer is set to.
+RV.TIME_ZONE =
+  (typeof document !== "undefined" && document.documentElement && document.documentElement.dataset.tz) ||
+  "UTC";
 RV.fmtTime = function fmtTime(iso, timeOnly) {
   const d = new Date(iso);
   const opts = { timeZone: RV.TIME_ZONE, timeZoneName: "short" };

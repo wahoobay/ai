@@ -1,11 +1,14 @@
 // services/dashboard/app/static/time-et.js
-// Every time on the dashboard is shown in Wahoo Bay's own time, US Eastern,
-// with daylight saving applied from the browser's time-zone data and marked
-// EDT/EST -- whatever zone the viewer's computer is set to (follow-up spec F;
-// the review page's RV.fmtTime follows the same rule). Loaded before app.js.
+// Every time on the dashboard is shown in the site's own time zone -- the one
+// the server puts on <html data-tz> from TZ -- with daylight saving applied
+// from the browser's time-zone data and the zone's abbreviation shown,
+// whatever zone the viewer's computer is set to (follow-up spec F; the review
+// page's RV.fmtTime follows the same rule). Loaded before app.js.
 "use strict";
 
-const WB_TIME_ZONE = "America/New_York";
+const WB_TIME_ZONE =
+  (typeof document !== "undefined" && document.documentElement && document.documentElement.dataset.tz) ||
+  "UTC";
 const ET_STYLES = {
   full: { timeZoneName: "short" },                                             // 7/1/2026, 10:40:56 AM EDT
   time: { hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short" },  // 10:40:56 AM EDT

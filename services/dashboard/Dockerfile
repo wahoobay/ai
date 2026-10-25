@@ -27,10 +27,10 @@ COPY data/camera_metadata.json /data/camera_metadata.json
 
 ENV PYTHONPATH=/app \
     DASHBOARD_HOST=0.0.0.0 \
-    DASHBOARD_PORT=18080
-EXPOSE 18080
+    DASHBOARD_PORT=8080
+EXPOSE 8080
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:18080/healthz || exit 1
+  CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
 CMD ["python", "-m", "app.main"]

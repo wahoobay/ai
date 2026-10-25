@@ -62,6 +62,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .alerts import SLO_RULES, SLOChecker
 from .common_names import common as common_name
 from .common_names import reload_manifest_names
+from .config import settings
 from .exports import (
     export_alerts,
     export_corrections,
@@ -216,30 +217,33 @@ def _env(key: str, default: str) -> str:
 
 class DashboardCfg:
     def __init__(self) -> None:
+        # The site this dashboard serves comes from the environment (see
+        # config.settings); nothing site-specific is written into the code.
+        site = settings()
+        self.location_id = site.location_id
+        self.deployment_uri = site.deployment_uri
+        self.tz = site.tz
+        self.camera_metadata_path = site.camera_metadata_path
+        self.negative_regions_path = site.negative_regions_path
+        self.export_prefix = site.export_prefix
+        self.database_url = site.database_url
         self.worker_url = _env("WORKER_URL", "http://localhost:8081").rstrip("/")
         # Pier-cam worker — same code, different camera + GPU. Optional; if
         # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
         # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
         self.worker_url_pier = _env("WORKER_URL_PIER", "").rstrip("/")
         self.poller_url = _env("POLLER_URL", "http://localhost:8082").rstrip("/")
-        self.database_url = _env(
-            "DATABASE_URL",
-            "postgresql://wahoobay:wahoobay@localhost:5432/wahoobay",
-        )
         self.host = _env("DASHBOARD_HOST", "0.0.0.0")
         self.port = int(_env("DASHBOARD_PORT", "8080"))
         self.log_level = _env("LOG_LEVEL", "INFO")
         # How often to refresh species_sightings_mat. 60 s gives the dashboard
         # near-real-time data; raise on a busy DB to reduce refresh cost.
         self.matview_refresh_interval_s = float(_env("MATVIEW_REFRESH_INTERVAL_S", "60"))
-        # Per-camera no-fish-zones config. Read by the admin endpoint that
-        # serves the regions-drawing UI, and written by its POST companion.
-        # The worker reads the same file at subprocess startup and uses it
-        # to drop false-positive detections on stationary reef geometry.
-        self.negative_regions_path = _env(
-            "NEGATIVE_REGIONS_PATH",
-            "/raid/scratch/dzimmerman2021/wahoobay/data/camera_negative_regions.json",
-        )
+        # Per-camera no-fish-zones config lives at negative_regions_path (set
+        # above from NEGATIVE_REGIONS_PATH). The admin endpoint serves the
+        # regions-drawing UI from it and its POST companion writes it; the
+        # worker reads the same file at subprocess startup to drop
+        # false-positive detections on stationary reef geometry.
         # Google Sheet polling — refreshes assets/species.xlsx +
         # downstream JSON catalogues on a schedule. Default URL points
         # at Wahoo Bay's "Species + Fish named by Chatters" sheet
@@ -348,8 +352,18 @@ class DashboardCfg:
 
 def build_app() -> FastAPI:
     cfg = DashboardCfg()
+    # Every page tells the browser the site's zone (<html data-tz>), so the
+    # time helpers in time-et.js / review-core.js format in it.
+    TEMPLATES.env.globals["tz"] = cfg.tz
 
     state: dict = {}
+
+    def deployment_param(
+        deployment: str | None = Query(
+            None, description="SenseStream deployment URI; defaults to this site's"
+        ),
+    ) -> str:
+        return deployment or cfg.deployment_uri
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -672,7 +686,11 @@ def build_app() -> FastAPI:
         return TEMPLATES.TemplateResponse(
             request,
             "index.html",
-            {"worker_url": cfg.worker_url, "asset_version": _asset_version()},
+            {
+                "worker_url": cfg.worker_url,
+                "asset_version": _asset_version(),
+                "deployment": cfg.deployment_uri,
+            },
         )
 
     @app.get("/healthz")
@@ -1150,7 +1168,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/water_quality/latest")
     async def water_quality_latest(
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
@@ -1174,7 +1192,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/water_quality/history")
     async def water_quality_history(
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
         hours: int = Query(24, ge=1, le=24 * 30),
         max_points: int = Query(200, ge=10, le=2000),
     ) -> Response:
@@ -1215,7 +1233,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/water_quality/summary")
     async def water_quality_summary(
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
         hours: int = Query(24, ge=1, le=24 * 30),
     ) -> Response:
         """Min / mean / max for each parameter over the window."""
@@ -1285,7 +1303,7 @@ def build_app() -> FastAPI:
     )
 
     @app.get("/api/weather/latest")
-    async def weather_latest(deployment: str = Query("wahoo_2")) -> Response:
+    async def weather_latest(deployment: str = Depends(deployment_param)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return JSONResponse({"error": "database unavailable"}, status_code=503)
@@ -1308,7 +1326,7 @@ def build_app() -> FastAPI:
 
     @app.get("/api/weather/history")
     async def weather_history(
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
         hours: int = Query(24, ge=1, le=24 * 30),
         max_points: int = Query(200, ge=10, le=2000),
     ) -> Response:
@@ -2047,7 +2065,7 @@ def build_app() -> FastAPI:
     @app.get("/api/charts/sightings_x_water")
     async def chart_sightings_x_water(
         hours: int = Query(24, ge=1, le=24 * 30),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         """Hourly sightings joined with hourly avg water-quality. Lets
         the client overlay fish activity against any water parameter."""
@@ -2109,7 +2127,7 @@ def build_app() -> FastAPI:
     @app.get("/api/charts/sightings_x_weather")
     async def chart_sightings_x_weather(
         hours: int = Query(24, ge=1, le=24 * 30),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         """Hourly sightings joined with hourly weather. Lets the client
         overlay fish activity against air temp, wind, rain, pressure,
@@ -2329,11 +2347,11 @@ def build_app() -> FastAPI:
                 )
                 summary = await cur.fetchone() or {}
 
-                # Activity by local hour of day (Eastern; same convention as
-                # the visitor_stats hourly chart)
+                # Activity by local hour of day (the site's TZ; same convention
+                # as the visitor_stats hourly chart)
                 await cur.execute(
                     """
-                    SELECT extract(hour FROM (first_seen AT TIME ZONE 'America/New_York'))::int AS hod,
+                    SELECT extract(hour FROM (first_seen AT TIME ZONE %s))::int AS hod,
                            COUNT(*)::int AS sightings
                       FROM species_sightings_mat
                      WHERE species_id = %s
@@ -2341,7 +2359,7 @@ def build_app() -> FastAPI:
                      GROUP BY 1
                      ORDER BY 1
                     """,
-                    (species_id, hours),
+                    (cfg.tz, species_id, hours),
                 )
                 hod_rows = await cur.fetchall()
 
@@ -2442,7 +2460,7 @@ def build_app() -> FastAPI:
     def _csv_filename(stem: str, **bits) -> str:
         ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         suffix = "_".join(f"{k}-{v}" for k, v in bits.items() if v not in (None, ""))
-        return f"wahoobay_{stem}{('_' + suffix) if suffix else ''}_{ts}.csv"
+        return f"{cfg.export_prefix}_{stem}{('_' + suffix) if suffix else ''}_{ts}.csv"
 
     @app.get("/api/export/events.csv")
     async def export_events_csv(
@@ -2469,7 +2487,7 @@ def build_app() -> FastAPI:
     @app.get("/api/export/water_quality.csv")
     async def export_water_quality_csv(
         hours: int = Query(24, ge=1, le=24 * 365),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
@@ -2482,7 +2500,7 @@ def build_app() -> FastAPI:
     @app.get("/api/export/weather.csv")
     async def export_weather_csv(
         hours: int = Query(24, ge=1, le=24 * 365),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         """All columns of weather_readings: on-site WXT-536 station
         readings (wind, pressure, rain, air temp, RH, solar rad, …)
@@ -2560,7 +2578,7 @@ def build_app() -> FastAPI:
     @app.get("/api/export/hourly_summary.csv")
     async def export_hourly_summary_csv(
         hours: int = Query(168, ge=1, le=24 * 365),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
@@ -2611,7 +2629,7 @@ def build_app() -> FastAPI:
         species_id: str | None = None,
         min_accuracy: float = Query(0.0, ge=0.0, le=1.0),
         min_frames: int = Query(3, ge=1, le=1000),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         if resource not in PARQUET_RESOURCES:
             return JSONResponse(
@@ -2659,13 +2677,11 @@ def build_app() -> FastAPI:
 
     @app.get("/api/export/camera_metadata.json")
     async def export_camera_metadata() -> Response:
-        # Try several candidates so this works in:
-        #   - bare-metal DGX dev: file lives in repo root
-        #   - container: file is COPYed to /data/camera_metadata.json
-        #   - any other layout: relative to dashboard's BASE_DIR
+        # CAMERA_METADATA_PATH first (the image copies the file to
+        # /data/camera_metadata.json; the bare-metal launchers point it at the
+        # repo's data/), then the dashboard's own data/ as a last resort.
         for candidate in (
-            Path("/data/camera_metadata.json"),
-            Path("/raid/scratch/dzimmerman2021/wahoobay/data/camera_metadata.json"),
+            Path(cfg.camera_metadata_path),
             BASE_DIR / "data" / "camera_metadata.json",
         ):
             if candidate.exists():
@@ -2685,7 +2701,7 @@ def build_app() -> FastAPI:
     @app.get("/api/visitor_stats")
     async def visitor_stats(
         hours: int = Query(24, ge=1, le=24 * 30),
-        deployment: str = Query("wahoo_2"),
+        deployment: str = Depends(deployment_param),
     ) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:

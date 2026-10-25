@@ -948,7 +948,7 @@ function renderHourly(rows) {
     el.innerHTML = `<div class="empty" style="font-size:12px">collecting data…</div>`;
     return;
   }
-  // Bucket by Eastern hour-of-day (0-23) so a kid sees a daily rhythm rather
+  // Bucket by the site's local hour-of-day (0-23) so a kid sees a daily rhythm rather
   // than a 24-hour rolling timeline (which is harder to read).
   const counts = new Array(24).fill(0);
   for (const r of rows) {
