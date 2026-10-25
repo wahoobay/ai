@@ -16,6 +16,13 @@ x-env-file: &env_file
 
 x-database-url: &database_url postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
 
+# The local demo's site: the code has no default site, so compose names one here;
+# a .env (see .env.example's site block) overrides every value.
+x-site: &site
+  LOCATION_ID: ${LOCATION_ID:-local}
+  SENSESTREAM_DEPLOYMENT_URI: ${SENSESTREAM_DEPLOYMENT_URI:-demo}
+  TZ: ${TZ:-UTC}
+
 x-worker: &worker
   build:
     context: .
@@ -25,6 +32,7 @@ x-worker: &worker
       condition: service_healthy
   env_file: *env_file
   environment: &worker_env
+    <<: *site
     DATABASE_URL: *database_url
     # Container-internal paths; the .env values keep working for the bare-metal run_*.sh.
     DETECTOR_PATH: /data/models/detector_v26/model.pt
@@ -76,6 +84,7 @@ services:
         condition: service_healthy
     env_file: *env_file
     environment:
+      <<: *site
       DATABASE_URL: *database_url
     command: ["python", "-m", "app.migrate"]
     restart: "no"
@@ -90,7 +99,9 @@ services:
         condition: service_healthy
     env_file: *env_file
     environment:
+      <<: *site
       DATABASE_URL: *database_url
+      FEATURE_REVIEW_TOOL: ${FEATURE_REVIEW_TOOL:-true}
       # No worker in the web profile: the live-video routes answer 503 until one joins.
       WORKER_URL: http://worker:8081
       FRAMES_URL: file:///data/frames
@@ -112,6 +123,7 @@ services:
         condition: service_healthy
     env_file: *env_file
     environment:
+      <<: *site
       DATABASE_URL: *database_url
     ports:
       - "127.0.0.1:8082:8082"
