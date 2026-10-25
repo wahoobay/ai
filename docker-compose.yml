@@ -1,32 +1,62 @@
-# Local-development docker-compose for the Wahoo Bay fish-ID stack.
+# Local stack, by profile:
+#   web  (make up)      postgres + migrate + dashboard + poller: a laptop, no GPU, no AWS
+#   gpu  (make up-gpu)  + the worker on the host's NVIDIA GPU (Docker + NVIDIA Container Toolkit)
+#   cpu  (make up-cpu)  + the worker's CPU build over data/test_videos (slow; fine for development)
 #
-# Brings up Postgres + worker + dashboard + sensestream poller, all
-# bound to 127.0.0.1 only (reach from a laptop via SSH tunnel). The
-# DGX bare-metal `scripts/dev/run_*.sh` flow continues to work
-# unchanged — this is an additive option for fresh contributors and a
-# stepping stone toward AWS deployment.
-#
-# Quick start:   make up      (docker compose up -d)
-# Logs:          make logs    (follow all services)
-# Shell into pg: make psql
-# Tear down:     make down
-#
-# .env at repo root drives runtime config (RTSP URLs, GPU pin, the site's
-# SENSESTREAM_DEPLOYMENT_URI, etc.); values like DATABASE_URL are overridden
-# below to point at the in-network postgres service instead of localhost.
-# Postgres credentials come from POSTGRES_USER / POSTGRES_PASSWORD /
-# POSTGRES_DB in .env (defaults: wahoobay) and feed every DATABASE_URL here.
+# .env at the repo root is optional; .env.example documents every variable.
+# Postgres credentials come from POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+# (defaults wahoobay) and feed every DATABASE_URL here. Both worker flavours
+# answer as `worker`, which is what the dashboard dials; the schema is applied
+# by the `migrate` service (`make migrate`, run by `make up`), not at boot.
+# Everything binds to 127.0.0.1 only; reach it from a laptop over an SSH tunnel.
+
+x-env-file: &env_file
+  - path: .env
+    required: false
+
+x-database-url: &database_url postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
+
+x-worker: &worker
+  build:
+    context: .
+    dockerfile: services/worker/Dockerfile
+  depends_on:
+    postgres:
+      condition: service_healthy
+  env_file: *env_file
+  environment: &worker_env
+    DATABASE_URL: *database_url
+    # Container-internal paths; the .env values keep working for the bare-metal run_*.sh.
+    DETECTOR_PATH: /data/models/detector_v26/model.pt
+    CLASSIFIER_PATH: /data/models/classifier_v0_10_2/model.pt
+    CLASSIFIER_INFERENCE_MODULE_DIR: /data/models/classifier_v0_10_2
+    EVENTS_LOG_DIR: /data/logs/events
+    FRAMES_URL: file:///data/frames
+    MODELS_URL: file:///data/models
+    FALLBACK_VIDEO_SOURCE: file:///data/test_videos
+  volumes:
+    # Host weights over /data/models (a bind-mounted data/models wins over fetch_models.py).
+    - ./data/models:/data/models:ro
+    - ./data/test_videos:/data/test_videos:ro
+    - ./frames:/data/frames
+    - ./logs:/data/logs
+  ports:
+    - "127.0.0.1:8081:8081"
+  networks:
+    default:
+      aliases: [worker]
+  restart: unless-stopped
 
 services:
   postgres:
     image: postgres:16-alpine
+    profiles: ["web"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-wahoobay}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wahoobay}
       POSTGRES_DB: ${POSTGRES_DB:-wahoobay}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # The schema is applied by the `migrate` service (Alembic), not at boot.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wahoobay} -d ${POSTGRES_DB:-wahoobay}"]
       interval: 5s
@@ -35,56 +65,8 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
 
-  worker:
-    build:
-      context: .
-      dockerfile: services/worker/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file: .env
-    environment:
-      # In-network DB hostname overrides whatever's in .env.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
-      # Translate DGX-absolute paths from .env into container-internal
-      # paths. The .env values keep working for bare-metal `run_*.sh`;
-      # compose just rewrites them on the way into the container.
-      DETECTOR_PATH: /data/models/detector_v26/model.pt
-      CLASSIFIER_PATH: /data/models/classifier_v0_10_2/model.pt
-      CLASSIFIER_INFERENCE_MODULE_DIR: /data/models/classifier_v0_10_2
-      EVENTS_LOG_DIR: /data/logs/events
-      FRAMES_DIR: /data/frames
-      FALLBACK_VIDEO_SOURCE: file:///data/test_videos
-    volumes:
-      # Mount host models on top of the baked layer — dev users can swap
-      # weights without rebuilding the image. Strip this in production.
-      - ./data/models:/data/models:ro
-      # Playlist fallback content (autoswitch falls back here when the
-      # camera goes dark). Read-only.
-      - ./data/test_videos:/data/test_videos:ro
-      # Per-frame artifacts and JSONL audit log persist on host disk.
-      - ./frames:/data/frames
-      - ./logs:/data/logs
-    # GPU passthrough. .env's CUDA_VISIBLE_DEVICES picks which physical
-    # GPU is exposed; inside the container it always shows up as cuda:0
-    # (the existing run_worker.sh comment explains why).
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    ports:
-      # Dashboard reaches the worker via in-network DNS; this binding is
-      # for direct-poke debugging only (curl /stats, /healthz from host).
-      - "127.0.0.1:8081:8081"
-    restart: unless-stopped
-
   migrate:
-    # One shot: brings the database to the current schema (Alembic head) and
-    # exits. `make up` runs it before the long-running services; by hand:
-    #   docker compose --profile web run --rm migrate
+    # One shot: brings the database to the current schema (Alembic head) and exits.
     build:
       context: .
       dockerfile: services/dashboard/Dockerfile
@@ -92,9 +74,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file: .env
+    env_file: *env_file
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
+      DATABASE_URL: *database_url
     command: ["python", "-m", "app.migrate"]
     restart: "no"
 
@@ -102,21 +84,21 @@ services:
     build:
       context: .
       dockerfile: services/dashboard/Dockerfile
+    profiles: ["web"]
     depends_on:
       postgres:
         condition: service_healthy
-      worker:
-        condition: service_started
-    env_file: .env
+    env_file: *env_file
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
+      DATABASE_URL: *database_url
+      # No worker in the web profile: the live-video routes answer 503 until one joins.
       WORKER_URL: http://worker:8081
-      # The image listens on 8080 (what App Runner expects); the host keeps
-      # the familiar 18080 through the port mapping below.
+      FRAMES_URL: file:///data/frames
+      # The image listens on 8080 (what App Runner expects); the host keeps 18080.
       DASHBOARD_PORT: "8080"
+    volumes:
+      - ./frames:/data/frames:ro
     ports:
-      # Bind to 127.0.0.1 only; expose externally via Cloudflare tunnel
-      # or a reverse-proxy + TLS terminator in production.
       - "127.0.0.1:18080:8080"
     restart: unless-stopped
 
@@ -124,15 +106,43 @@ services:
     build:
       context: .
       dockerfile: services/sensestream_poller/Dockerfile
+    profiles: ["web"]
     depends_on:
       postgres:
         condition: service_healthy
-    env_file: .env
+    env_file: *env_file
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wahoobay}:${POSTGRES_PASSWORD:-wahoobay}@postgres:5432/${POSTGRES_DB:-wahoobay}
+      DATABASE_URL: *database_url
     ports:
       - "127.0.0.1:8082:8082"
     restart: unless-stopped
+
+  worker:
+    <<: *worker
+    profiles: ["gpu"]
+    # GPU passthrough. .env's CUDA_VISIBLE_DEVICES picks the physical GPU; inside
+    # the container it is always cuda:0.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  worker-cpu:
+    <<: *worker
+    profiles: ["cpu"]
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+      target: cpu
+    environment:
+      <<: *worker_env
+      DEVICE: cpu
+      VIDEO_SOURCE: file:///data/test_videos
+      CLASSIFIER_AUTOCAST: "off"
+      CLASSIFIER_V2_COMPILE: "false"
 
 volumes:
   pgdata:

@@ -231,19 +231,31 @@ grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' logs/app/cloudflared.log | hea
 
 ### B. Fresh machine (Docker Compose)
 
-The fastest path on a machine with a GPU and Docker + NVIDIA Container
-Toolkit installed:
+The web stack needs no GPU and no AWS:
 
 ```bash
-./scripts/fetch_models.sh          # first time only — pulls detector + legacy classifier weights
-./scripts/fetch_test_videos.sh     # first time only — pulls 18 Wahoo Bay clips for the fallback playlist
-cp .env.example .env
-# Edit .env: set the camera RTSP URLs, GPU pinning (CUDA_VISIBLE_DEVICES),
-# and any optional knobs (DASHBOARD_MAIL_BACKEND, SHEET_URL, etc.)
-docker compose up --build
+cp .env.example .env     # optional; every variable is documented there
+make up                  # postgres + migrations + dashboard + poller (compose profile `web`)
+make seed                # the committed sample: 40 frames, 320 detections, four days of sensors and weather
 ```
 
-Dashboard at <http://localhost:18080>.
+Dashboard at <http://localhost:18080> (sign in: register, then approve the
+first account as described in `docs/operations.md`). The sample's timestamps
+are shifted to "now" when seeded, so the page shows it at once; seeding a
+database that already has detections is a no-op.
+
+Add a worker when you want live inference:
+
+```bash
+./scripts/fetch_models.sh        # once: the two public Fishial bundles; classifier_v2 comes from the models bucket
+./scripts/fetch_test_videos.sh   # once: 18 Wahoo Bay clips for the playlist
+make up-gpu                      # the CUDA image on the host's NVIDIA GPU (Docker + NVIDIA Container Toolkit)
+make up-cpu                      # or the CPU build (`--target cpu`) over data/test_videos — slow, fine for development
+```
+
+`make test` and `make lint` run what CI runs (`TEST_DATABASE_URL=...` for
+the database tests; the migration tests start their own PostgreSQL from local
+binaries when it is unset).
 
 ### C. Fresh machine (conda, no Docker — this is how the DGX runs)
 

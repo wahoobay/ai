@@ -1,6 +1,6 @@
 """Periodic work, run from an event rather than inside the web process.
 
-    python -m app.jobs refresh_matviews|alert_rules|migrate|all
+    python -m app.jobs refresh_matviews|alert_rules|migrate|seed|all
     app.lambda_entry.handler({"job": "..."})   the jobs and migrate Lambdas
 
 The dashboard holds no loops: the materialized-view refresh and the alert rules
@@ -66,9 +66,26 @@ async def record_poller_status(
     await conn.execute(POLLER_STATUS_SQL, {"name": name, "ok": ok, "error": error})
 
 
+async def seed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Load the sample dataset from SAMPLE_URL into an empty database (staging's first fill)."""
+    from .frames import frames_url
+    from .seed import default_source, seed
+
+    site = settings()
+    return await asyncio.to_thread(
+        seed,
+        site.database_url,
+        default_source(),
+        location_id=site.location_id,
+        frames_url=frames_url(),
+        deployment_uri=site.deployment_uri,
+    )
+
+
 JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "refresh_matviews": refresh_matviews,
     "alert_rules": alert_rules,
+    "seed": seed_sample,
 }
 ALL = ("refresh_matviews", "alert_rules")
 

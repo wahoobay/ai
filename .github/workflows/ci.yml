@@ -171,3 +171,15 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      - name: Build the CPU flavour of the worker (compose profile cpu; not pushed)
+        if: matrix.service == 'worker'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/worker/Dockerfile
+          target: cpu
+          push: false
+          cache-from: type=gha,scope=worker-cpu
+          cache-to: type=gha,mode=max,scope=worker-cpu
+          provenance: false

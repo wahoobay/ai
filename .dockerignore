@@ -38,6 +38,7 @@ dist/
 # because they're explicit COPY paths, not wildcards.)
 data/test_videos/
 data/synthetic/
+data/sample/
 data/models/*.zip
 
 # runtime artifacts
