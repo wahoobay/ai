@@ -49,3 +49,13 @@ def test_paths_resolve_in_a_checkout():
     assert migrate.alembic_ini() == REPO / "db" / "alembic.ini"
     assert main.REPO_ROOT == REPO and common_names._repo_root() == REPO
     assert seed.REPO_SAMPLE == REPO / "data" / "sample"
+
+
+def test_dashboard_image_carries_boto3_for_s3_storage():
+    # On AWS FRAMES_URL and SAMPLE_URL are s3:// and common.storage imports boto3 for them;
+    # the dashboard image (service and lambda stages) must have it, or every thumbnail 500s.
+    import importlib.util
+
+    requirements = (REPO / "services" / "dashboard" / "requirements.txt").read_text()
+    assert "boto3==" in requirements
+    assert importlib.util.find_spec("boto3") is not None

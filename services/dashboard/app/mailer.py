@@ -88,9 +88,9 @@ def collision_notice() -> tuple[str, str]:
 
 class Mailer:
     def __init__(self, backend: str, smtp: dict | None, from_addr: str, base_url: str) -> None:
-        if backend not in ("smtp", "manual"):
-            log.warning("mailer: unrecognized backend '%s'; falling back to manual", backend)
-            self.backend = "manual"
+        if backend not in ("smtp", "manual", "console"):
+            log.warning("mailer: unrecognized backend '%s'; falling back to console", backend)
+            self.backend = "console"
         else:
             self.backend = backend
         self.smtp = smtp or {}
@@ -119,6 +119,11 @@ class Mailer:
 
     def send(self, to: str, subject: str, body: str) -> str:
         """Returns the backend that actually handled the message."""
+        if self.backend == "console":
+            # The whole message, link included, to the log and nowhere else: a
+            # developer or an operator reads it there (staging, local).
+            log.info("mailer(console): to=%s subject=%r\n%s", to, subject, body)
+            return "console"
         if self.backend != "smtp":
             log.info("mailer(manual): message for %s held for out-of-band delivery", to)
             return "manual"

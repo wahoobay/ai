@@ -38,6 +38,7 @@ See `docs/architecture.md` for the process model and
 from __future__ import annotations
 
 import asyncio
+import hmac
 import io
 import json
 import logging
@@ -275,15 +276,34 @@ class DashboardCfg:
         self.forgot_max_per_ip_h = int(_env("DASHBOARD_FORGOT_MAX_PER_IP_H", "10"))
         self.reset_ttl_min = int(_env("DASHBOARD_RESET_TTL_MIN", "30"))
         self.verify_ttl_h = int(_env("DASHBOARD_VERIFY_TTL_H", "24"))
-        self.mail_backend = _env("DASHBOARD_MAIL_BACKEND", "manual")
+        # Mail: MAIL_BACKEND console (default: the message, link included, goes to
+        # the log and nowhere else) | smtp | manual (held for out-of-band delivery).
+        # MAIL_SMTP_* / MAIL_FROM are what the platform sets; the older
+        # DASHBOARD_MAIL_BACKEND / DASHBOARD_SMTP_* spellings still count.
+        self.mail_backend = _env("MAIL_BACKEND", "") or _env("DASHBOARD_MAIL_BACKEND", "console")
         self.smtp = {
-            "host": _env("DASHBOARD_SMTP_HOST", ""),
-            "port": int(_env("DASHBOARD_SMTP_PORT", "587")),
-            "user": _env("DASHBOARD_SMTP_USER", "") or None,
-            "password": _env("DASHBOARD_SMTP_PASSWORD", "") or None,
-            "starttls": _env("DASHBOARD_SMTP_STARTTLS", "true").lower() != "false",
+            "host": _env("MAIL_SMTP_HOST", "") or _env("DASHBOARD_SMTP_HOST", ""),
+            "port": int(_env("MAIL_SMTP_PORT", "") or _env("DASHBOARD_SMTP_PORT", "587")),
+            "user": (_env("MAIL_SMTP_USER", "") or _env("DASHBOARD_SMTP_USER", "")) or None,
+            "password": (_env("MAIL_SMTP_PASSWORD", "") or _env("DASHBOARD_SMTP_PASSWORD", ""))
+            or None,
+            "starttls": (
+                _env("MAIL_SMTP_STARTTLS", "") or _env("DASHBOARD_SMTP_STARTTLS", "true")
+            ).lower()
+            != "false",
         }
-        self.smtp_from = _env("DASHBOARD_SMTP_FROM", "noreply@wahoobay.invalid")
+        self.smtp_from = (
+            _env("MAIL_FROM", "")
+            or _env("MAIL_SMTP_FROM", "")
+            or _env("DASHBOARD_SMTP_FROM", "noreply@example.invalid")
+        )
+        # Live video without a worker: an embed (YouTube) in the video panel.
+        self.live_video_embed_url = _env("LIVE_VIDEO_EMBED_URL", "").strip()
+        # Behind CloudFront: requests must carry X-Origin-Verify with this value
+        # (the distribution adds it); empty = check off (local, the DGX).
+        self.origin_verify_secret = _env("ORIGIN_VERIFY_SECRET", "").strip()
+        # robots.txt: disallow everything unless ROBOTS=allow (production only).
+        self.robots = _env("ROBOTS", "disallow").strip().lower()
         self.public_base_url = _env("DASHBOARD_PUBLIC_BASE_URL", "http://localhost:18080")
 
         # --- database pool ---
@@ -358,6 +378,15 @@ class DashboardCfg:
             celebrities_json=a / "celebrities.json",
             photo_root=a.parent,
         )
+
+
+DB_WAKING_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Waking the database</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;color:#222}</style>
+</head><body><h1>One moment</h1><p>The database is waking up. This page tries again in five seconds;
+nothing else is wrong.</p></body></html>
+"""
 
 
 def db_unavailable() -> JSONResponse:
@@ -594,10 +623,38 @@ def build_app() -> FastAPI:
     )
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
+    if cfg.origin_verify_secret:
+
+        @app.middleware("http")
+        async def _origin_verify(request: Request, call_next):
+            # Only CloudFront knows the header's value; anything that reaches the
+            # service another way is refused. App Runner's health check comes
+            # straight in, so /healthz is exempt.
+            # Bytes, not str: compare_digest on str raises for a non-ASCII header, which
+            # would turn a stray request into a 500 and feed the 5xx alarm.
+            sent = request.headers.get("x-origin-verify", "").encode("latin-1", "replace")
+            if request.url.path != "/healthz" and not hmac.compare_digest(
+                sent, cfg.origin_verify_secret.encode("utf-8")
+            ):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            return await call_next(request)
+
+    @app.get("/robots.txt")
+    async def robots_txt() -> Response:
+        rule = "Allow: /" if cfg.robots == "allow" else "Disallow: /"
+        return Response(f"User-agent: *\n{rule}\n", media_type="text/plain")
+
     @app.exception_handler(psycopg.OperationalError)
     async def _database_unreachable(request: Request, exc: psycopg.OperationalError):
         # Includes psycopg_pool's PoolTimeout: no connection within db_timeout_s.
         log.warning("database unavailable (%s %s): %s", request.method, request.url.path, exc)
+        wants_page = "text/html" in request.headers.get(
+            "accept", ""
+        ) and not request.url.path.startswith("/api/")
+        if wants_page:
+            # A browser on a page gets a page that refreshes itself; browsers do not
+            # honour Retry-After on navigations, and a paused database wakes in seconds.
+            return HTMLResponse(DB_WAKING_PAGE, status_code=503, headers={"Retry-After": "5"})
         return db_unavailable()
 
     from .routes_auth import build_auth_router
@@ -692,6 +749,7 @@ def build_app() -> FastAPI:
             "index.html",
             {
                 "worker_url": cfg.worker_url,
+                "live_video_embed_url": cfg.live_video_embed_url,
                 "asset_version": _asset_version(),
                 "deployment": cfg.deployment_uri,
             },
@@ -2847,6 +2905,14 @@ def build_app() -> FastAPI:
             if r.get("last_seen"):
                 r["last_seen"] = r["last_seen"].isoformat()
         return JSONResponse(rows)
+
+    if not cfg.worker_url:
+        # No camera pipeline here: the stream and snapshot proxies are not routes
+        # at all (the page shows the embed instead), not 503s waiting to be hit.
+        worker_only = ("/api/stream", "/api/snapshot")
+        app.router.routes[:] = [
+            r for r in app.router.routes if not getattr(r, "path", "").startswith(worker_only)
+        ]
 
     return app
 

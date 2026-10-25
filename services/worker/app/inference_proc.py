@@ -187,7 +187,7 @@ def run_inference_worker(
 
     pg: PgWriter | None = None
     try:
-        pg = PgWriter(cfg.database_url, provenance=provenance)
+        pg = PgWriter(cfg.database_url, provenance=provenance, location_id=cfg.location_id)
         log.info("inference subprocess: postgres connected")
     except Exception as e:
         log.warning("postgres unavailable in inference subprocess (%s); jsonl-only", e)

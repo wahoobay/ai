@@ -55,7 +55,13 @@ def test_health_and_sign_in_without_a_database(monkeypatch):
         client.cookies.set(COOKIE_NAME, "a-session-the-database-would-have-to-check")
         r = client.get("/api/events")
         assert r.status_code == 503 and r.headers["Retry-After"] == "5"
-        assert client.get("/").status_code == 503  # the gate needs the database; still not a crash
+        assert r.headers["content-type"].startswith("application/json")
+        # A browser on a page gets a page: "waking the database", refreshing itself
+        # (browsers ignore Retry-After on navigations), not a wall of JSON.
+        page = client.get("/", headers={"Accept": "text/html,application/xhtml+xml"})
+        assert page.status_code == 503 and page.headers["Retry-After"] == "5"
+        assert page.headers["content-type"].startswith("text/html")
+        assert 'http-equiv="refresh"' in page.text and "database" in page.text.lower()
 
 
 async def test_the_worker_proxy_is_optional(rdb, review_assets, monkeypatch):

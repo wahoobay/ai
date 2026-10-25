@@ -40,17 +40,21 @@ to their own processes for blast-radius and CUDA-state reasons:
 | Service | Module | Purpose |
 |---|---|---|
 | `worker` (×2) | `services/worker/app/` | RTSP ingest + GPU inference + DB writes + annotated MJPEG. **One worker per camera** — SEAHIVECAM on `:8081`, pier cam on `:8083`. Each worker spawns its own inference subprocess. |
-| `dashboard` | `services/dashboard/app/` | FastAPI web UI + REST API + reviewer queue + CSV/Parquet exports + SLO/matview/sheet-poller background tasks. |
+| `dashboard` | `services/dashboard/app/` | FastAPI web UI + REST API + reviewer queue + CSV/Parquet exports. Stateless per request: no refreshers, an empty connection pool when idle; one sheet-poller task. |
+| jobs runner | `services/dashboard/app/jobs.py` | `python -m app.jobs` (the DGX: `run_jobs.sh` every 60 s; AWS: the jobs Lambda on a schedule) — matview refresh, alert rules, migrate, seed; one row per run in `job_runs`. |
 | `sensestream_poller` | `services/sensestream_poller/app/` | Pulls water-quality + weather, writes to Postgres. |
 | `postgres` | (built-in `pg_ctl`) | Persistence. Local cluster under `./pgdata/`. |
 
 Everything talks via:
 1. **Postgres** — the durable substrate. DSN
    `postgresql://wahoobay:wahoobay@localhost:5432/wahoobay`.
-2. **Local filesystem** — `frames/<YYYY>/<MM>/<DD>/<HH>/*.jpg` for
-   saved frames, `logs/events/events-YYYY-MM-DD.jsonl` for the
-   structured JSONL event log (durable mirror of `detection_events`),
-   `logs/app/*.log` for runtime logs.
+2. **Object storage behind URLs** — `FRAMES_URL` (`file:///data/frames` on
+   a host, `s3://<bucket>/` on AWS): saved frames as
+   `<location>/YYYY/MM/DD/HH/<ts>_f<frame_id>_<source>.jpg`, the key stored in
+   `saved_frames.image_path`; `MODELS_URL` for weights (fetched at worker
+   start). `logs/events/events-YYYY-MM-DD.jsonl` is the structured JSONL
+   event log (durable mirror of `detection_events`), `logs/app/*.log` the
+   runtime logs.
 3. **HTTP** — workers expose live snapshots + MJPEG; the dashboard
    proxies these to browsers. No worker→worker traffic.
 
@@ -253,25 +257,25 @@ how to gate a new endpoint the same way.
 
 ### Background tasks
 
-Three async tasks run inside the dashboard process:
+One async task runs inside the dashboard process (the sheet poller, below).
+The matview refresh and the SLO rules used to run here too; since the move
+to a stateless web process they are **jobs** — `python -m app.jobs
+refresh_matviews|alert_rules|migrate|seed|all`, looped by
+`scripts/dev/run_jobs.sh` on the DGX and run by the jobs Lambda on a
+schedule on AWS, each run recorded in `job_runs`:
 
-1. **`SLOChecker`** — every 30 s, six rules query Postgres / probe the
-   worker + poller, upsert into the `alerts` table. Acknowledgement +
-   resolution are in-band. The six current rules:
-    1. `pipeline_silence` (critical) — no detection_events in 5 min
-    2. `frame_stats_stalled` (warning) — drift sampler silent
-    3. `inference_latency_p95` (warning) — last frame >100 ms
-    4. `poller_probe_stale` (warning) — sensestream stale
-    5. `drift_luma_delta` (warning) — current vs 7 d brightness shift > 25
-    6. `drift_fish_rate_crash` (warning) — 1 h fish rate < ½ × 7 d rate
+- **`refresh_matviews`** refreshes `species_sightings_mat` and
+  `species_sightings_hourly_mat` (`CONCURRENTLY`), which back the aggregate
+  endpoints so they don't seq-scan `detection_events` per request.
+- **`alert_rules`** evaluates `SLO_RULES` and upserts `alerts`:
+  `pipeline_silence` (critical), `frame_stats_stalled`,
+  `inference_latency_p95`, `drift_luma_delta`, `drift_fish_rate_crash` —
+  all about the camera pipeline and skipped when `WORKER_URL` is empty —
+  and `poller_probe_stale`, which reads the `poller_status` table the
+  pollers write instead of calling a poller over HTTP.
+- **`migrate`** runs the Alembic migrations; **`seed`** loads a sample.
 
-2. **`MatviewRefresher`** — every `MATVIEW_REFRESH_INTERVAL_S`
-   (60 s default) refreshes `species_sightings_mat` and
-   `species_sightings_hourly_mat`. These back the user-facing aggregate
-   endpoints (Fish Explorer, Reef cards, etc.) so they don't seq-scan
-   `detection_events` per request.
-
-3. **`SheetPoller`** — every `SHEET_POLL_INTERVAL_HOURS` (24 h default)
+**`SheetPoller`** — every `SHEET_POLL_INTERVAL_HOURS` (24 h default)
    fetches the Wahoo Bay Google Sheet's xlsx export. When the bytes
    change: writes `assets/species.xlsx`, subprocess-runs
    `scripts/build_species_manifest.py` and `scripts/build_celebrities.py`,
@@ -360,6 +364,16 @@ schedule, writes to Postgres. The current fallback chain is:
    that we'd otherwise have a gap. Marked `source='synthetic'` in the
    row so the dashboard can banner it correctly.
 
+The poller is two halves. *Fetch* runs that chain and hands rows to a sink;
+*write* upserts them (`write_readings`, idempotent on `(deployment_uri, ts)`,
+every row stamped with `location_id`) and reports `poller_status`
+(`sensestream`, `weather`). Locally one process does both every
+`POLL_INTERVAL_S`. On AWS the fetch Lambda (no database) sends
+`{"kind": "sensor" | "weather", "location_id", "rows"}` messages to SQS and
+the write Lambda drains the queue, returning bad records as batch item
+failures so only they are retried. Synthetic readings are written only when
+`SENSESTREAM_SYNTHETIC=true` (local demos).
+
 Forecast layer (additive, never overrides the station feed):
 
 4. **Open-Meteo** — free, no auth, fills cloud cover / UV index / etc.
@@ -447,6 +461,14 @@ session/role auth, not network topology, is what has to hold here. See
 `docs/superpowers/specs/2026-09-22-reviewer-auth-rbac-design.md` for
 the full design.
 
+On AWS the shape is CloudFront in front of App Runner. The distribution adds
+`X-Origin-Verify` and the dashboard (`ORIGIN_VERIFY_SECRET` set) refuses
+anything without it, so the service is unreachable except through the
+distribution; `/healthz` stays open for App Runner's health check.
+`/robots.txt` disallows crawlers unless `ROBOTS=allow` (production only).
+Sign-up and reset mail goes through `MAIL_BACKEND`: `console` (the message to
+the log; default, staging) or `smtp`.
+
 ---
 
 ## How to extend the system
@@ -456,7 +478,9 @@ Common changes, with the file you'd touch:
 | Change | Where |
 |---|---|
 | Add a new column to `detection_events` | a new Alembic revision in `db/migrations/versions/` (`ADD COLUMN IF NOT EXISTS`), applied with `alembic upgrade head` + update `services/worker/app/persistence.py` `PgWriter.record_detections` |
-| Add a new SLO rule | `services/dashboard/app/alerts.py` `SLO_RULES` list |
+| Add a new SLO rule | `services/dashboard/app/alerts.py` `SLO_RULES` list (`needs_worker=True` if it is about the camera pipeline) |
+| Add a periodic job | `services/dashboard/app/jobs.py` `JOBS` registry (+ an EventBridge rule in `wahoobay/infra` for AWS) |
+| Add a column every row carries | an Alembic revision + the writers: `persistence.py` (worker), `write_readings` (poller), `seed.py` |
 | Add a CSV export | `services/dashboard/app/exports.py` (new streamer) + `services/dashboard/app/main.py` (new endpoint) + `services/dashboard/app/templates/index.html` (new button) |
 | Add a new view to the Reports panel | `services/dashboard/app/templates/index.html` (new tab + panel) + `services/dashboard/app/static/app.js` (`tickReports` dispatcher + renderer) + any new API endpoints |
 | Add a new camera source | Add fields to `.env` (`VIDEO_SOURCE_X`, `SOURCE_LABEL_PRIMARY_X`, `WORKER_HTTP_PORT_X`, `CUDA_VISIBLE_DEVICES_X`) + a `scripts/dev/run_worker_X.sh` script + a dashboard proxy endpoint (`/api/stream_X.mjpeg`, `/api/snapshot_X.jpg`) + a button in the camera-toggle UI |

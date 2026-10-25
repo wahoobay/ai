@@ -17,6 +17,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,6 +91,11 @@ def _model_version(detector_path: str, classifier_info_path: Path, backend: str)
 
 
 def _git_sha() -> str:
+    """The commit this code came from: GIT_SHA, baked into the image by CI at build
+    time (short, 12 characters); in a checkout, git; otherwise "unknown"."""
+    baked = os.environ.get("GIT_SHA", "").strip()
+    if baked:
+        return baked[:12]
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", "--short=12", "HEAD"],

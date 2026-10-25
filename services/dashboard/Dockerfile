@@ -40,12 +40,16 @@ ENV PYTHONPATH=/app
 
 # ---- lambda: jobs + migrate -------------------------------------------------
 FROM base AS lambda
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 RUN pip install awslambdaric==4.2.2
 ENTRYPOINT ["python", "-m", "awslambdaric"]
 CMD ["app.lambda_entry.handler"]
 
 # ---- service (default target) ----------------------------------------------
 FROM base AS service
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 ENV DASHBOARD_HOST=0.0.0.0 \
     DASHBOARD_PORT=8080
 EXPOSE 8080

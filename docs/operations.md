@@ -79,6 +79,11 @@ nohup ./scripts/dev/run_dashboard.sh > logs/app/dashboard.log 2>&1 &
 # 4. SenseStream poller
 nohup ./scripts/dev/run_poller.sh > logs/app/poller.log 2>&1 &
 
+# 4b. jobs loop: matview refresh + alert rules every 60 s (no port; the
+#     dashboard holds no refreshers). ./scripts/dev/start_all.sh starts
+#     everything above, this included.
+nohup ./scripts/dev/run_jobs.sh > logs/app/jobs.log 2>&1 &
+
 # 5. public tunnel (optional — only when actively demoing)
 nohup ~/.local/bin/cloudflared tunnel --url http://localhost:18080 \
   --no-autoupdate > logs/app/cloudflared.log 2>&1 &
@@ -128,6 +133,52 @@ nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader
 Pick a GPU at 0 % util and below ~50 GB memory used.
 
 ---
+
+## Upgrading the DGX checkout (one-time, after the October 2026 platform work)
+
+The code the DGX runs became the code that also runs on a laptop and on AWS.
+One maintenance window of a few minutes, in this order, from the repo root
+with the `wahoobay` conda env active. Stop first: `start_all.sh` only starts
+what is not already listening, and the schema change below must not run while
+the old dashboard still refreshes the matviews.
+
+```bash
+# 1. stop the dashboard, the workers and the poller (the "Stopping" section;
+#    leave postgres up). The public demo is down from here to step 6: ~3 min.
+git pull                                                       # 2. the code
+git show dgx-2026-10-24:data/models/classifier_v2/checkpoint_best.pt \
+  > data/models/classifier_v2/checkpoint_best.pt               # 3. the checkpoint git no longer tracks (ignored from now on)
+pip install -r services/dashboard/requirements.txt \
+            -r services/sensestream_poller/requirements.txt    # 4. alembic, SQLAlchemy, boto3, pillow, ... -- not the worker's
+                                                               #    requirements: torch stays exactly as installed
+./scripts/dev/start_postgres.sh                                # 5. postgres is up, so this only runs the migrations: stamp 0001,
+                                                               #    then 0002 (location_id; ~seconds with nothing reading) and 0003
+./scripts/dev/start_all.sh                                     # 6. workers, dashboard, poller and the new jobs loop
+alembic -c db/alembic.ini current                              # 7. check: 0003 (head)
+curl -s localhost:18080/healthz && curl -s localhost:18080/robots.txt
+tail -n 3 logs/app/jobs.log                                    #    ok=True lines every minute
+```
+
+If step 5 stops with `canceling statement due to lock timeout`, something was
+still reading `detection_events`; nothing changed -- stop it and run step 5
+again. An interrupted index build leaves an INVALID index, which the revision
+drops and rebuilds on the retry (`SELECT indexrelid::regclass FROM pg_index
+WHERE NOT indisvalid` should print nothing afterwards).
+
+Nothing in `.env` has to change: the launchers export the Wahoo Bay values
+(`SENSESTREAM_DEPLOYMENT_URI=wahoo_2`, `TZ=America/New_York`,
+`FEATURE_REVIEW_TOOL=true`, `SENSESTREAM_SYNTHETIC=true`) and derive
+`FRAMES_URL` from `FRAMES_DIR` the same way in the worker and the dashboard
+launchers. The old `DASHBOARD_MAIL_*` names still work; with no mail setting
+the dashboard now logs sign-up links to `logs/app/dashboard.log` instead of
+holding them. New frames land under `<FRAMES_DIR>/wahoobay/YYYY/MM/DD/HH/`;
+old rows keep their absolute paths and still open.
+
+**Trying changes on the DGX.** Production owns the ports (5432, 8081-8083,
+18080) and the database, so a second checkout there is for `pytest` (with a
+scratch database: `TEST_DATABASE_URL` pointing at a database that is not
+`wahoobay`) and `ruff`, not for a second compose stack. Run the compose
+stack (`make up`, `make seed`) on a laptop, where the ports are free.
 
 ## Stopping
 
@@ -305,7 +356,6 @@ Before touching production, see what a revision would do:
 ```bash
 alembic -c db/alembic.ini current          # what the database is at
 alembic -c db/alembic.ini history          # what exists
-alembic -c db/alembic.ini upgrade head --sql  # not supported here: read the revision instead
 ```
 
 ---
@@ -362,14 +412,18 @@ All knobs are env vars. `.env.example` documents every one. Major blocks:
 | Classifier thresholds | `MIN_CLASSIFY_DET_CONF` (gate before classifier runs), `MIN_ACCEPT_ACCURACY` (softmax floor for topk), `CLASSIFIER_TOPK`, `CLASSIFIER_AUTOCAST` |
 | GPU | `CUDA_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES_PIER`, `DEVICE` |
 | Smoother | `TRACKER_ENABLED`, `TRACKER_WINDOW_FRAMES`, `TRACKER_CENTER_ALPHA`, `TRACKER_VELOCITY_ALPHA`, `TRACKER_MAX_AGE`, `TRACKER_MIN_HITS`, `TRACKER_IOU_THRESHOLD` |
-| Persistence | `DATABASE_URL`, `EVENTS_LOG_DIR`, `FRAMES_DIR` |
+| Site | `LOCATION_ID`, `SENSESTREAM_DEPLOYMENT_URI` (required), `TZ`, `EXPORT_PREFIX`, `CAMERA_METADATA_PATH`, `NEGATIVE_REGIONS_PATH` — the launchers export the Wahoo Bay values |
+| Persistence | `DATABASE_URL` (or `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD`), `EVENTS_LOG_DIR`, `FRAMES_URL` (`FRAMES_DIR` still read as `file://`) |
+| Storage / models | `MODELS_URL`, `MODEL_VERSIONS`, `SAMPLE_URL` |
+| Features | `FEATURE_REVIEW_TOOL`, `LIVE_VIDEO_EMBED_URL`, `ROBOTS`, `ORIGIN_VERIFY_SECRET` |
+| Mail | `MAIL_BACKEND` (`console` default), `MAIL_SMTP_HOST/PORT/USER/PASSWORD/STARTTLS`, `MAIL_FROM` (the `DASHBOARD_MAIL_*` / `DASHBOARD_SMTP_*` spellings still count) |
 | Image saves (3 modes) | `SAVE_TIMELAPSE_SECONDS`, `SAVE_PER_DETECTION`, `SAVE_INTERESTING_ONLY`, `SAVE_INTERESTING_QUIET_SECONDS`, `SAVE_INTERESTING_MIN_CONF`, `SAVE_MIN_TRACK_GAP_SECONDS` |
 | Negative regions | `NEGATIVE_REGIONS_PATH` |
 | HTTP / dashboard | `WORKER_HTTP_PORT`, `WORKER_HTTP_PORT_PIER`, `WORKER_URL_PIER`, `DASHBOARD_PORT`, `DASHBOARD_HOST`, `JPEG_QUALITY`, `LIVE_STREAM_MAX_FPS` |
 | Accounts / auth (see "Accounts and roles" below) | `DASHBOARD_COOKIE_SECURE`, `DASHBOARD_SESSION_TTL_H`, `DASHBOARD_SESSION_ABS_TTL_D`, `DASHBOARD_LOGIN_MAX_FAILS`, `DASHBOARD_LOGIN_LOCKOUT_MIN`, `DASHBOARD_REGISTRATION_OPEN`, `DASHBOARD_REGISTER_MAX_PER_IP_H`, `DASHBOARD_RESET_TTL_MIN`, `DASHBOARD_VERIFY_TTL_H`, `DASHBOARD_MAIL_BACKEND`, `DASHBOARD_SMTP_*`, `DASHBOARD_PUBLIC_BASE_URL` |
-| Drift / model-ops | `FRAME_STATS_EVERY_N_FRAMES`, `MATVIEW_REFRESH_INTERVAL_S` |
+| Drift / model-ops / jobs | `FRAME_STATS_EVERY_N_FRAMES`, `JOBS_INTERVAL_S` (`run_jobs.sh`: matview refresh + alert rules) |
 | Sheet poller | `SHEET_URL`, `SHEET_POLL_INTERVAL_HOURS` |
-| SenseStream / Wahoo Bay API | `WAHOOBAY_API_URL`, `WAHOOBAY_API_ENABLED`, `WAHOOBAY_SITE_SONDE`, `WAHOOBAY_SITE_WEATHER`, `SENSESTREAM_*`, `OPEN_METEO_*` |
+| SenseStream / Wahoo Bay API | `WAHOOBAY_API_URL`, `WAHOOBAY_API_ENABLED`, `WAHOOBAY_SITE_SONDE`, `WAHOOBAY_SITE_WEATHER`, `SENSESTREAM_*`, `OPEN_METEO_*`, `SENSESTREAM_SYNTHETIC` (default off), `SENSESTREAM_WEATHER_FETCH_URI`, `QUEUE_URL` (AWS) |
 | PTZ poller | `PTZ_POLL_ENABLED`, `PTZ_POLL_URL`, `PTZ_POLL_BACKEND`, `PTZ_POLL_INTERVAL_S`, `PTZ_SOURCE_NAME` |
 | Logging | `LOG_LEVEL` |
 
@@ -670,12 +724,7 @@ added, how many probes it used, and any timeouts or errors.
 The review tool's tables and columns are in
 `db/migrations/2026-09-24-review-tool.sql` (part of the Alembic baseline,
 `db/migrations/versions/0001_baseline.sql`, so a fresh database has them).
-Apply it to the live database with the procedure in "Applying a schema
-change to the live database" above:
-
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f db/migrations/2026-09-24-review-tool.sql
-
-It is idempotent. It changes `detection_corrections.event_id` to
+It was applied to the DGX by hand (`psql -1 -f` of that file, 2026-09-26) before Alembic; a fresh database gets it from the baseline, so there is nothing to apply any more. It is idempotent. It changes `detection_corrections.event_id` to
 `ON DELETE RESTRICT`: deleting a detection that has a human verdict now
 fails instead of silently deleting the verdict.
 
@@ -730,6 +779,12 @@ Hard-reload (`Cmd+Shift+R` / `Ctrl+Shift+R`). The static asset URLs
 include a cache-busting `?v=<hash>` query param, so a normal reload
 usually picks up changes — but a hard-reload is the guaranteed-clean
 fix.
+
+On a fresh install there is nothing to show until a worker writes or the
+sample is loaded (`make seed` with compose, `python -m app.seed` on bare
+metal). The fish counter (`species_sightings_mat`) only moves when the jobs
+loop runs (`run_jobs.sh`; `logs/app/jobs.log`), since the dashboard holds no
+refreshers of its own.
 
 ### "Worker isn't writing detections"
 

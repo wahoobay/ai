@@ -22,6 +22,7 @@ endpoint, so the cloud migration is on the roadmap.
 - [System diagram](#system-diagram)
 - [Repository layout](#repository-layout)
 - [Quick start](#quick-start)
+- [Environment contract](#environment-contract)
 - [What's currently running](#whats-currently-running)
 - [Component map](#component-map)
 - [Operating glossary](#operating-glossary)
@@ -52,7 +53,7 @@ their own table and are the seed corpus for the next training run.
 | Named recurring animals (Bobby the Blue Tang, Marty the Black Margate) | "Celebrities" feature: parsed from the Google Sheet, surfaced as a Reports tab, reviewers tag detections during the correction flow. |
 | Source-of-truth species list maintained outside the codebase | Daily polling of the Wahoo Bay Google Sheet refreshes `assets/species.xlsx` + downstream JSON catalogues + hot-reloads the dashboard. |
 | Reviewer ROI quality | Modal lets reviewers redraw the bbox, switch ROI/full-frame views, pick from top-K alternatives, and tag celebrities — all of which feed back into the training set. |
-| Backend reversibility | Both v2 (DINOv2) and legacy Fishial classifiers are baked into the worker image; `CLASSIFIER_BACKEND=fishial` rolls back without a rebuild. |
+| Backend reversibility | Both v2 (DINOv2) and legacy Fishial classifiers are fetched into the worker at start (`MODELS_URL`); `CLASSIFIER_BACKEND=fishial` rolls back without a rebuild |
 
 ---
 
@@ -117,7 +118,8 @@ their own table and are the seed corpus for the next training run.
 ├── README.md                       ← you are here
 ├── PLAN.md                         original week-1 plan (some details have drifted; defer to docs/)
 ├── .env.example                    every env var the system reads, with comments
-├── docker-compose.yml              postgres + worker + dashboard + poller (one-command bring-up)
+├── docker-compose.yml              profiles: web (postgres + migrate + dashboard + poller), gpu, cpu — Quick start B
+├── Makefile                        make up / seed / up-gpu / up-cpu / test / lint
 │
 ├── services/
 │   ├── worker/                     GPU inference loop (one process per camera; runs on the GPU host)
@@ -132,21 +134,28 @@ their own table and are the seed corpus for the next training run.
 │   │   │   ├── negative_regions.py Per-camera polygon mask (drops detector false-positives)
 │   │   │   ├── tracker.py          Constant-velocity smoother + track ID assignment
 │   │   │   ├── overlay.py          Bbox drawing for the annotated MJPEG stream
-│   │   │   ├── persistence.py      ImageSaver, EventLog (JSONL), PgWriter
+│   │   │   ├── persistence.py      ImageSaver (frames under FRAMES_URL by key), EventLog (JSONL), PgWriter
 │   │   │   ├── provenance.py       SHA256 per checkpoint + canonical config hash → stamped on every row
 │   │   │   ├── sources.py          RTSPSource / PlaylistSource / AutoswitchSource
 │   │   │   ├── ptz.py              VAPIX/ONVIF pan-tilt-zoom poller (currently off)
 │   │   │   └── config.py           All env-var defaults; single source of truth
-│   │   ├── Dockerfile              torch 2.4 + CUDA 12.4 + ultralytics + timm
-│   │   └── requirements.txt
+│   │   ├── Dockerfile              targets cuda (default) and cpu; no weights inside — fetched at start from MODELS_URL
+│   │   ├── entrypoint.sh           scripts/fetch_models.py, then the worker
+│   │   └── requirements*.txt       requirements.txt = everything but torch; -cuda / -cpu pick the torch wheels
 │   │
 │   ├── dashboard/                  FastAPI web UI + REST API + reviewer queue
 │   │   ├── app/
-│   │   │   ├── main.py             All HTTP endpoints (≈ 2k lines)
+│   │   │   ├── main.py             All HTTP endpoints (≈ 3k lines); stateless per request
+│   │   │   ├── config.py           settings(): the site and the database from the environment
+│   │   │   ├── jobs.py             Periodic work as jobs: matview refresh, alert rules, migrate, seed (CLI + Lambda)
+│   │   │   ├── lambda_entry.py     The jobs / migrate Lambda handler
+│   │   │   ├── migrate.py          alembic upgrade head (python -m app.migrate; the migrate Lambda)
+│   │   │   ├── seed.py             Load data/sample (or SAMPLE_URL) into an empty database
+│   │   │   ├── frames.py           Frames by key through FRAMES_URL (legacy absolute paths still open)
 │   │   │   ├── common_names.py     Latin→common-name lookup (curated dict + manifest fallback)
 │   │   │   ├── exports.py          CSV/Parquet streamers (events, water, weather, sightings, ...)
-│   │   │   ├── alerts.py           SLO rule evaluator (latency, ingest gap, etc.)
-│   │   │   ├── matviews.py         Background refresher for species_sightings_mat
+│   │   │   ├── alerts.py           SLO rules (run by jobs.py; worker rules skipped without a worker)
+│   │   │   ├── matviews.py         REFRESH MATERIALIZED VIEW for species_sightings_mat (run by jobs.py)
 │   │   │   ├── stats.py            Wilson confidence intervals etc. for /api/species_counts_ci
 │   │   │   ├── sheet_poller.py     Daily Google Sheet refresh → rebuild manifests → hot-reload
 │   │   │   ├── templates/          index.html + regions_admin.html (Jinja2)
@@ -155,8 +164,10 @@ their own table and are the seed corpus for the next training run.
 │   │   ├── Dockerfile
 │   │   └── requirements.txt
 │   │
-│   └── sensestream_poller/         Pulls water + weather, writes to Postgres
-│       └── app/main.py
+│   ├── sensestream_poller/         Pulls water + weather, writes to Postgres
+│   │   └── app/                    main.py (source chain + fetch/write sinks), lambda_entry.py (fetch + write Lambdas), config.py
+│   │
+│   └── common/                     storage.py: frames and models behind file:// and s3:// URLs (shared by worker + dashboard)
 │
 ├── scripts/                        Data + training scripts; not run in production
 │   ├── build_species_manifest.py        species.xlsx → species_manifest.{json,csv}
@@ -167,8 +178,10 @@ their own table and are the seed corpus for the next training run.
 │   ├── enrich_taxonomy_from_worms.py    WoRMS API → taxonomy.csv (AphiaID, accepted name, ranks; keyed by raw_name)
 │   ├── train_baseline.py                DINOv2 ViT-S/14 from-scratch trainer (3 split modes)
 │   ├── gen_synthetic_sensor_data.py     Diurnal-pattern synthetic sonde for offline demos
-│   └── dev/                             start_postgres.sh, run_worker.sh, run_worker_pier.sh,
-│                                        run_dashboard.sh, run_poller.sh, stop_postgres.sh
+│   ├── make_sample_dataset.py           Generates data/sample (drawn frames, invented detections, synthetic readings)
+│   ├── fetch_models.py                  <MODELS_URL>/<model>/<version>/ → /data/models, verified against SHA256SUMS
+│   └── dev/                             start_all.sh, start_postgres.sh (runs the migrations), run_worker.sh, run_worker_pier.sh,
+│                                        run_dashboard.sh, run_poller.sh, run_jobs.sh, stop_postgres.sh
 │
 ├── db/                             Alembic: alembic.ini + migrations/versions/ (0001_baseline.sql = all tables, indexes, matviews)
 │
@@ -177,6 +190,7 @@ their own table and are the seed corpus for the next training run.
 │   │   ├── detector_v26/                YOLO v26 nano (Fishial.ai)
 │   │   ├── classifier_v0_10_2/          Legacy Fishial classifier (revert path)
 │   │   └── classifier_v2/               DINOv2 ViT-S/14 (default)
+│   ├── sample/                          Committed sample dataset: 40 drawn frames, 320 detections, four days of readings (make seed)
 │   ├── camera_metadata.json             lat/lng/depth/heading per camera (committed)
 │   ├── camera_negative_regions.json     per-camera no-fish-zone polygons (committed; edit via /admin/regions.html)
 │   ├── test_videos/                     fallback playlist (gitignored)
@@ -210,6 +224,7 @@ The system is already running. To check or restart, follow
 # Confirm services are listening
 ss -ltn | grep -E ':8081|:8083|:8082|:18080|:5432'
 # Workers (8081 = SEAHIVECAM, 8083 = pier), poller (8082), dashboard (18080), postgres (5432)
+pgrep -af scripts/dev/run_jobs.sh   # the jobs loop (matview refresh + alert rules) has no port
 
 # Tail the dashboard log
 tail -f logs/app/dashboard.log
@@ -235,7 +250,7 @@ The web stack needs no GPU and no AWS:
 
 ```bash
 cp .env.example .env     # optional; every variable is documented there
-make up                  # postgres + migrations + dashboard + poller (compose profile `web`)
+make up                  # postgres + migrations + dashboard + jobs loop + poller (compose profile `web`)
 make seed                # the committed sample: 40 frames, 320 detections, four days of sensors and weather
 ```
 
@@ -250,7 +265,8 @@ Add a worker when you want live inference:
 ./scripts/fetch_models.sh        # once: the two public Fishial bundles; classifier_v2 comes from the models bucket
 ./scripts/fetch_test_videos.sh   # once: 18 Wahoo Bay clips for the playlist
 make up-gpu                      # the CUDA image on the host's NVIDIA GPU (Docker + NVIDIA Container Toolkit)
-make up-cpu                      # or the CPU build (`--target cpu`) over data/test_videos — slow, fine for development
+make up-cpu                      # or the CPU build (`--target cpu`) over data/test_videos — slow, fine for development;
+                                 # it runs the public Fishial classifier (the v2 weights live in the models bucket)
 ```
 
 `make test` and `make lint` run what CI runs (`TEST_DATABASE_URL=...` for
@@ -263,19 +279,26 @@ binaries when it is unset).
 # One-time env setup (only if the wahoobay env doesn't already exist):
 conda create -n wahoobay python=3.11
 conda activate wahoobay
+pip install -r services/worker/requirements-cuda.txt   # torch for CUDA 12.4 (requirements-cpu.txt on a CPU box)
 pip install -r services/worker/requirements.txt
 pip install -r services/dashboard/requirements.txt
 pip install -r services/sensestream_poller/requirements.txt
 
 # Make sure assets/species.xlsx + data/models/* are populated (see Layout).
 
-# Start services
-./scripts/dev/start_postgres.sh                                              # local pgdata cluster on :5432
+# Start services (./scripts/dev/start_all.sh does all of this)
+./scripts/dev/start_postgres.sh                                              # local pgdata cluster on :5432; runs the migrations
 nohup ./scripts/dev/run_worker.sh      > logs/app/worker.log      2>&1 &     # SEAHIVECAM on :8081
 nohup ./scripts/dev/run_worker_pier.sh > logs/app/worker_pier.log 2>&1 &     # pier cam   on :8083
 nohup ./scripts/dev/run_dashboard.sh   > logs/app/dashboard.log   2>&1 &     # dashboard on :18080
 nohup ./scripts/dev/run_poller.sh      > logs/app/poller.log      2>&1 &     # sensestream poller on :8082
+nohup ./scripts/dev/run_jobs.sh        > logs/app/jobs.log        2>&1 &     # matview refresh + alert rules, every 60 s
 ```
+
+The launchers export the Wahoo Bay values the code no longer assumes
+(`SENSESTREAM_DEPLOYMENT_URI=wahoo_2`, `TZ=America/New_York`,
+`FEATURE_REVIEW_TOOL=true`, `FRAMES_URL=file://<repo>/frames`); a `.env`
+overrides them (see the site block in `.env.example`).
 
 First-boot caveats:
 
@@ -283,9 +306,44 @@ First-boot caveats:
   at subprocess startup; expect ~25-30 s before the worker is ready.
 - The MJPEG stream may show "fallback playlist" until the RTSP source
   connects (~3-5 s after worker ready).
-- The matview `species_sightings_mat` is empty until the dashboard's
-  refresher fires at its `MATVIEW_REFRESH_INTERVAL_S` cadence (60 s
-  default).
+- The matview `species_sightings_mat` is empty until the jobs loop
+  (`run_jobs.sh`, every `JOBS_INTERVAL_S` = 60 s) refreshes it; the
+  dashboard itself holds no refreshers. `python -m app.seed` refreshes it
+  too, after loading the sample.
+
+---
+
+## Environment contract
+
+The code assumes no site: the environment names it. The same variables are
+read by the DGX launchers (`scripts/dev/*.sh` export the Wahoo Bay values),
+by compose (`docker-compose.yml` names a `demo` site; `.env` overrides) and by
+the AWS stacks (`wahoobay/infra`, `locations/<name>.yaml`). `.env.example`
+documents every variable; these are the ones that make a deployment a site.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOCATION_ID` | `wahoobay` | Short id stamped on every row, export file names, object prefixes |
+| `SENSESTREAM_DEPLOYMENT_URI` | *required* | The SenseStream deployment readings are tagged with; the dashboard's default query |
+| `TZ` | `UTC` | IANA zone the dashboard renders in (`America/New_York` at Wahoo Bay) |
+| `DATABASE_URL` or `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` | *required* | The database; the parts form is what the cloud injects |
+| `FRAMES_URL` | `file:///data/frames` | Frames, as `<location>/YYYY/MM/DD/HH/<name>.jpg` under here (`s3://…` on AWS) |
+| `MODELS_URL` | `file:///data/models` | Weights, as `<model>/<version>/` + `SHA256SUMS`; fetched at worker start |
+| `WORKER_URL` | `http://localhost:8081` | Empty = no camera pipeline: live video is the embed, worker alerts are skipped |
+| `LIVE_VIDEO_EMBED_URL` | empty | With no worker, the video panel shows this embed |
+| `FEATURE_REVIEW_TOOL` | `false` | The volunteer review tool (routes, pool task, admin link) |
+| `MAIL_BACKEND` | `console` | `console` logs the message, `smtp` sends it (`MAIL_SMTP_*`, `MAIL_FROM`), `manual` holds it |
+| `ROBOTS` | `disallow` | `/robots.txt`; `allow` only on the public production site |
+| `ORIGIN_VERIFY_SECRET` | empty | Set behind CloudFront: requests must carry `X-Origin-Verify` |
+| `SENSESTREAM_SYNTHETIC` | `false` | Write synthetic readings when no live source answers (local demos only) |
+| `JOBS_INTERVAL_S` | `60` | `run_jobs.sh`'s cadence (bare metal) |
+| `EXPORT_PREFIX`, `CAMERA_METADATA_PATH`, `NEGATIVE_REGIONS_PATH` | `LOCATION_ID`, `/data/…` | Export file names; the two per-camera JSON files |
+
+Three shapes run the same code: the DGX (bare metal, `scripts/dev`), a
+laptop (`make up`, compose profiles `web` / `gpu` / `cpu`) and AWS (App
+Runner for the dashboard, Lambdas for jobs, migrate, fetch and write; see
+`wahoobay/infra`). Every image CI builds carries `GIT_SHA`, which the
+worker stamps on its rows.
 
 ---
 
@@ -328,6 +386,12 @@ as the system evolves.
 | Adding a CSV / Parquet export | Add a generator in `services/dashboard/app/exports.py`, an endpoint in `main.py`, and a button in `templates/index.html` |
 | The species list / common-name catalogue | Edit the Google Sheet (sheet poller refreshes daily; `POST /api/admin/refresh_sheets` forces it immediately) |
 | The celebrities list | Edit the "Fish named by Chatters" tab of the same sheet; same refresh path |
+| Which site this is | `LOCATION_ID`, `SENSESTREAM_DEPLOYMENT_URI`, `TZ` (see "Environment contract") — never the code |
+| Where frames and weights live | `FRAMES_URL`, `MODELS_URL` (`file://` locally, `s3://` on AWS); `scripts/fetch_models.py` brings weights in |
+| How often the fish counter and alerts refresh | the jobs runner: `JOBS_INTERVAL_S` for `run_jobs.sh`; the platform's cadence for the jobs Lambda |
+| Live video on a site without a worker | `LIVE_VIDEO_EMBED_URL` (an embed replaces the MJPEG panel when `WORKER_URL` is empty) |
+| Sign-in mail | `MAIL_BACKEND` (`console` logs it, `smtp` sends it) + `MAIL_SMTP_*`, `MAIL_FROM` |
+| The database schema | a new Alembic revision in `db/migrations/versions/`; `python -m app.migrate` / `make migrate` applies it |
 | Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard (or hand-edit `data/camera_negative_regions.json`); restart worker |
 | Curated Latin→common-name overrides | `services/dashboard/app/common_names.py` `COMMON_NAMES` dict (no restart hot-reload yet for the curated layer) |
 | Reviewer flow / correction modal | `services/dashboard/app/static/app.js` (`correctionFormHtml`, `submitCorrection`, `_enterBboxEdit`) |

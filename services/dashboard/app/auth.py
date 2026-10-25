@@ -172,6 +172,7 @@ OPEN_PATHS = frozenset(
         "/verify-email",
         "/waiting",
         "/healthz",
+        "/robots.txt",
     }
 )
 OPEN_PREFIXES = ("/api/auth/",)

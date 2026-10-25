@@ -46,6 +46,11 @@ def database_url_from_env(env: Mapping[str, str] = os.environ) -> str:
     return f"postgresql://{auth}@{env['DB_HOST']}:{port}/{env['DB_NAME']}"
 
 
+def location_id(env: Mapping[str, str] = os.environ) -> str:
+    """The site's short id (LOCATION_ID), read when asked: every row a writer inserts carries it."""
+    return env.get("LOCATION_ID", "wahoobay").strip() or "wahoobay"
+
+
 def site_tz(env: Mapping[str, str] = os.environ) -> str:
     """IANA zone the dashboard renders in (TZ; default UTC), read when asked so the
     environment stays authoritative."""
@@ -59,15 +64,15 @@ def settings(env: Mapping[str, str] = os.environ) -> Settings:
             "SENSESTREAM_DEPLOYMENT_URI is required: the SenseStream deployment this "
             "site's readings are tagged with (there is no default site)"
         )
-    location_id = env.get("LOCATION_ID", "wahoobay").strip() or "wahoobay"
+    site = location_id(env)
     return Settings(
-        location_id=location_id,
+        location_id=site,
         deployment_uri=deployment_uri,
         tz=site_tz(env),
         camera_metadata_path=env.get("CAMERA_METADATA_PATH", "/data/camera_metadata.json"),
         negative_regions_path=env.get(
             "NEGATIVE_REGIONS_PATH", "/data/camera_negative_regions.json"
         ),
-        export_prefix=env.get("EXPORT_PREFIX", "").strip() or location_id,
+        export_prefix=env.get("EXPORT_PREFIX", "").strip() or site,
         database_url=database_url_from_env(env),
     )

@@ -53,6 +53,7 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
+from .config import location_id
 from .review_labels import resolve_all
 from .review_queue import EVENT_LOCK_SQL
 
@@ -100,9 +101,9 @@ _TOO_CLOSE_SQL = """
 # SELECT, unlike VALUES, does not type bare parameters from the target columns.
 _INSERT_ITEM_SQL = """
     INSERT INTO review_items (event_id, pass, lane, saved_frame_id, source_name, ts, bbox,
-                              predicted, predicted_p, route_species)
+                              predicted, predicted_p, route_species, location_id)
     SELECT %s::bigint, 1, %s::text, %s::bigint, %s::text, %s::timestamptz, %s::integer[],
-           %s::text, %s::real, %s::text
+           %s::text, %s::real, %s::text, %s::text
      WHERE NOT EXISTS (SELECT 1 FROM detection_corrections WHERE event_id = %s::bigint)
     ON CONFLICT (event_id, pass) DO NOTHING
     RETURNING id
@@ -498,6 +499,7 @@ class ReviewPool:
                     predicted,
                     predicted_p,
                     route,
+                    location_id(),
                     event_id,
                 ),
                 lock_event=event_id,

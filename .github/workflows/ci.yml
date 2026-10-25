@@ -1,33 +1,34 @@
 name: CI
 
-# Phase 2 of the deployment-grade rollout (see PLAN.md). Every push to
-# main and every PR lints the codebase, smoke-imports the dashboard and
-# poller, and builds container images for all three services. Pushes to
-# main also publish the images to GHCR with `:main` and `:sha-<short>`
-# tags so production / staging can pull deterministic versions.
+# Every push to main and every pull request lints, smoke-imports the dashboard
+# and poller, runs the test suite against PostgreSQL, and builds the six images:
+# dashboard (service + lambda), poller (service + lambda), worker (cuda + cpu).
+# On main the images are pushed to the AI repositories in ECR (account
+# 226594054743, us-east-1) with the role the infra repository defines
+# (ai-wahoobay-images-gha, assumed over OIDC: no stored keys), tagged
+# sha-<12>[-lambda|-cpu] and main[-lambda|-cpu]. The infra repository's deploy
+# workflow promotes a sha to staging / prod by retagging. Pull requests (forks
+# included) build everything and push nothing.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  # github.repository is owner/repo; image tags become
-  # ghcr.io/owner/repo-<service>:<tag>
-  IMAGE_NS: ${{ github.repository }}
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 226594054743.dkr.ecr.us-east-1.amazonaws.com
+  IMAGES_ROLE: arn:aws:iam::226594054743:role/ai-wahoobay-images-gha
 
 permissions:
   contents: read
-  packages: write   # push to GHCR
-  id-token: write   # allow keyless image signing later
+  id-token: write # the OIDC token the image-push role trusts (main only)
 
 concurrency:
   # On PRs, cancel in-flight runs of the same PR so we only ever build
   # the latest commit. On main, never cancel — we want every merged
-  # commit's image to land in the registry.
+  # commit's images to land in the registry.
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -98,8 +99,8 @@ jobs:
           pytest -q
 
   # -------------------------------------------------------------------
-  # Build (and on main, push) container images. Matrix over the three
-  # services. No weights travel in the worker image: its entrypoint fetches
+  # Build the six images; on main, push them to ECR. One matrix entry per
+  # image. No weights travel in the worker images: the entrypoint fetches
   # them from MODELS_URL at start.
   # -------------------------------------------------------------------
   build-image:
@@ -108,12 +109,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [dashboard, sensestream_poller, worker]
+        include:
+          - { name: dashboard,        file: services/dashboard/Dockerfile,          target: service, repo: ai-wahoobay-dashboard, suffix: "" }
+          - { name: dashboard-lambda, file: services/dashboard/Dockerfile,          target: lambda,  repo: ai-wahoobay-dashboard, suffix: "-lambda" }
+          - { name: poller,           file: services/sensestream_poller/Dockerfile, target: service, repo: ai-wahoobay-poller,    suffix: "" }
+          - { name: poller-lambda,    file: services/sensestream_poller/Dockerfile, target: lambda,  repo: ai-wahoobay-poller,    suffix: "-lambda" }
+          - { name: worker,           file: services/worker/Dockerfile,             target: cuda,    repo: ai-wahoobay-worker,    suffix: "",        big: true }
+          - { name: worker-cpu,       file: services/worker/Dockerfile,             target: cpu,     repo: ai-wahoobay-worker,    suffix: "-cpu" }
+    env:
+      # Only main pushes; the role's trust policy says the same thing.
+      PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Free up disk (worker image is large)
-        if: matrix.service == 'worker'
+      - name: Free up disk (the CUDA image is large)
+        if: matrix.big == true
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /opt/hostedtoolcache /usr/local/share/boost
@@ -121,25 +131,25 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Compute image name (lowercase)
-        id: imgname
-        run: |
-          # GHCR requires lowercase image paths; github.repository may
-          # contain uppercase, so down-case explicitly.
-          REPO_LC=$(echo "${IMAGE_NS}" | tr '[:upper:]' '[:lower:]')
-          echo "image=${{ env.REGISTRY }}/${REPO_LC}-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+      - name: Assume the image-push role (main only)
+        if: env.PUSH == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IMAGES_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        if: env.PUSH == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Compute tags
         id: tags
         run: |
-          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-12)
-          TAGS="${{ steps.imgname.outputs.image }}:sha-${SHA_SHORT}"
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS}"$'\n'"${{ steps.imgname.outputs.image }}:main"
-          fi
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-            TAGS="${TAGS}"$'\n'"${{ steps.imgname.outputs.image }}:${VERSION}"
+          SHA12=$(echo "${{ github.sha }}" | cut -c1-12)
+          IMAGE="${ECR_REGISTRY}/${{ matrix.repo }}"
+          TAGS="${IMAGE}:sha-${SHA12}${{ matrix.suffix }}"
+          if [ "$PUSH" = "true" ]; then
+            TAGS="${TAGS}"$'\n'"${IMAGE}:main${{ matrix.suffix }}"
           fi
           {
             echo "tags<<EOF"
@@ -147,39 +157,23 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Login to GHCR
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build (and push if on main / tag)
+      - name: Build (and push on main)
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/${{ matrix.service }}/Dockerfile
-          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
-          # Service-scoped cache so the worker's CUDA layers don't evict
-          # the dashboard's slim layers.
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          # One cache scope per image so the CUDA layers don't evict the slim ones.
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # A plain manifest (no attestation index): what Lambda and App Runner pull.
           provenance: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
-
-      - name: Build the CPU flavour of the worker (compose profile cpu; not pushed)
-        if: matrix.service == 'worker'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: services/worker/Dockerfile
-          target: cpu
-          push: false
-          cache-from: type=gha,scope=worker-cpu
-          cache-to: type=gha,mode=max,scope=worker-cpu
-          provenance: false
