@@ -380,6 +380,15 @@ class DashboardCfg:
         )
 
 
+DB_WAKING_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Waking the database</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;color:#222}</style>
+</head><body><h1>One moment</h1><p>The database is waking up. This page tries again in five seconds;
+nothing else is wrong.</p></body></html>
+"""
+
+
 def db_unavailable() -> JSONResponse:
     """What every data endpoint answers while the database cannot be reached:
     503 with Retry-After, so clients back off instead of hammering a database
@@ -621,9 +630,11 @@ def build_app() -> FastAPI:
             # Only CloudFront knows the header's value; anything that reaches the
             # service another way is refused. App Runner's health check comes
             # straight in, so /healthz is exempt.
-            sent = request.headers.get("x-origin-verify", "")
+            # Bytes, not str: compare_digest on str raises for a non-ASCII header, which
+            # would turn a stray request into a 500 and feed the 5xx alarm.
+            sent = request.headers.get("x-origin-verify", "").encode("latin-1", "replace")
             if request.url.path != "/healthz" and not hmac.compare_digest(
-                sent, cfg.origin_verify_secret
+                sent, cfg.origin_verify_secret.encode("utf-8")
             ):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
             return await call_next(request)
@@ -637,6 +648,13 @@ def build_app() -> FastAPI:
     async def _database_unreachable(request: Request, exc: psycopg.OperationalError):
         # Includes psycopg_pool's PoolTimeout: no connection within db_timeout_s.
         log.warning("database unavailable (%s %s): %s", request.method, request.url.path, exc)
+        wants_page = "text/html" in request.headers.get(
+            "accept", ""
+        ) and not request.url.path.startswith("/api/")
+        if wants_page:
+            # A browser on a page gets a page that refreshes itself; browsers do not
+            # honour Retry-After on navigations, and a paused database wakes in seconds.
+            return HTMLResponse(DB_WAKING_PAGE, status_code=503, headers={"Retry-After": "5"})
         return db_unavailable()
 
     from .routes_auth import build_auth_router

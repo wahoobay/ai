@@ -102,8 +102,10 @@ services:
       <<: *site
       DATABASE_URL: *database_url
       FEATURE_REVIEW_TOOL: ${FEATURE_REVIEW_TOOL:-true}
-      # No worker in the web profile: the live-video routes answer 503 until one joins.
-      WORKER_URL: http://worker:8081
+      # Empty in the web profile: no worker, so the video panel is the embed
+      # (LIVE_VIDEO_EMBED_URL) and the worker alerts are skipped. make up-gpu /
+      # up-cpu set WORKER_URL=http://worker:8081 for the compose run.
+      WORKER_URL: ${WORKER_URL:-}
       FRAMES_URL: file:///data/frames
       # The image listens on 8080 (what App Runner expects); the host keeps 18080.
       DASHBOARD_PORT: "8080"
@@ -111,6 +113,28 @@ services:
       - ./frames:/data/frames:ro
     ports:
       - "127.0.0.1:18080:8080"
+    restart: unless-stopped
+
+  jobs:
+    # The periodic work (matview refresh, alert rules) the dashboard no longer
+    # does in-process: the same image, looping `python -m app.jobs all` every
+    # JOBS_INTERVAL_S. On AWS the jobs Lambda does this on a schedule.
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    profiles: ["web"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: *env_file
+    environment:
+      <<: *site
+      DATABASE_URL: *database_url
+      WORKER_URL: ${WORKER_URL:-}
+      FRAMES_URL: file:///data/frames
+    volumes:
+      - ./frames:/data/frames:ro
+    command: ["sh", "-c", "while true; do python -m app.jobs all; sleep ${JOBS_INTERVAL_S:-60}; done"]
     restart: unless-stopped
 
   sensestream-poller:
@@ -152,6 +176,9 @@ services:
     environment:
       <<: *worker_env
       DEVICE: cpu
+      # A laptop has no bucket access, so the CPU worker runs the public Fishial
+      # classifier (scripts/fetch_models.sh); the v2 weights live in the models bucket.
+      CLASSIFIER_BACKEND: fishial
       VIDEO_SOURCE: file:///data/test_videos
       CLASSIFIER_AUTOCAST: "off"
       CLASSIFIER_V2_COMPILE: "false"

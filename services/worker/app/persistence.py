@@ -59,9 +59,10 @@ class EventLog:
 
 
 class PgWriter:
-    def __init__(self, dsn: str, provenance: object | None = None) -> None:
+    def __init__(self, dsn: str, provenance: object | None = None, *, location_id: str) -> None:
         self._pool = ConnectionPool(dsn, min_size=1, max_size=4, open=True)
         self._prov = provenance  # app.provenance.Provenance or None
+        self.location_id = location_id  # stamped on every row this writer inserts
 
     def _prov_tuple(self) -> tuple[str | None, str | None, str | None, str | None, str | None]:
         p = self._prov
@@ -114,6 +115,7 @@ class PgWriter:
                     cfghash,
                     gitsha,
                     tid,
+                    self.location_id,
                 )
             )
         if not rows:
@@ -126,8 +128,8 @@ class PgWriter:
                  best_name, best_species_id, best_accuracy, image_path,
                  model_version, detector_sha256, classifier_sha256,
                  config_hash, pipeline_git_sha,
-                 track_id)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s, %s)
+                 track_id, location_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s, %s, %s)
                 """,
                 rows,
             )
@@ -148,8 +150,8 @@ class PgWriter:
                 """
                 INSERT INTO saved_frames
                 (ts, frame_id, source_name, reason, image_path, coco_path, num_fish,
-                 model_version, config_hash, pipeline_git_sha)
-                VALUES (%s,%s,%s,%s,%s,%s,%s, %s,%s,%s)
+                 model_version, config_hash, pipeline_git_sha, location_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s, %s,%s,%s, %s)
                 """,
                 (
                     ts,
@@ -162,6 +164,7 @@ class PgWriter:
                     mv,
                     cfghash,
                     gitsha,
+                    self.location_id,
                 ),
             )
 
@@ -180,25 +183,35 @@ class PgWriter:
             cur.execute(
                 """
                 INSERT INTO ptz_states
-                (ts, source_name, pan_deg, tilt_deg, zoom, raw, poll_method, config_hash)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                (ts, source_name, pan_deg, tilt_deg, zoom, raw, poll_method, config_hash, location_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
-                (ts, source_name, pan_deg, tilt_deg, zoom, Jsonb(raw or {}), poll_method, cfghash),
+                (
+                    ts,
+                    source_name,
+                    pan_deg,
+                    tilt_deg,
+                    zoom,
+                    Jsonb(raw or {}),
+                    poll_method,
+                    cfghash,
+                    self.location_id,
+                ),
             )
 
     def record_frame_stats(self, rows: list[tuple]) -> None:
         if not rows:
             return
         mv, _dsha, _csha, cfghash, _gitsha = self._prov_tuple()
-        enriched = [(*r, mv, cfghash) for r in rows]
+        enriched = [(*r, mv, cfghash, self.location_id) for r in rows]
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.executemany(
                 """
                 INSERT INTO frame_stats
                 (ts, source_name, frame_id, mean_luma, mean_r, mean_g, mean_b,
                  std_luma, num_detections, mean_det_conf,
-                 model_version, config_hash)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s)
+                 model_version, config_hash, location_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,%s, %s)
                 """,
                 enriched,
             )

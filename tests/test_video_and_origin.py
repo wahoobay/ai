@@ -61,6 +61,8 @@ def test_origin_header_required_when_secret_set(monkeypatch):
         )  # App Runner's health check comes straight in
         assert client.get("/login").status_code == 403
         assert client.get("/login", headers={"X-Origin-Verify": "wrong"}).status_code == 403
+        # A non-ASCII header value (raw bytes, as a stray client would send) is refused, never a 500.
+        assert client.get("/login", headers={"X-Origin-Verify": b"s\xe9cret"}).status_code == 403
         assert client.get("/login", headers={"X-Origin-Verify": "s3cret"}).status_code == 200
     with TestClient(_app(monkeypatch, ORIGIN_VERIFY_SECRET="")) as client:
         assert (

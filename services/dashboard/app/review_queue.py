@@ -24,6 +24,7 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
 from .auth import effective_role
+from .config import location_id
 from .review_images import frame_size, zoom_region
 
 LANES = ("check", "identify")
@@ -820,8 +821,8 @@ async def submit_verdict(
                 (event_id, corrected_name, corrected_species_id, not_a_fish, unidentifiable,
                  is_endorsement, corrected_bbox, confidence, reviewer, notes, celebrity_id,
                  user_id, session_id, review_item_id, label_source, life_stage,
-                 is_adjudication)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 is_adjudication, location_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, created_at""",
             (
                 body.event_id,
@@ -841,6 +842,7 @@ async def submit_verdict(
                 v["label_source"],
                 v["life_stage"],
                 adjudication,
+                location_id(),
             ),
         )
 
@@ -865,8 +867,8 @@ async def submit_verdict(
                 """
                 INSERT INTO review_items (event_id, pass, lane, saved_frame_id, source_name, ts,
                                           bbox, predicted, predicted_p, exclude_user_id,
-                                          first_correction_id)
-                VALUES (%s, 2, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                          first_correction_id, location_id)
+                VALUES (%s, 2, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (event_id, pass) DO NOTHING
                 RETURNING id""",
                 (
@@ -880,6 +882,7 @@ async def submit_verdict(
                     ev["best_accuracy"],
                     user.id,
                     row["id"],
+                    location_id(),
                 ),
             )
     return {

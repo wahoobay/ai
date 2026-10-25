@@ -138,33 +138,41 @@ Pick a GPU at 0 % util and below ~50 GB memory used.
 
 The code the DGX runs became the code that also runs on a laptop and on AWS.
 One maintenance window of a few minutes, in this order, from the repo root
-with the `wahoobay` conda env active:
+with the `wahoobay` conda env active. Stop first: `start_all.sh` only starts
+what is not already listening, and the schema change below must not run while
+the old dashboard still refreshes the matviews.
 
 ```bash
-git pull                                                       # 1. the code
+# 1. stop the dashboard, the workers and the poller (the "Stopping" section;
+#    leave postgres up). The public demo is down from here to step 6: ~3 min.
+git pull                                                       # 2. the code
 git show dgx-2026-10-24:data/models/classifier_v2/checkpoint_best.pt \
-  > data/models/classifier_v2/checkpoint_best.pt               # 2. the checkpoint git no longer tracks (ignored from now on)
-pip install -r services/worker/requirements-cuda.txt \
-            -r services/worker/requirements.txt \
-            -r services/dashboard/requirements.txt \
-            -r services/sensestream_poller/requirements.txt    # 3. alembic, SQLAlchemy, pillow, ... (torch is unchanged)
-./scripts/dev/start_postgres.sh                                # 4. with postgres already up this only runs the migrations:
-                                                               #    stamp 0001, then 0002 (location_id) and 0003 (job_runs, poller_status)
-# 5. restart the services so they pick up the new code; start_all.sh also starts the jobs loop
-./scripts/dev/start_all.sh
-alembic -c db/alembic.ini current                              # 6. check: 0003 (head)
+  > data/models/classifier_v2/checkpoint_best.pt               # 3. the checkpoint git no longer tracks (ignored from now on)
+pip install -r services/dashboard/requirements.txt \
+            -r services/sensestream_poller/requirements.txt    # 4. alembic, SQLAlchemy, boto3, pillow, ... -- not the worker's
+                                                               #    requirements: torch stays exactly as installed
+./scripts/dev/start_postgres.sh                                # 5. postgres is up, so this only runs the migrations: stamp 0001,
+                                                               #    then 0002 (location_id; ~seconds with nothing reading) and 0003
+./scripts/dev/start_all.sh                                     # 6. workers, dashboard, poller and the new jobs loop
+alembic -c db/alembic.ini current                              # 7. check: 0003 (head)
 curl -s localhost:18080/healthz && curl -s localhost:18080/robots.txt
 tail -n 3 logs/app/jobs.log                                    #    ok=True lines every minute
 ```
 
+If step 5 stops with `canceling statement due to lock timeout`, something was
+still reading `detection_events`; nothing changed -- stop it and run step 5
+again. An interrupted index build leaves an INVALID index, which the revision
+drops and rebuilds on the retry (`SELECT indexrelid::regclass FROM pg_index
+WHERE NOT indisvalid` should print nothing afterwards).
+
 Nothing in `.env` has to change: the launchers export the Wahoo Bay values
 (`SENSESTREAM_DEPLOYMENT_URI=wahoo_2`, `TZ=America/New_York`,
-`FEATURE_REVIEW_TOOL=true`, `FRAMES_URL=file://<repo>/frames`,
-`SENSESTREAM_SYNTHETIC=true`). The old `DASHBOARD_MAIL_*` names still work;
-with no mail setting the dashboard now logs sign-up links to
-`logs/app/dashboard.log` instead of holding them. New frames land under
-`frames/wahoobay/YYYY/MM/DD/HH/`; old rows keep their absolute paths and still
-open.
+`FEATURE_REVIEW_TOOL=true`, `SENSESTREAM_SYNTHETIC=true`) and derive
+`FRAMES_URL` from `FRAMES_DIR` the same way in the worker and the dashboard
+launchers. The old `DASHBOARD_MAIL_*` names still work; with no mail setting
+the dashboard now logs sign-up links to `logs/app/dashboard.log` instead of
+holding them. New frames land under `<FRAMES_DIR>/wahoobay/YYYY/MM/DD/HH/`;
+old rows keep their absolute paths and still open.
 
 **Trying changes on the DGX.** Production owns the ports (5432, 8081-8083,
 18080) and the database, so a second checkout there is for `pytest` (with a
@@ -348,7 +356,6 @@ Before touching production, see what a revision would do:
 ```bash
 alembic -c db/alembic.ini current          # what the database is at
 alembic -c db/alembic.ini history          # what exists
-alembic -c db/alembic.ini upgrade head --sql  # not supported here: read the revision instead
 ```
 
 ---
@@ -717,12 +724,7 @@ added, how many probes it used, and any timeouts or errors.
 The review tool's tables and columns are in
 `db/migrations/2026-09-24-review-tool.sql` (part of the Alembic baseline,
 `db/migrations/versions/0001_baseline.sql`, so a fresh database has them).
-Apply it to the live database with the procedure in "Applying a schema
-change to the live database" above:
-
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f db/migrations/2026-09-24-review-tool.sql
-
-It is idempotent. It changes `detection_corrections.event_id` to
+It was applied to the DGX by hand (`psql -1 -f` of that file, 2026-09-26) before Alembic; a fresh database gets it from the baseline, so there is nothing to apply any more. It is idempotent. It changes `detection_corrections.event_id` to
 `ON DELETE RESTRICT`: deleting a detection that has a human verdict now
 fails instead of silently deleting the verdict.
 

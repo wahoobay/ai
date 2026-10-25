@@ -97,7 +97,9 @@ class WorkerApp:
         if cfg.ptz_poll_enabled:
             try:
                 provenance = compute_provenance(cfg)
-                self._ptz_pg = PgWriter(cfg.database_url, provenance=provenance)
+                self._ptz_pg = PgWriter(
+                    cfg.database_url, provenance=provenance, location_id=cfg.location_id
+                )
                 self.ptz = PTZPoller(cfg, self._ptz_pg)
                 self.ptz.start()
             except Exception as e:

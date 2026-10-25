@@ -8,7 +8,7 @@ help:
 	@echo "Wahoo Bay — common make targets"
 	@echo ""
 	@echo "  Containerised stack (docker compose; profiles web / gpu / cpu):"
-	@echo "    make up              postgres + migrations + dashboard + poller (no GPU, no AWS)"
+	@echo "    make up              postgres + migrations + dashboard + jobs + poller (no GPU, no AWS)"
 	@echo "    make seed            load the committed sample dataset (data/sample) into an empty database"
 	@echo "    make up-gpu          ... plus the worker on the host's NVIDIA GPU"
 	@echo "    make up-cpu          ... plus the worker's CPU build over data/test_videos (slow)"
@@ -36,10 +36,10 @@ up: migrate
 	$(COMPOSE) --profile web up -d --build
 
 up-gpu: migrate
-	$(COMPOSE) --profile web --profile gpu up -d --build
+	WORKER_URL=http://worker:8081 $(COMPOSE) --profile web --profile gpu up -d --build
 
 up-cpu: migrate
-	$(COMPOSE) --profile web --profile cpu up -d --build
+	WORKER_URL=http://worker:8081 $(COMPOSE) --profile web --profile cpu up -d --build
 
 # --build everywhere: after a pull the images must follow the code, not the cache.
 migrate:

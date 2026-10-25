@@ -56,6 +56,7 @@ export CLASSIFIER_PATH="${CLASSIFIER_PATH:-$(pwd)/data/models/classifier_v0_10_2
 export CLASSIFIER_INFERENCE_MODULE_DIR="${CLASSIFIER_INFERENCE_MODULE_DIR:-$(pwd)/data/models/classifier_v0_10_2}"
 export EVENTS_LOG_DIR="${EVENTS_LOG_DIR:-$(pwd)/logs/events}"
 export FRAMES_DIR="${FRAMES_DIR:-$(pwd)/frames}"
+export FRAMES_URL="${FRAMES_URL:-file://${FRAMES_DIR:-$(pwd)/frames}}"
 export DATABASE_URL="${DATABASE_URL:-postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay}"
 export DEVICE="${DEVICE:-cuda:0}"
 

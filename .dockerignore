@@ -53,7 +53,7 @@ frames/
 logs/
 eval/reports/
 
-# docs / scratch (db/ stays: the dashboard image carries the migrations)
+# docs / scratch (db/ and assets/ stay: the dashboard image carries the migrations and the catalogues)
 docs/
 README.md
 PLAN.md

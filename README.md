@@ -250,7 +250,7 @@ The web stack needs no GPU and no AWS:
 
 ```bash
 cp .env.example .env     # optional; every variable is documented there
-make up                  # postgres + migrations + dashboard + poller (compose profile `web`)
+make up                  # postgres + migrations + dashboard + jobs loop + poller (compose profile `web`)
 make seed                # the committed sample: 40 frames, 320 detections, four days of sensors and weather
 ```
 
@@ -265,7 +265,8 @@ Add a worker when you want live inference:
 ./scripts/fetch_models.sh        # once: the two public Fishial bundles; classifier_v2 comes from the models bucket
 ./scripts/fetch_test_videos.sh   # once: 18 Wahoo Bay clips for the playlist
 make up-gpu                      # the CUDA image on the host's NVIDIA GPU (Docker + NVIDIA Container Toolkit)
-make up-cpu                      # or the CPU build (`--target cpu`) over data/test_videos — slow, fine for development
+make up-cpu                      # or the CPU build (`--target cpu`) over data/test_videos — slow, fine for development;
+                                 # it runs the public Fishial classifier (the v2 weights live in the models bucket)
 ```
 
 `make test` and `make lint` run what CI runs (`TEST_DATABASE_URL=...` for

@@ -28,7 +28,7 @@ export DASHBOARD_PORT="${DASHBOARD_PORT:-18080}"
 export SENSESTREAM_DEPLOYMENT_URI="${SENSESTREAM_DEPLOYMENT_URI:-wahoo_2}"
 export TZ="${TZ:-America/New_York}"
 export FEATURE_REVIEW_TOOL="${FEATURE_REVIEW_TOOL:-true}"
-export FRAMES_URL="${FRAMES_URL:-file://$(pwd)/frames}"
+export FRAMES_URL="${FRAMES_URL:-file://${FRAMES_DIR:-$(pwd)/frames}}"
 export CAMERA_METADATA_PATH="${CAMERA_METADATA_PATH:-$(pwd)/data/camera_metadata.json}"
 export NEGATIVE_REGIONS_PATH="${NEGATIVE_REGIONS_PATH:-$(pwd)/data/camera_negative_regions.json}"
 
