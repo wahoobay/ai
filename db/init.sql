@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS saved_frames (
 );
 
 CREATE INDEX IF NOT EXISTS saved_frames_ts_desc ON saved_frames (ts DESC);
+-- Lookups by (frame_id, source_name) join detection_events back to its source
+-- frame for ROI review. Without this index the dashboard's /api/events JOIN
+-- degenerates to a 50s sequential scan over millions of saved_frames rows.
+CREATE INDEX IF NOT EXISTS saved_frames_frame_source
+    ON saved_frames (frame_id, source_name);
 
 -- Water-quality sonde readings (sensestream.org wahoo_2 deployment).
 -- Populated either from a live poller or from the synthetic data generator
@@ -92,6 +97,65 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 
 CREATE INDEX IF NOT EXISTS sensor_readings_ts_desc ON sensor_readings (ts DESC);
 CREATE INDEX IF NOT EXISTS sensor_readings_uri_ts_desc ON sensor_readings (deployment_uri, ts DESC);
+
+
+-- Local weather readings from the SenseStream weather station co-located
+-- with the sonde at Wahoo Bay. SenseStream exposes two feeds:
+--   1. weatherLatest1 — on-site weather station's real measurements
+--      (barometric pressure, wind, air temp, humidity, rain, solar, water level)
+--   2. weatherLatest2 — supplementary forecast layer (cloud cover, weather code,
+--      apparent temperature, UV index, precipitation probability)
+-- Both are upserted into this single table; columns originating from feed 2
+-- are nullable since they're not always present.
+--
+-- Units stored in SI / native sensor units (Celsius, m/s, mm, hPa); the
+-- dashboard converts to user-friendly units (°F, mph, in, mmHg) at render
+-- time, same pattern as water_temp_c. Sensor-diagnostic channels
+-- (internal_temp_c, heating_temp_c, heating_volt, supply_volt, ref_voltage)
+-- are intentionally NOT stored — they're operational telemetry, not science.
+CREATE TABLE IF NOT EXISTS weather_readings (
+    id                  BIGSERIAL PRIMARY KEY,
+    ts                  TIMESTAMPTZ NOT NULL,
+    deployment_uri      TEXT        NOT NULL,
+    -- ---- feed 1: on-site station ----
+    bar_press_hpa       REAL,      -- barometric pressure (hPa)
+    wind_dir_avg_deg    REAL,      -- avg wind direction (degrees, 0=N, 90=E)
+    wind_dir_min_deg    REAL,
+    wind_dir_max_deg    REAL,
+    wind_speed_avg_ms   REAL,      -- avg wind speed (m/s)
+    wind_speed_min_ms   REAL,
+    wind_speed_max_ms   REAL,
+    air_temp_c          REAL,      -- air temperature (°C)
+    rel_humidity_pct    REAL,      -- relative humidity (%)
+    rain_accum_mm       REAL,      -- rainfall accumulation in interval (mm)
+    rain_dur_frac_hr    REAL,      -- rain duration (fraction of hour)
+    rain_int_mm_hr      REAL,      -- rain intensity (mm/hr)
+    rain_peak_int_mm_hr REAL,
+    hail_accum          REAL,      -- hail accumulation (count)
+    hail_dur            REAL,
+    hail_int            REAL,
+    hail_peak_int       REAL,
+    water_level_mm      REAL,      -- water-level sensor (mm)
+    solar_rad_wm2       REAL,      -- solar radiation (W/m²)
+    -- ---- feed 2: supplementary forecast ----
+    cloud_cover_pct     REAL,      -- cloud cover (%)
+    dew_point_c         REAL,      -- dew point (°C)
+    forecast_humidity_pct REAL,    -- humidity from forecast (% — usually redundant with rel_humidity_pct)
+    precip_intensity_mm_hr REAL,   -- precipitation intensity from forecast (mm/hr)
+    precip_prob_pct     REAL,      -- precipitation probability (%)
+    press_sea_level_hpa REAL,      -- sea-level pressure (hPa)
+    press_surface_hpa   REAL,      -- surface pressure (hPa)
+    temp_apparent_c     REAL,      -- apparent ("feels like") temperature (°C)
+    uv_index            REAL,
+    weather_code        INTEGER,   -- WMO weather code (0=clear, 3=overcast, 95=thunderstorm, ...)
+    weather_description TEXT,      -- human-readable observation from nearest NWS METAR (KPMP)
+    -- ---- bookkeeping ----
+    source              TEXT NOT NULL DEFAULT 'live',  -- 'live' | 'synthetic'
+    UNIQUE (deployment_uri, ts)
+);
+
+CREATE INDEX IF NOT EXISTS weather_readings_ts_desc ON weather_readings (ts DESC);
+CREATE INDEX IF NOT EXISTS weather_readings_uri_ts_desc ON weather_readings (deployment_uri, ts DESC);
 
 -- Frame-level stats, sampled below the full frame rate, for input-drift
 -- monitoring: brightness, per-channel colour balance, detection rate.
@@ -191,18 +255,25 @@ CREATE OR REPLACE VIEW frame_stats_drift AS
 -- here; the eval harness and fine-tuning pipeline read from it.
 CREATE TABLE IF NOT EXISTS detection_corrections (
     id                    BIGSERIAL PRIMARY KEY,
-    event_id              BIGINT NOT NULL REFERENCES detection_events(id) ON DELETE CASCADE,
+    event_id              BIGINT NOT NULL REFERENCES detection_events(id) ON DELETE RESTRICT,
     corrected_name        TEXT,                    -- NULL + not_a_fish=true  →  false positive
     corrected_species_id  TEXT,
     not_a_fish            BOOLEAN NOT NULL DEFAULT FALSE,
+    is_endorsement        BOOLEAN NOT NULL DEFAULT FALSE,  -- reviewer hit "Looks right"; corrected_name == best_name
+    corrected_bbox        INTEGER[],               -- [x1,y1,x2,y2] in source pixel space when reviewer redrew the box
     confidence            TEXT NOT NULL DEFAULT 'probable',  -- 'certain' | 'probable' | 'uncertain'
     reviewer              TEXT,
     notes                 TEXT,
+    -- Optional: reviewer-assigned celebrity id (Bobby, Barnadette, Marty, …).
+    -- Slugs match assets/celebrities.json. NULL = "not a known individual"
+    -- (the default — most detections are anonymous fish).
+    celebrity_id          TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS detection_corrections_event    ON detection_corrections (event_id);
 CREATE INDEX IF NOT EXISTS detection_corrections_reviewer ON detection_corrections (reviewer, created_at DESC);
 CREATE INDEX IF NOT EXISTS detection_corrections_ts_desc  ON detection_corrections (created_at DESC);
+CREATE INDEX IF NOT EXISTS detection_corrections_celebrity ON detection_corrections (celebrity_id, created_at DESC) WHERE celebrity_id IS NOT NULL;
 
 -- SLO alerts. Rule evaluator upserts on (name); acknowledgement + resolution
 -- are in-band. Keeping it flat (one table, no history) to start.
@@ -342,3 +413,204 @@ CREATE OR REPLACE VIEW species_counts_hourly AS
     FROM detection_events
     WHERE best_species_id IS NOT NULL
     GROUP BY 1, 2, 3;
+
+-- ---------------------------------------------------------------------
+-- Accounts, sessions, and one-time tokens for the reviewer tooling.
+-- `status` is checked before `role` everywhere: a pending account
+-- authenticates but is treated as a viewer regardless of its role.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id                BIGSERIAL PRIMARY KEY,
+    username          TEXT        NOT NULL UNIQUE,
+    display_name      TEXT        NOT NULL,
+    email             TEXT        NOT NULL UNIQUE,
+    password_hash     TEXT        NOT NULL,
+    role              TEXT        NOT NULL DEFAULT 'viewer'
+                      CHECK (role IN ('viewer', 'reviewer', 'admin')),
+    status            TEXT        NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'active', 'disabled')),
+    email_verified_at TIMESTAMPTZ,
+    approved_at       TIMESTAMPTZ,
+    approved_by       BIGINT      REFERENCES users(id),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at     TIMESTAMPTZ,
+    failed_logins     INTEGER     NOT NULL DEFAULT 0,
+    locked_until      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS users_pending
+    ON users (created_at DESC) WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id            BIGSERIAL PRIMARY KEY,
+    token_hash    TEXT        NOT NULL UNIQUE,   -- sha256 of the cookie value
+    user_id       BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at    TIMESTAMPTZ NOT NULL,
+    revoked_at    TIMESTAMPTZ,
+    user_agent    TEXT,
+    ip            INET
+);
+
+CREATE INDEX IF NOT EXISTS user_sessions_user_created
+    ON user_sessions (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS user_sessions_expires
+    ON user_sessions (expires_at) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS user_tokens (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose       TEXT        NOT NULL
+                  CHECK (purpose IN ('password_reset', 'email_verify')),
+    token_hash    TEXT        NOT NULL UNIQUE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at    TIMESTAMPTZ NOT NULL,
+    used_at       TIMESTAMPTZ,
+    requested_ip  INET,
+    delivered_via TEXT
+);
+
+CREATE INDEX IF NOT EXISTS user_tokens_user_purpose
+    ON user_tokens (user_id, purpose, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_audit (
+    id              BIGSERIAL PRIMARY KEY,
+    ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor_user_id   BIGINT REFERENCES users(id),
+    action          TEXT   NOT NULL,
+    target_user_id  BIGINT REFERENCES users(id),
+    detail          JSONB
+);
+
+ALTER TABLE detection_corrections
+    ADD COLUMN IF NOT EXISTS user_id    BIGINT REFERENCES users(id),
+    ADD COLUMN IF NOT EXISTS session_id BIGINT REFERENCES user_sessions(id);
+
+CREATE INDEX IF NOT EXISTS detection_corrections_session
+    ON detection_corrections (session_id, created_at DESC)
+    WHERE session_id IS NOT NULL;
+
+-- Reviewer annotation tool (spec 2026-09-24): mirrors db/migrations/2026-09-24-review-tool.sql
+CREATE TABLE IF NOT EXISTS review_items (
+    id                  BIGSERIAL PRIMARY KEY,
+    event_id            BIGINT      NOT NULL REFERENCES detection_events(id) ON DELETE CASCADE,
+    pass                SMALLINT    NOT NULL DEFAULT 1 CHECK (pass IN (1, 2)),
+    lane                TEXT        NOT NULL CHECK (lane IN ('check', 'identify')),
+    saved_frame_id      BIGINT      NOT NULL REFERENCES saved_frames(id),
+    source_name         TEXT        NOT NULL,
+    ts                  TIMESTAMPTZ NOT NULL,
+    bbox                INTEGER[]   NOT NULL,
+    predicted           TEXT,
+    predicted_p         REAL,
+    hints               JSONB,
+    hints_model         TEXT,
+    hinted_at           TIMESTAMPTZ,
+    route_species       TEXT,
+    status              TEXT        NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'claimed', 'done', 'retired')),
+    retired_reason      TEXT,
+    claimed_by          BIGINT      REFERENCES users(id),
+    claimed_until       TIMESTAMPTZ,
+    exclude_user_id     BIGINT      REFERENCES users(id),
+    first_correction_id BIGINT      REFERENCES detection_corrections(id),
+    added_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    done_at             TIMESTAMPTZ,
+    UNIQUE (event_id, pass)
+);
+CREATE INDEX IF NOT EXISTS review_items_open
+    ON review_items (lane, pass, route_species) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS review_items_claimed
+    ON review_items (claimed_until) WHERE status = 'claimed';
+CREATE INDEX IF NOT EXISTS review_items_unscored
+    ON review_items (id) WHERE hints IS NULL AND status IN ('open', 'claimed');
+CREATE INDEX IF NOT EXISTS review_items_camera_ts
+    ON review_items (source_name, ts);
+CREATE INDEX IF NOT EXISTS review_items_frame
+    ON review_items (saved_frame_id);
+
+CREATE TABLE IF NOT EXISTS review_skips (
+    item_id     BIGINT      NOT NULL REFERENCES review_items(id) ON DELETE CASCADE,
+    user_id     BIGINT      NOT NULL REFERENCES users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (item_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_added_boxes (
+    id              BIGSERIAL PRIMARY KEY,
+    saved_frame_id  BIGINT      NOT NULL REFERENCES saved_frames(id),
+    bbox            INTEGER[]   NOT NULL,
+    outcome         TEXT        NOT NULL CHECK (outcome IN ('species', 'unidentifiable')),
+    label           TEXT,
+    life_stage      TEXT,
+    confidence      TEXT        NOT NULL DEFAULT 'certain'
+                    CHECK (confidence IN ('certain', 'probable', 'uncertain')),
+    celebrity_id    TEXT,
+    user_id         BIGINT      NOT NULL REFERENCES users(id),
+    session_id      BIGINT      REFERENCES user_sessions(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ,
+    removed_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS review_added_boxes_frame
+    ON review_added_boxes (saved_frame_id) WHERE removed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS review_frames (
+    saved_frame_id  BIGINT      PRIMARY KEY REFERENCES saved_frames(id),
+    completed_by    BIGINT      NOT NULL REFERENCES users(id),
+    session_id      BIGINT      REFERENCES user_sessions(id),
+    completed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS review_settings (
+    key         TEXT        PRIMARY KEY,
+    value       JSONB       NOT NULL,
+    updated_by  BIGINT      REFERENCES users(id),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE detection_corrections
+    ADD COLUMN IF NOT EXISTS review_item_id  BIGINT REFERENCES review_items(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS label_source    TEXT
+        CHECK (label_source IN ('model_guess', 'hint', 'search')),
+    ADD COLUMN IF NOT EXISTS unidentifiable  BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS life_stage      TEXT,
+    ADD COLUMN IF NOT EXISTS is_adjudication BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS detection_corrections_review_item
+    ON detection_corrections (review_item_id) WHERE review_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS detection_corrections_user
+    ON detection_corrections (user_id, created_at DESC) WHERE user_id IS NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'detection_corrections_outcome_chk') THEN
+        ALTER TABLE detection_corrections
+            ADD CONSTRAINT detection_corrections_outcome_chk
+            CHECK (NOT (not_a_fish AND unidentifiable));
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint
+                WHERE conname = 'detection_corrections_event_id_fkey'
+                  AND conrelid = 'detection_corrections'::regclass
+                  AND confdeltype = 'c') THEN
+        ALTER TABLE detection_corrections
+            ADD CONSTRAINT detection_corrections_event_id_restrict
+            FOREIGN KEY (event_id) REFERENCES detection_events(id) ON DELETE RESTRICT NOT VALID;
+        ALTER TABLE detection_corrections
+            VALIDATE CONSTRAINT detection_corrections_event_id_restrict;
+        ALTER TABLE detection_corrections DROP CONSTRAINT detection_corrections_event_id_fkey;
+        ALTER TABLE detection_corrections
+            RENAME CONSTRAINT detection_corrections_event_id_restrict
+            TO detection_corrections_event_id_fkey;
+    END IF;
+END $$;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS credit_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS credit_name   TEXT,
+    ADD COLUMN IF NOT EXISTS orcid         TEXT;

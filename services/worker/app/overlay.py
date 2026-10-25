@@ -1,4 +1,13 @@
-"""Draw annotated overlays on frames for the live stream + saved snapshots."""
+"""Draw annotated overlays on frames for the live stream + saved snapshots.
+
+The single public function `annotate(frame_bgr, detections)` returns a
+**fresh buffer** (it copies the input). The inference subprocess relies
+on this — the input `frame_bgr` is a zero-copy numpy view over a
+shared-memory slot that gets recycled after the loop iteration, so
+the returned `annotated` array must be independent of it. Don't
+"optimise" the copy out without auditing all callers.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -8,9 +17,18 @@ import numpy as np
 
 # Deterministic palette so the same species gets a consistent colour across frames.
 _PALETTE = [
-    (66, 135, 245), (245, 158, 66), (66, 245, 111), (245, 66, 167),
-    (245, 236, 66), (66, 245, 236), (191, 66, 245), (245, 66, 66),
-    (129, 245, 66), (66, 110, 245), (245, 186, 66), (66, 245, 177),
+    (66, 135, 245),
+    (245, 158, 66),
+    (66, 245, 111),
+    (245, 66, 167),
+    (245, 236, 66),
+    (66, 245, 236),
+    (191, 66, 245),
+    (245, 66, 66),
+    (129, 245, 66),
+    (66, 110, 245),
+    (245, 186, 66),
+    (66, 245, 177),
 ]
 
 
@@ -44,7 +62,13 @@ def annotate(
         ytxt = max(0, y1 - th - pad * 2)
         cv2.rectangle(out, (x1, ytxt), (x1 + tw + pad * 2, ytxt + th + pad * 2), col, -1)
         cv2.putText(
-            out, label, (x1 + pad, ytxt + th + pad),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA,
+            out,
+            label,
+            (x1 + pad, ytxt + th + pad),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
         )
     return out

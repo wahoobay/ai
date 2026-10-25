@@ -6,6 +6,33 @@ data/models/detector_v26/
 data/models/classifier_v0_10_2/
 data/synthetic/*.csv
 
+# Derived outputs of scripts/build_species_manifest.py — reproducible from
+# assets/species.xlsx, so we track the spreadsheet but not the manifest.
+assets/species_manifest.json
+assets/species_manifest.csv
+
+# Bulk-downloaded community clips (assets/species.xlsx → Drive). Track the
+# manifest, the spreadsheet, and the extractor — but not the ~500 MB of
+# image/clip downloads. The download_species_clips.py script reproduces them.
+assets/community_clips/
+
+# iNaturalist photo pull (download_inat_photos.py). ~2.6k photos, ~600 MB.
+# Track the manifest (small, useful as a provenance record) but not the
+# image binaries — they're reproducible from the iNat API any time.
+assets/inat_photos/
+assets/inat_manifest.json
+
+# Generated fine-tuning dataset (crops + manifests). Reproducible from
+# assets/species.xlsx + community_clips + the detector via
+# scripts/build_finetune_dataset_from_clips.py.
+data/fine_tune/
+
+# Training runs (checkpoints, history JSON, per-class reports). Each run
+# is ~200 MB of weights + a few KB of metrics. Reproducible from the
+# script + the fine-tune dataset; we track the metrics into commit
+# messages or memory rather than checking weights in.
+data/baseline_runs/
+
 # Runtime artifacts
 frames/
 logs/
@@ -35,7 +62,10 @@ __pycache__/
 /*.jpeg
 /*.webp
 
-# Claude Code / superpowers scratch and dashboard exports
+# superpowers SDD scratch (ledger, briefs, review packages)
 .superpowers/
 .remember/
+
+# Contest / frame-selection exports (8 GB of frames, CLIP embeddings, score
+# tables). Scripts live in scripts/contest/, entry text in docs/contest/.
 exports/

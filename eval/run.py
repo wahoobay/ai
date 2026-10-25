@@ -9,6 +9,7 @@ Exits 1 with a clear message if:
   - manifest empty (no clips yet — expected during bootstrap)
   - any clip or label file is missing / malformed
 """
+
 from __future__ import annotations
 
 import argparse
@@ -117,13 +118,24 @@ def _evaluate_clip(pipeline: FishialPipeline, spec: ClipSpec) -> dict:
         latencies_ms.append((time.time() - t0) * 1000)
 
         # build bbox arrays
-        pred_boxes = np.array([d.bbox for d in detections], dtype=np.float32) \
-            if detections else np.zeros((0, 4), dtype=np.float32)
+        pred_boxes = (
+            np.array([d.bbox for d in detections], dtype=np.float32)
+            if detections
+            else np.zeros((0, 4), dtype=np.float32)
+        )
         gt_anns = anns_by_frame[frame_idx]
-        gt_boxes = np.array([
-            [a["bbox"][0], a["bbox"][1], a["bbox"][0] + a["bbox"][2], a["bbox"][1] + a["bbox"][3]]
-            for a in gt_anns
-        ], dtype=np.float32)
+        gt_boxes = np.array(
+            [
+                [
+                    a["bbox"][0],
+                    a["bbox"][1],
+                    a["bbox"][0] + a["bbox"][2],
+                    a["bbox"][1] + a["bbox"][3],
+                ]
+                for a in gt_anns
+            ],
+            dtype=np.float32,
+        )
 
         tp, fp, fn = metrics.match_detections(pred_boxes, gt_boxes)
         det_tp += tp
@@ -178,7 +190,9 @@ def _git_sha(short: bool = True) -> str:
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", ("--short=12" if short else "HEAD")],
-            cwd=REPO_ROOT, stderr=subprocess.DEVNULL, text=True,
+            cwd=REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
         ).strip()
         return out or "unknown"
     except Exception:
@@ -188,7 +202,9 @@ def _git_sha(short: bool = True) -> str:
 def _write_report(out_dir: Path, payload: dict) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "metrics.json").write_text(json.dumps(payload, indent=2, default=str))
-    (out_dir / "provenance.json").write_text(json.dumps(payload["provenance"], indent=2, default=str))
+    (out_dir / "provenance.json").write_text(
+        json.dumps(payload["provenance"], indent=2, default=str)
+    )
 
     # simple markdown summary
     prov = payload["provenance"]
@@ -207,6 +223,7 @@ def _write_report(out_dir: Path, payload: dict) -> None:
         "| clip | det P | det R | det F1 | top-1 | top-1 CI | top-3 CI | top-5 CI | p95 latency |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
+
     def ci_s(x):
         return f"[{x['lo']:.2f}, {x['hi']:.2f}]" if x.get("lo") is not None else "—"
 

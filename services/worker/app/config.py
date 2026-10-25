@@ -1,3 +1,24 @@
+"""Single source of truth for every worker env var.
+
+The worker reads its config from environment variables only — no
+config files, no CLI args. This module defines:
+
+  * Type-coerced readers (`_bool`, `_int`, `_float`, `_str`).
+  * A frozen `Config` dataclass that lists every field the worker
+    cares about, with the precise type annotation.
+  * `Config.from_env()` — the canonical "build a Config from current
+    env" entry point used by `main.py` at startup. Every env var the
+    worker reads is named exactly once here, so this file is the
+    authoritative inventory of "what knobs exist."
+
+Adding a new knob: add the field to the `Config` dataclass + the
+matching `_xxx("ENV_NAME", default)` line in `from_env()` + an entry
+in `.env.example` so it's documented externally. The
+`config_hash` provenance column hashes every Config field that isn't
+explicitly excluded (see `provenance.py`), so adding a new field
+ensures rows produced under different settings are distinguishable.
+"""
+
 from __future__ import annotations
 
 import os
@@ -32,9 +53,25 @@ class Config:
     realtime_pacing: bool
 
     # models
+    # Which classifier backend to instantiate in the inference subprocess:
+    #   "v2"      — DINOv2 ViT-S/14 trained from scratch on Wahoo Bay crops
+    #               + iNaturalist supplements (223 classes). Default.
+    #   "fishial" — vendored Fishial v0.10.2 ArcFace + sub-centre + KNN
+    #               (866 classes). Kept available for one-flag revert.
+    classifier_backend: str
     detector_path: str
     classifier_path: str
     classifier_inference_module_dir: str
+    # v2-specific (ignored when classifier_backend != "v2"):
+    classifier_v2_checkpoint: str
+    classifier_v2_classes_json: str
+    classifier_v2_arch: str
+    classifier_v2_input_size: int
+    classifier_v2_compile: bool
+
+    # Per-camera no-fish-zone polygons. JSON file path; see
+    # data/camera_negative_regions.json for format. Empty string disables.
+    negative_regions_path: str
     device: str
     det_imgsz: int
     det_conf_threshold: float
@@ -64,6 +101,7 @@ class Config:
     save_interesting_only: bool
     save_interesting_quiet_seconds: int
     save_interesting_min_conf: float
+    save_min_track_gap_seconds: float  # rate-limit: at most one save per track per N seconds
 
     # http
     worker_http_host: str
@@ -81,9 +119,9 @@ class Config:
     tracker_iou_threshold: float
     tracker_max_age: int
     tracker_min_hits: int
-    tracker_center_alpha: float      # 0..1, higher = more responsive, less smooth
-    tracker_velocity_alpha: float    # 0..1, EMA weight on new velocity measurement
-    tracker_velocity_decay: float    # 0..1, per-frame velocity decay while coasting
+    tracker_center_alpha: float  # 0..1, higher = more responsive, less smooth
+    tracker_velocity_alpha: float  # 0..1, EMA weight on new velocity measurement
+    tracker_velocity_decay: float  # 0..1, per-frame velocity decay while coasting
 
     # Auto-switch to a fallback source when primary goes dark (sunset/camera off)
     fallback_video_source: str
@@ -100,9 +138,9 @@ class Config:
 
     # PTZ poller (off by default; when on, writes pan/tilt/zoom to ptz_states)
     ptz_poll_enabled: bool
-    ptz_poll_url: str                # full URL incl. userinfo; empty = idle
-    ptz_poll_backend: str            # 'vapix' | 'onvif'
-    ptz_source_name: str             # label written to ptz_states.source_name
+    ptz_poll_url: str  # full URL incl. userinfo; empty = idle
+    ptz_poll_backend: str  # 'vapix' | 'onvif'
+    ptz_source_name: str  # label written to ptz_states.source_name
     ptz_poll_interval_s: float
     ptz_poll_timeout_s: float
 
@@ -113,11 +151,27 @@ class Config:
             video_loop=_bool("VIDEO_LOOP", True),
             playlist_shuffle=_bool("PLAYLIST_SHUFFLE", False),
             realtime_pacing=_bool("REALTIME_PACING", True),
+            classifier_backend=_str("CLASSIFIER_BACKEND", "v2"),
             detector_path=_str("DETECTOR_PATH", "/data/models/detector_v26/model.pt"),
             classifier_path=_str("CLASSIFIER_PATH", "/data/models/classifier_v0_10_2/model.pt"),
             classifier_inference_module_dir=_str(
                 "CLASSIFIER_INFERENCE_MODULE_DIR",
                 "/data/models/classifier_v0_10_2",
+            ),
+            classifier_v2_checkpoint=_str(
+                "CLASSIFIER_V2_CHECKPOINT",
+                "/data/models/classifier_v2/checkpoint_best.pt",
+            ),
+            classifier_v2_classes_json=_str(
+                "CLASSIFIER_V2_CLASSES_JSON",
+                "/data/models/classifier_v2/classes.json",
+            ),
+            classifier_v2_arch=_str("CLASSIFIER_V2_ARCH", "vit_small_patch14_dinov2"),
+            classifier_v2_input_size=_int("CLASSIFIER_V2_INPUT_SIZE", 224),
+            classifier_v2_compile=_bool("CLASSIFIER_V2_COMPILE", True),
+            negative_regions_path=_str(
+                "NEGATIVE_REGIONS_PATH",
+                "/data/camera_negative_regions.json",
             ),
             device=_str("DEVICE", "cuda:0"),
             det_imgsz=_int("DET_IMGSZ", 640),
@@ -141,6 +195,9 @@ class Config:
             save_interesting_only=_bool("SAVE_INTERESTING_ONLY", True),
             save_interesting_quiet_seconds=_int("SAVE_INTERESTING_QUIET_SECONDS", 300),
             save_interesting_min_conf=_float("SAVE_INTERESTING_MIN_CONF", 0.5),
+            # 1.0 s default ≈ 30x reduction vs every-frame for a fish lingering
+            # in front of the camera. Set to 0 to disable rate-limiting.
+            save_min_track_gap_seconds=_float("SAVE_MIN_TRACK_GAP_SECONDS", 1.0),
             worker_http_host=_str("WORKER_HTTP_HOST", "0.0.0.0"),
             worker_http_port=_int("WORKER_HTTP_PORT", 8081),
             log_level=_str("LOG_LEVEL", "INFO"),

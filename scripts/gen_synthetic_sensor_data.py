@@ -216,6 +216,150 @@ def synthesize(
 
 
 # ---------------------------------------------------------------------------
+# Synthetic weather (mirrors the SenseStream weather-station schema)
+# ---------------------------------------------------------------------------
+
+
+def synthesize_weather(
+    start: datetime,
+    end: datetime,
+    rng: np.random.Generator,
+) -> dict:
+    """Return a dict of arrays describing on-site weather + a forecast layer,
+    on the same SAMPLE_PERIOD_S cadence as synthesize() so the two can be
+    upserted in lockstep. Modelled for Pompano Beach (subtropical, marine
+    influence, daily sea breeze, summer afternoon thunderstorms)."""
+    sp = SAMPLE_PERIOD_S
+    start = start.replace(tzinfo=timezone.utc)
+    end = end.replace(tzinfo=timezone.utc)
+    steps = int((end - start).total_seconds() // sp)
+    start_np = np.datetime64(start.replace(tzinfo=None), "s")
+    ts = start_np + np.arange(steps, dtype="int64") * np.timedelta64(sp, "s")
+
+    doy = _day_of_year(ts)
+    hour = _hour_of_day(ts)
+
+    t_sec = np.arange(steps, dtype=np.float64) * sp
+    M2 = np.sin(2 * np.pi * t_sec / (12.42 * 3600))
+
+    rain = _rain_series(ts, rng)
+
+    # --- Air temperature (°C) -------------------------------------------------
+    seasonal_air = 24.0 + 5.0 * np.sin(2 * np.pi * (doy - 200) / 365.25)
+    diurnal_air = 4.0 * np.sin(2 * np.pi * (hour - 15) / 24.0)
+    air_temp_c = seasonal_air + diurnal_air + rng.normal(0, 0.5, steps)
+
+    # --- Barometric pressure (hPa) -------------------------------------------
+    # Coastal mean ~1013–1016. Slight diurnal; drops noticeably before storms
+    # (the well-known angling lore — fish often feed pre-frontal).
+    bar_press_hpa = (
+        1015.0
+        + 0.5 * np.sin(2 * np.pi * (hour - 10) / 24.0)
+        - 3.0 * rain
+        + rng.normal(0, 0.2, steps)
+    )
+
+    # --- Wind speed (m/s) ----------------------------------------------------
+    # Diurnal sea-breeze: builds through the morning, peaks ~2 pm, drops
+    # overnight. Storms gust significantly.
+    base_wind = 3.5 + 2.0 * np.sin(2 * np.pi * (hour - 14) / 24.0)
+    wind_speed_avg_ms = np.maximum(0.5, base_wind + 4.0 * rain
+                                   + np.maximum(0, rng.normal(0, 1.0, steps)))
+    wind_speed_min_ms = np.maximum(0.0, wind_speed_avg_ms - 1.5)
+    wind_speed_max_ms = wind_speed_avg_ms + 2.0
+
+    # --- Wind direction (degrees) --------------------------------------------
+    # Sea breeze pulls easterly during the day, land breeze westerly at night.
+    wind_dir_avg_deg = (90.0 + 90.0 * np.sin(2 * np.pi * (hour - 12) / 24.0)
+                       + rng.normal(0, 15, steps)) % 360.0
+    wind_dir_min_deg = (wind_dir_avg_deg - 20.0) % 360.0
+    wind_dir_max_deg = (wind_dir_avg_deg + 20.0) % 360.0
+
+    # --- Humidity (%) --------------------------------------------------------
+    base_humid = 80.0 - 1.5 * diurnal_air + 5.0 * rain
+    rel_humidity_pct = np.clip(base_humid + rng.normal(0, 3, steps), 40.0, 99.0)
+
+    # --- Rain (reuses the shared event series) -------------------------------
+    rain_accum_mm = rain * 2.0                # mm in this 10-min step
+    rain_int_mm_hr = rain * 12.0
+    rain_dur_frac_hr = (rain > 0.1).astype(float) * (0.3 + 0.5 * np.minimum(rain, 1.5))
+    rain_peak_int_mm_hr = rain * 15.0
+
+    # --- Hail (vanishingly rare in S Florida) --------------------------------
+    hail_accum = np.zeros(steps)
+    hail_dur = np.zeros(steps)
+    hail_int = np.zeros(steps)
+    hail_peak_int = np.zeros(steps)
+
+    # --- Water level (mm) ----------------------------------------------------
+    # Astronomical tide ~0.6 m semidiurnal at Pompano; expressed in mm so it
+    # matches the SenseStream sensor's native units.
+    water_level_mm = 500.0 + 600.0 * M2 + rng.normal(0, 5, steps)
+
+    # --- Solar radiation (W/m²) ----------------------------------------------
+    solar_base = np.maximum(0.0, 900.0 * np.sin(np.pi * (hour - 6) / 12.0))
+
+    # --- Cloud cover (%) -----------------------------------------------------
+    cloud_cover_pct = np.clip(20.0 + 40.0 * rain + rng.normal(0, 15, steps), 0.0, 100.0)
+    solar_rad_wm2 = solar_base * (1.0 - 0.6 * cloud_cover_pct / 100.0)
+
+    # --- Dew point (°C) — approximation T - (100-RH)/5 -----------------------
+    dew_point_c = air_temp_c - (100.0 - rel_humidity_pct) / 5.0
+
+    # --- Forecast (feed 2) — mostly derivative of the on-site values ---------
+    forecast_humidity_pct = rel_humidity_pct + rng.normal(0, 2, steps)
+    precip_intensity_mm_hr = rain_int_mm_hr
+    precip_prob_pct = np.clip(rain * 50.0 + rng.normal(10, 5, steps), 0.0, 100.0)
+    press_sea_level_hpa = bar_press_hpa + rng.normal(0, 0.3, steps)
+    press_surface_hpa = bar_press_hpa
+    temp_apparent_c = air_temp_c + (rel_humidity_pct - 50.0) * 0.05  # rough Heat Index proxy
+    uv_index = np.clip(solar_rad_wm2 / 80.0, 0.0, 11.0)
+
+    # Tomorrow.io-style weather codes (rough mapping). 1000 clear, 1100 mostly
+    # clear, 1101 partly cloudy, 1102 mostly cloudy, 1001 cloudy, 4000 rain,
+    # 4001 heavy rain.
+    weather_code = np.where(rain > 0.5, 4001,
+                   np.where(rain > 0.1, 4000,
+                   np.where(cloud_cover_pct > 80, 1001,
+                   np.where(cloud_cover_pct > 50, 1102,
+                   np.where(cloud_cover_pct > 25, 1101,
+                   np.where(cloud_cover_pct > 5, 1100, 1000)))))).astype(int)
+
+    return {
+        "ts": ts,
+        "bar_press_hpa": bar_press_hpa,
+        "wind_dir_avg_deg": wind_dir_avg_deg,
+        "wind_dir_min_deg": wind_dir_min_deg,
+        "wind_dir_max_deg": wind_dir_max_deg,
+        "wind_speed_avg_ms": wind_speed_avg_ms,
+        "wind_speed_min_ms": wind_speed_min_ms,
+        "wind_speed_max_ms": wind_speed_max_ms,
+        "air_temp_c": air_temp_c,
+        "rel_humidity_pct": rel_humidity_pct,
+        "rain_accum_mm": rain_accum_mm,
+        "rain_dur_frac_hr": rain_dur_frac_hr,
+        "rain_int_mm_hr": rain_int_mm_hr,
+        "rain_peak_int_mm_hr": rain_peak_int_mm_hr,
+        "hail_accum": hail_accum,
+        "hail_dur": hail_dur,
+        "hail_int": hail_int,
+        "hail_peak_int": hail_peak_int,
+        "water_level_mm": water_level_mm,
+        "solar_rad_wm2": solar_rad_wm2,
+        "cloud_cover_pct": cloud_cover_pct,
+        "dew_point_c": dew_point_c,
+        "forecast_humidity_pct": forecast_humidity_pct,
+        "precip_intensity_mm_hr": precip_intensity_mm_hr,
+        "precip_prob_pct": precip_prob_pct,
+        "press_sea_level_hpa": press_sea_level_hpa,
+        "press_surface_hpa": press_surface_hpa,
+        "temp_apparent_c": temp_apparent_c,
+        "uv_index": uv_index,
+        "weather_code": weather_code,
+    }
+
+
+# ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
 

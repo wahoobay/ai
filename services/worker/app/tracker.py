@@ -25,6 +25,7 @@ matches the previous module — no pipeline changes required.
 Smoothing is display-only. Raw detections continue to be written to
 ``detection_events`` / ``frame_stats`` / the COCO saver.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict, deque
@@ -44,6 +45,7 @@ class SmootherUpdate:
     the rest of the pipeline which persistent track each raw detection
     belongs to so we can deduplicate counts across frames.
     """
+
     display: list[FishDetection]
     raw_track_ids: list[int | None]
 
@@ -70,10 +72,10 @@ class _Track:
     cy: float = 0.0
     vx: float = 0.0
     vy: float = 0.0
-    w:  float = 0.0
-    h:  float = 0.0
+    w: float = 0.0
+    h: float = 0.0
     size_history: deque[tuple[float, float]] = field(default_factory=deque)
-    initialized:  bool = False
+    initialized: bool = False
 
     # classifier-output memory
     conf_history: deque[float] = field(default_factory=deque)
@@ -81,8 +83,8 @@ class _Track:
 
     # bookkeeping
     last_seen_frame: int = -1
-    age_since_hit:   int = 0
-    total_hits:      int = 0
+    age_since_hit: int = 0
+    total_hits: int = 0
 
     def update_with(
         self,
@@ -98,12 +100,12 @@ class _Track:
         x1, y1, x2, y2 = bbox
         raw_cx = (x1 + x2) / 2.0
         raw_cy = (y1 + y2) / 2.0
-        raw_w  = float(max(1, x2 - x1))
-        raw_h  = float(max(1, y2 - y1))
+        raw_w = float(max(1, x2 - x1))
+        raw_h = float(max(1, y2 - y1))
 
         if not self.initialized:
             self.cx, self.cy = raw_cx, raw_cy
-            self.w,  self.h  = raw_w,  raw_h
+            self.w, self.h = raw_w, raw_h
             self.vx = self.vy = 0.0
             self.initialized = True
         else:
@@ -137,8 +139,8 @@ class _Track:
         _trim(self.topk_history, window)
 
         self.last_seen_frame = frame_id
-        self.age_since_hit   = 0
-        self.total_hits     += 1
+        self.age_since_hit = 0
+        self.total_hits += 1
 
     def coast(self, velocity_decay: float) -> None:
         """Advance one frame along the velocity vector without a measurement.
@@ -168,7 +170,7 @@ class _Track:
     def smoothed_topk(self, k: int) -> list[Prediction]:
         """Sum per-species accuracy across the window, take top-k. Normalised
         by window length so absent species don't get a free ride."""
-        agg:  dict[str, float] = defaultdict(float)
+        agg: dict[str, float] = defaultdict(float)
         meta: dict[str, Prediction] = {}
         for topk in self.topk_history:
             seen = set()
@@ -177,18 +179,20 @@ class _Track:
                 if key in seen:
                     continue
                 seen.add(key)
-                agg[key]  += p.accuracy
+                agg[key] += p.accuracy
                 meta[key] = p
         window = max(1, len(self.topk_history))
         ranked = sorted(agg.items(), key=lambda kv: kv[1] / window, reverse=True)
         out: list[Prediction] = []
         for key, total in ranked[:k]:
             proto = meta[key]
-            out.append(Prediction(
-                name=proto.name,
-                species_id=proto.species_id,
-                accuracy=round(total / window, 4),
-            ))
+            out.append(
+                Prediction(
+                    name=proto.name,
+                    species_id=proto.species_id,
+                    accuracy=round(total / window, 4),
+                )
+            )
         return out
 
 
@@ -210,11 +214,11 @@ class DetectionSmoother:
         velocity_decay: float = 0.8,
     ) -> None:
         self.window = max(1, window)
-        self.iou_threshold  = iou_threshold
-        self.max_age        = max_age
-        self.min_hits       = max(1, min_hits)
-        self.topk           = topk
-        self.center_alpha   = center_alpha
+        self.iou_threshold = iou_threshold
+        self.max_age = max_age
+        self.min_hits = max(1, min_hits)
+        self.topk = topk
+        self.center_alpha = center_alpha
         self.velocity_alpha = velocity_alpha
         self.velocity_decay = velocity_decay
         self._tracks: dict[int, _Track] = {}
@@ -251,14 +255,16 @@ class DetectionSmoother:
                 M[:, j] = -1
 
         matched_track_ids = {tid for tid, _j in pairs}
-        matched_det_idxs  = {j   for _tid, j in pairs}
+        matched_det_idxs = {j for _tid, j in pairs}
 
         # Matched: kinematic update
         for tid, j in pairs:
             d = detections[j]
             self._tracks[tid].update_with(
-                frame_id=frame_id, bbox=tuple(d.bbox),
-                det_conf=d.det_conf, topk=list(d.topk),
+                frame_id=frame_id,
+                bbox=tuple(d.bbox),
+                det_conf=d.det_conf,
+                topk=list(d.topk),
                 window=self.window,
                 center_alpha=self.center_alpha,
                 velocity_alpha=self.velocity_alpha,
@@ -285,8 +291,10 @@ class DetectionSmoother:
             self._next_id += 1
             t = _Track(track_id=new_id)
             t.update_with(
-                frame_id=frame_id, bbox=tuple(d.bbox),
-                det_conf=d.det_conf, topk=list(d.topk),
+                frame_id=frame_id,
+                bbox=tuple(d.bbox),
+                det_conf=d.det_conf,
+                topk=list(d.topk),
                 window=self.window,
                 center_alpha=self.center_alpha,
                 velocity_alpha=self.velocity_alpha,
@@ -299,11 +307,13 @@ class DetectionSmoother:
         for t in self._tracks.values():
             if t.total_hits < self.min_hits or not t.initialized:
                 continue
-            out.append(FishDetection(
-                bbox=t.smoothed_bbox(),
-                det_conf=t.smoothed_conf(),
-                topk=t.smoothed_topk(self.topk),
-            ))
+            out.append(
+                FishDetection(
+                    bbox=t.smoothed_bbox(),
+                    det_conf=t.smoothed_conf(),
+                    topk=t.smoothed_topk(self.topk),
+                )
+            )
         return SmootherUpdate(display=out, raw_track_ids=raw_track_ids)
 
     def stats(self) -> dict:

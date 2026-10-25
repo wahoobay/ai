@@ -12,6 +12,7 @@ estimate. These helpers provide:
 Design goals: deterministic (explicit seed), side-effect-free, numpy-only so
 they work in both the dashboard and eval harness.
 """
+
 from __future__ import annotations
 
 import math
@@ -20,13 +21,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-DEFAULT_B = 2000          # bootstrap resamples
-DEFAULT_ALPHA = 0.05      # → 95 % CI
+DEFAULT_B = 2000  # bootstrap resamples
+DEFAULT_ALPHA = 0.05  # → 95 % CI
 
 
 @dataclass(frozen=True)
 class CI:
     """Closed-form CI container. ``.as_dict()`` is JSON-safe."""
+
     point: float
     lo: float
     hi: float
@@ -37,8 +39,8 @@ class CI:
     def as_dict(self) -> dict:
         return {
             "point": None if self.point is None else float(self.point),
-            "lo":    None if self.lo    is None else float(self.lo),
-            "hi":    None if self.hi    is None else float(self.hi),
+            "lo": None if self.lo is None else float(self.lo),
+            "hi": None if self.hi is None else float(self.hi),
             "method": self.method,
             "n": int(self.n),
             "alpha": self.alpha,
@@ -61,14 +63,26 @@ def bootstrap_ci(
     arr = np.asarray(sample, dtype=np.float64)
     n = arr.size
     if n == 0:
-        return CI(point=float("nan"), lo=float("nan"), hi=float("nan"),
-                  method="bootstrap_percentile", n=0, alpha=alpha)
+        return CI(
+            point=float("nan"),
+            lo=float("nan"),
+            hi=float("nan"),
+            method="bootstrap_percentile",
+            n=0,
+            alpha=alpha,
+        )
     rng = np.random.default_rng(seed)
     idx = rng.integers(0, n, size=(B, n))
     draws = np.apply_along_axis(statistic, 1, arr[idx])
     lo, hi = np.quantile(draws, [alpha / 2, 1 - alpha / 2])
-    return CI(point=float(statistic(arr)), lo=float(lo), hi=float(hi),
-              method="bootstrap_percentile", n=int(n), alpha=alpha)
+    return CI(
+        point=float(statistic(arr)),
+        lo=float(lo),
+        hi=float(hi),
+        method="bootstrap_percentile",
+        n=int(n),
+        alpha=alpha,
+    )
 
 
 def mean_ci(
@@ -92,15 +106,22 @@ def poisson_count_ci(count: int, alpha: float = DEFAULT_ALPHA) -> CI:
     independent. Falls back to bootstrap if you suspect clustering.
     """
     from scipy.stats import chi2  # lazy import
+
     if count < 0:
         raise ValueError("count must be non-negative")
     if count == 0:
         lo = 0.0
     else:
-        lo = chi2.ppf(alpha / 2,     2 * count)       / 2.0
+        lo = chi2.ppf(alpha / 2, 2 * count) / 2.0
     hi = chi2.ppf(1 - alpha / 2, 2 * (count + 1)) / 2.0
-    return CI(point=float(count), lo=float(lo), hi=float(hi),
-              method="poisson_exact", n=int(count), alpha=alpha)
+    return CI(
+        point=float(count),
+        lo=float(lo),
+        hi=float(hi),
+        method="poisson_exact",
+        n=int(count),
+        alpha=alpha,
+    )
 
 
 def bootstrap_count_ci(
@@ -125,8 +146,14 @@ def bootstrap_count_ci(
     idx = rng.integers(0, n, size=(B, n))
     draws = arr[idx].sum(axis=1)
     lo, hi = np.quantile(draws, [alpha / 2, 1 - alpha / 2])
-    return CI(point=float(arr.sum()), lo=float(lo), hi=float(hi),
-              method="bootstrap_count", n=int(n), alpha=alpha)
+    return CI(
+        point=float(arr.sum()),
+        lo=float(lo),
+        hi=float(hi),
+        method="bootstrap_count",
+        n=int(n),
+        alpha=alpha,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -144,17 +171,24 @@ def rate_ci(
     Preferred over Normal-approx for small n or rates near 0/1.
     """
     if trials <= 0:
-        return CI(point=float("nan"), lo=float("nan"), hi=float("nan"),
-                  method="wilson", n=0, alpha=alpha)
+        return CI(
+            point=float("nan"), lo=float("nan"), hi=float("nan"), method="wilson", n=0, alpha=alpha
+        )
     from scipy.stats import norm  # lazy import
+
     z = norm.ppf(1 - alpha / 2)
     p = successes / trials
     denom = 1 + z * z / trials
     centre = (p + z * z / (2 * trials)) / denom
-    halfw  = (z * math.sqrt(p * (1 - p) / trials + z * z / (4 * trials * trials))) / denom
-    return CI(point=float(p), lo=float(max(0.0, centre - halfw)),
-              hi=float(min(1.0, centre + halfw)), method="wilson",
-              n=int(trials), alpha=alpha)
+    halfw = (z * math.sqrt(p * (1 - p) / trials + z * z / (4 * trials * trials))) / denom
+    return CI(
+        point=float(p),
+        lo=float(max(0.0, centre - halfw)),
+        hi=float(min(1.0, centre + halfw)),
+        method="wilson",
+        n=int(trials),
+        alpha=alpha,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +208,7 @@ def species_counts_with_ci(
     uses the event-level bootstrap above.
     """
     from collections import Counter
+
     counter = Counter(species_ids)
     n_total = sum(counter.values())
     out = []
@@ -182,10 +217,12 @@ def species_counts_with_ci(
             ci = bootstrap_count_ci(species_ids, sid, B=B, alpha=alpha, seed=seed)
         else:
             ci = poisson_count_ci(n, alpha=alpha)
-        out.append({
-            "species_id": sid,
-            "count": int(n),
-            "ci": ci.as_dict(),
-            "share": (n / n_total) if n_total else None,
-        })
+        out.append(
+            {
+                "species_id": sid,
+                "count": int(n),
+                "ci": ci.as_dict(),
+                "share": (n / n_total) if n_total else None,
+            }
+        )
     return out

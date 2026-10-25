@@ -1,12 +1,31 @@
 """Video source abstraction.
 
-Two kinds:
-- PlaylistSource: iterate files in a directory (with optional loop + realtime pacing)
-- RTSPSource: read a live stream
+Four concrete sources, all yielding `(frame_id, frame_bgr,
+source_name)` tuples:
 
-Both yield (frame_id, frame_bgr, source_name). frame_id is a monotonic counter
-global to the source's lifetime.
+* `PlaylistSource` — iterate files in a directory with optional loop +
+  realtime pacing. Used as the dark-time fallback for both cameras.
+* `RTSPSource` — read a live RTSP stream (Axis PTZ cameras).
+  Auto-reconnects with backoff on cv2 read failures.
+* `HTTPSource` — MJPEG over HTTP / HTTPS (legacy path; unused with
+  the current Axis cameras).
+* `AutoswitchSource` — wraps a primary + fallback source and switches
+  based on rolling mean-luma. When a primary `RTSPSource` is
+  configured with a `FALLBACK_VIDEO_SOURCE`, this is what `main.py`
+  actually hands to the FrameTap.
+
+`frame_id` is a monotonic counter global to the source's lifetime
+(worker restart → restart at 0).
+
+`source_name` is the friendly label that ends up in
+`detection_events.source_name` and on every per-camera filter join.
+It comes from `SOURCE_LABEL_PRIMARY` / `SOURCE_LABEL_FALLBACK` env
+vars (or falls back to the URL's hostname).
+
+The autoswitch logic — including the strict "no video-data writes
+during fallback" rule — is documented in `docs/data_pipeline.md`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,10 +75,7 @@ class PlaylistSource(VideoSource):
     def _list_videos(self) -> list[Path]:
         if not self.directory.exists():
             raise FileNotFoundError(f"Video directory not found: {self.directory}")
-        files = sorted(
-            p for p in self.directory.iterdir()
-            if p.suffix.lower() in self.VIDEO_EXTS
-        )
+        files = sorted(p for p in self.directory.iterdir() if p.suffix.lower() in self.VIDEO_EXTS)
         if not files:
             raise FileNotFoundError(f"No videos in {self.directory}")
         if self.shuffle:
@@ -220,6 +236,7 @@ class AutoswitchSource(VideoSource):
         window_samples: int = 60,
     ) -> None:
         from collections import deque
+
         self.primary = primary
         self.fallback = fallback
         self.dark_threshold = dark_threshold
@@ -250,11 +267,7 @@ class AutoswitchSource(VideoSource):
                 _, img, _ = pframe
                 small = cv2.resize(img, (160, 90), interpolation=cv2.INTER_AREA)
                 # BT.601 luma on BGR
-                luma = (
-                    0.114 * small[..., 0]
-                    + 0.587 * small[..., 1]
-                    + 0.299 * small[..., 2]
-                )
+                luma = 0.114 * small[..., 0] + 0.587 * small[..., 1] + 0.299 * small[..., 2]
                 m = float(luma.mean())
                 self.last_luma = m
                 self._window.append(m)
@@ -264,11 +277,17 @@ class AutoswitchSource(VideoSource):
                     if not self.is_dark and avg < self.dark_threshold:
                         self.is_dark = True
                         self.switches += 1
-                        log.info("autoswitch: primary went dark (avg luma %.1f), switching to fallback", avg)
+                        log.info(
+                            "autoswitch: primary went dark (avg luma %.1f), switching to fallback",
+                            avg,
+                        )
                     elif self.is_dark and avg > self.light_threshold:
                         self.is_dark = False
                         self.switches += 1
-                        log.info("autoswitch: primary recovered (avg luma %.1f), switching back to primary", avg)
+                        log.info(
+                            "autoswitch: primary recovered (avg luma %.1f), switching back to primary",
+                            avg,
+                        )
 
             if self.is_dark:
                 try:
@@ -306,7 +325,7 @@ def _build_one(cfg, spec: str, label: str | None = None) -> VideoSource:
     if spec.startswith("http://") or spec.startswith("https://"):
         return HTTPSource(spec, source_name=label)
     if spec.startswith("file://"):
-        directory = spec[len("file://"):]
+        directory = spec[len("file://") :]
     else:
         directory = spec
     return PlaylistSource(

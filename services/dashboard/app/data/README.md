@@ -109,17 +109,40 @@ crop path. Ready to filter into a fine-tuning training split.
 
 | Column | Meaning |
 |---|---|
-| `correction_id`, `created_at`, `reviewer`, `confidence`, `notes` | who said what when |
-| `corrected_name`, `corrected_species_id`, `not_a_fish` | the human label |
+| `correction_id`, `created_at`, `confidence` | when the verdict was given and how sure the reviewer was |
+| `corrected_name`, `corrected_species_id`, `not_a_fish`, `unidentifiable`, `life_stage` | the human label (`not_a_fish` = no animal in the box; `unidentifiable` = an animal whose species can't be told) |
+| `is_endorsement`, `label_source` | whether the label matches the model's guess; how it was chosen (`model_guess`, `hint`, `search`) |
+| `corrected_bbox` | the box as the reviewer fixed it, `x1,y1,x2,y2`; empty when they did not move it (use `bbox`) |
+| `review_item_id`, `is_adjudication` | the review-queue item it answered; whether an administrator settled a disagreement |
+| `bbox`, `det_conf`, `track_id` | the model's box and detection context |
 | `original_name`, `original_species_id`, `original_accuracy`, `original_topk` | what the model said |
-| `frame_image_path`, `frame_coco_path` | where the saved crop lives on disk |
+| `frame_image_path`, `frame_coco_path` | the saved frame, matched on camera, frame number and timestamp |
 | `model_version`, `detector_sha256`, `classifier_sha256`, `config_hash`, `pipeline_git_sha` | provenance of the original prediction |
+| `reviewer`, `notes`, `user_id`, `session_id` | **administrators only.** Omitted from the file for everyone else |
 
 ### `water_quality.csv`
 
 Sonde readings (YSI EXO2 via SenseStream). Currently **synthetic
 placeholder data** until live SenseStream credentials are configured —
 look at the `source` column: `synthetic` vs `live`.
+
+### `weather.csv`
+
+Atmospheric readings. Two feeds merged onto each row:
+
+* **On-site station** (Vaisala WXT-536, polled via the Wahoo Bay API):
+  `bar_press_hpa`, `wind_dir_{avg,min,max}_deg`,
+  `wind_speed_{avg,min,max}_ms`, `air_temp_c`, `rel_humidity_pct`,
+  `rain_*`, `hail_*`, `water_level_mm`, `solar_rad_wm2`.
+* **Forecast / nearest-METAR layer** (Open-Meteo + NWS station KPMP):
+  `cloud_cover_pct`, `dew_point_c`, `forecast_humidity_pct`,
+  `precip_intensity_mm_hr`, `precip_prob_pct`,
+  `press_{sea_level,surface}_hpa`, `temp_apparent_c`, `uv_index`,
+  `weather_code` (WMO code), `weather_description` (METAR text).
+
+NULLs are expected where one feed has a measurement the other
+doesn't. `source` column: `live` (current normal) or `synthetic`
+(when the station feed has gapped).
 
 ### `frame_stats.csv`
 
@@ -133,7 +156,9 @@ One row per frame saved to disk (timelapse / per-detection / interesting-only).
 ### `corrections.csv`
 
 Compact corrections export (no joins). Use `labeled_corrections.csv` for
-the fully-enriched version.
+the fully-enriched version. `reviewer`, `notes`, `user_id` and `session_id`
+appear only when an administrator downloads the file; filtering by
+`reviewer` also requires the admin role.
 
 ### `alerts.csv`
 

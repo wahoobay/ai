@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wahoo Bay · no-fish-zone admin</title>
+<style>
+  :root {
+    --bg: #0b1a24;
+    --card: #102433;
+    --ink: #e6edf3;
+    --muted: #8b9aa6;
+    --accent: #4fc1ff;
+    --warn: #f5b941;
+    --danger: #ef6a6a;
+    --line: #1f3b4f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--ink);
+  }
+  h1 { margin: 0 0 12px; font-size: 18px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+  button, select {
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+    color: var(--ink); padding: 6px 12px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #001; font-weight: 600; }
+  button.primary:hover { background: #7fd3ff; }
+  button.danger { color: var(--danger); }
+  button.danger:hover { border-color: var(--danger); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .canvas-wrap { position: relative; display: inline-block; background: #000; border-radius: 4px; overflow: hidden; max-width: 100%; }
+  canvas { display: block; cursor: crosshair; max-width: 100%; height: auto; }
+  .status { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+  .status.ok { color: #7fd383; }
+  .status.err { color: var(--danger); }
+  .help { color: var(--muted); font-size: 12px; max-width: 700px; line-height: 1.55; }
+  .help code { background: #0a1620; padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+  .region-list { margin-top: 8px; }
+  .region-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 8px; border: 1px solid var(--line); border-radius: 3px;
+    margin-bottom: 4px; font-size: 12px;
+  }
+  .region-row .name { flex: 1; }
+  .pill { font-size: 11px; padding: 2px 6px; border-radius: 99px; background: #0a1620; color: var(--muted); }
+  input[type="text"], input[type="password"] {
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+    color: var(--ink); padding: 6px 10px; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<h1>No-fish-zone admin · polygon mask for the SEAHIVE holes (and other false-positive geometry)</h1>
+
+<div class="help">
+  Pick a camera, then <b>click on the image to add polygon vertices</b>.
+  Press <b>Close polygon</b> (or double-click) to commit the current
+  shape, then start the next one. Hit <b>Save</b> to write the JSON to
+  disk. Restart the workers afterwards for the change to take effect.
+  <br><br>
+  <b>How the filter works:</b> a detection is dropped only when its
+  bbox closely <i>matches</i> a polygon — IoU(bbox, polygon's bounding
+  rect) ≥ <code>min_iou</code> (default 0.5). The hole's own
+  false-positive is roughly the size of the hole and matches; a fish
+  that swims through has a much smaller bbox and so a tiny IoU even
+  when fully inside, so it's kept. Draw the polygon as tightly to the
+  hole's actual outline as you can — closer match = better filtering.
+</div>
+
+<div class="row" style="margin-top: 16px;">
+  <label for="camera">Camera:</label>
+  <select id="camera">
+    <option value="seahivecam">seahivecam</option>
+    <option value="pier_cam">pier_cam</option>
+  </select>
+  <button id="refreshSnap" title="Reload snapshot (e.g. if the camera angle changed)">↻ snapshot</button>
+  <span style="flex: 1"></span>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas" width="1280" height="720"></canvas>
+</div>
+
+<div class="row" style="margin-top: 12px;">
+  <button id="undoVertex">⟲ Undo vertex</button>
+  <button id="closePoly">⌧ Close polygon</button>
+  <button id="clearAll" class="danger">✗ Clear all on this camera</button>
+  <span style="flex: 1"></span>
+  <button id="save" class="primary">Save → /api/admin/negative_regions</button>
+</div>
+
+<div id="status" class="status" style="margin-top: 10px;">ready</div>
+
+<div class="card" style="margin-top: 16px;">
+  <div class="row" style="margin: 0;">
+    <b>Saved regions for <span id="curCam">—</span></b>
+    <span class="pill"><span id="regionCount">0</span> total</span>
+  </div>
+  <div id="regionList" class="region-list"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d");
+const SNAPSHOT_FOR = {
+  // Map camera key → dashboard snapshot endpoint (raw, no overlays).
+  "seahivecam": "/api/snapshot.jpg?raw=1",
+  "pier_cam":   "/api/snapshot_pier.jpg?raw=1",
+};
+
+let regionsConfig = { sources: {} };
+let currentCam = "seahivecam";
+let currentPolygon = []; // [[x, y], ...] in image-pixel coords
+let imageBitmap = null;
+let imageNativeW = 1280, imageNativeH = 720;
+
+function setStatus(msg, kind="") {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = "status" + (kind ? " " + kind : "");
+}
+
+async function loadConfig() {
+  const r = await fetch("/api/admin/negative_regions", { cache: "no-store" });
+  regionsConfig = await r.json();
+  if (!regionsConfig.sources) regionsConfig.sources = {};
+  renderRegionList();
+}
+
+async function loadSnapshot() {
+  const cam = $("camera").value;
+  currentCam = cam;
+  $("curCam").textContent = cam;
+  currentPolygon = [];
+
+  // Reload the snapshot. Bust the cache so a refresh actually fetches.
+  const url = SNAPSHOT_FOR[cam] + "&_t=" + Date.now();
+  setStatus(`loading snapshot for ${cam}…`);
+  try {
+    const blob = await (await fetch(url, { cache: "no-store" })).blob();
+    imageBitmap = await createImageBitmap(blob);
+    imageNativeW = imageBitmap.width;
+    imageNativeH = imageBitmap.height;
+    canvas.width = imageNativeW;
+    canvas.height = imageNativeH;
+
+    // Ensure the source has a config block.
+    if (!regionsConfig.sources[cam]) {
+      regionsConfig.sources[cam] = { frame_w: imageNativeW, frame_h: imageNativeH, regions: [] };
+    } else {
+      // Refresh stored frame dimensions to current camera res (in case the
+      // camera resolution has changed since the last save).
+      regionsConfig.sources[cam].frame_w = imageNativeW;
+      regionsConfig.sources[cam].frame_h = imageNativeH;
+    }
+    redraw();
+    renderRegionList();
+    setStatus(`loaded ${cam} snapshot (${imageNativeW}×${imageNativeH})`, "ok");
+  } catch (e) {
+    setStatus(`failed to load snapshot for ${cam}: ${e}`, "err");
+  }
+}
+
+function redraw() {
+  if (!imageBitmap) return;
+  ctx.drawImage(imageBitmap, 0, 0, imageNativeW, imageNativeH);
+
+  const src = regionsConfig.sources[currentCam];
+  const saved = src ? (src.regions || []) : [];
+  for (const r of saved) {
+    drawPolygon(r.polygon, "rgba(245, 185, 65, 0.35)", "#f5b941", 2);
+  }
+  // In-progress polygon — brighter accent
+  if (currentPolygon.length > 0) {
+    drawPolygon(currentPolygon, "rgba(79, 193, 255, 0.25)", "#4fc1ff", 2, /*closed=*/false);
+    // Vertex markers
+    ctx.fillStyle = "#4fc1ff";
+    for (const [x, y] of currentPolygon) {
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+}
+
+function drawPolygon(pts, fill, stroke, w, closed=true) {
+  if (pts.length < 2) {
+    if (pts.length === 1) {
+      ctx.fillStyle = stroke;
+      ctx.beginPath(); ctx.arc(pts[0][0], pts[0][1], 5, 0, 2 * Math.PI); ctx.fill();
+    }
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  if (closed) ctx.closePath();
+  if (fill && closed) { ctx.fillStyle = fill; ctx.fill(); }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = w;
+  ctx.stroke();
+}
+
+// Map a click on the (possibly CSS-scaled) canvas back to image-pixel coords.
+function canvasCoords(ev) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width;
+  const sy = canvas.height / rect.height;
+  return [Math.round((ev.clientX - rect.left) * sx), Math.round((ev.clientY - rect.top) * sy)];
+}
+
+canvas.addEventListener("click", (ev) => {
+  const [x, y] = canvasCoords(ev);
+  currentPolygon.push([x, y]);
+  redraw();
+});
+canvas.addEventListener("dblclick", () => commitPolygon());
+
+$("undoVertex").addEventListener("click", () => {
+  currentPolygon.pop();
+  redraw();
+});
+
+function commitPolygon() {
+  if (currentPolygon.length < 3) {
+    setStatus(`a polygon needs at least 3 vertices (have ${currentPolygon.length})`, "err");
+    return;
+  }
+  const src = regionsConfig.sources[currentCam] ||= { frame_w: imageNativeW, frame_h: imageNativeH, regions: [] };
+  if (!src.regions) src.regions = [];
+  const id = `region_${src.regions.length + 1}`;
+  src.regions.push({ id, polygon: currentPolygon });
+  currentPolygon = [];
+  redraw();
+  renderRegionList();
+  setStatus(`committed ${id} (${src.regions.length} total on ${currentCam})`, "ok");
+}
+$("closePoly").addEventListener("click", commitPolygon);
+
+$("clearAll").addEventListener("click", () => {
+  if (!confirm(`Clear all regions on ${currentCam}? This only affects in-memory state until you Save.`)) return;
+  if (regionsConfig.sources[currentCam]) regionsConfig.sources[currentCam].regions = [];
+  currentPolygon = [];
+  redraw();
+  renderRegionList();
+  setStatus(`cleared all regions on ${currentCam} (unsaved)`, "ok");
+});
+
+function renderRegionList() {
+  const list = $("regionList");
+  const src = regionsConfig.sources[currentCam];
+  const regions = src ? (src.regions || []) : [];
+  $("regionCount").textContent = regions.length;
+  if (!regions.length) {
+    list.innerHTML = `<div class="region-row" style="opacity: 0.5;"><i>none yet — click the image to start drawing</i></div>`;
+    return;
+  }
+  list.innerHTML = regions.map((r, i) => `
+    <div class="region-row">
+      <span class="name">${r.id || "region_" + (i+1)}</span>
+      <span class="pill">${(r.polygon || []).length} vertices</span>
+      <button data-idx="${i}" class="rm" title="Delete this region">✗</button>
+    </div>
+  `).join("");
+  list.querySelectorAll(".rm").forEach(b => {
+    b.addEventListener("click", () => {
+      const i = +b.dataset.idx;
+      src.regions.splice(i, 1);
+      redraw();
+      renderRegionList();
+      setStatus(`removed region #${i+1} (unsaved)`, "ok");
+    });
+  });
+}
+
+$("save").addEventListener("click", async () => {
+  const headers = { "Content-Type": "application/json", "X-Requested-With": "wahoobay" };
+  setStatus("saving…");
+  try {
+    const r = await fetch("/api/admin/negative_regions", {
+      method: "POST", headers, body: JSON.stringify(regionsConfig),
+    });
+    if (r.status === 401) {
+      setStatus("save rejected: sign in as an admin", "err");
+      return;
+    }
+    if (!r.ok) {
+      const err = await r.text();
+      setStatus(`save failed: HTTP ${r.status} — ${err}`, "err");
+      return;
+    }
+    setStatus("saved. Restart the worker(s) for the new regions to take effect.", "ok");
+  } catch (e) {
+    setStatus(`save failed: ${e}`, "err");
+  }
+});
+
+$("camera").addEventListener("change", loadSnapshot);
+$("refreshSnap").addEventListener("click", loadSnapshot);
+
+(async () => {
+  await loadConfig();
+  await loadSnapshot();
+})();
+</script>
+</body>
+</html>

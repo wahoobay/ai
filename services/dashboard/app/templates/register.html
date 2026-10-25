@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-palette="blue" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Create an account — Wahoo Bay</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/theme.css?v={{ asset_version }}">
+  <script src="/static/theme.js?v={{ asset_version }}"></script>
+</head>
+<body class="auth-page">
+  <header class="auth-top">
+    <h1><a href="/">Wahoo Bay · Live Fish ID</a></h1>
+    <div id="theme-controls" class="theme-controls"></div>
+  </header>
+  <main class="auth-card">
+    <p class="auth-eyebrow">Members</p>
+    <h1>Create an account</h1>
+    <p class="auth-sub">Create an account. An administrator approves new accounts before they can see the site.</p>
+    {% if verify_token %}
+      <div id="verify-token" data-token="{{ verify_token }}">Confirming your email…</div>
+    {% elif not open %}
+      <p class="auth-sub">Registration is currently closed. Ask an administrator for an account.</p>
+    {% else %}
+      <form id="register-form" autocomplete="on">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required>
+        <label for="display_name">Display name</label>
+        <input id="display_name" name="display_name" autocomplete="name" required>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password"
+               autocomplete="new-password" required>
+        <label for="password2">Confirm password</label>
+        <input id="password2" name="password2" type="password"
+               autocomplete="new-password" required>
+        <p class="auth-hint">At least 12 characters. Length matters more than symbols.</p>
+        <p class="auth-error" id="register-error" hidden></p>
+        <button type="submit">Create account</button>
+      </form>
+      <p class="auth-done" id="register-done" hidden></p>
+    {% endif %}
+    <p class="auth-links"><a href="/login">Back to sign in</a></p>
+  </main>
+  <script src="/static/auth.js?v={{ asset_version }}"></script>
+</body>
+</html>

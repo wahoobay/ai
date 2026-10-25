@@ -1,0 +1,21 @@
+{
+  "_about": "Per-camera no-fish-zones. The detector reliably emits false-positive boxes on stationary reef geometry — notably the dark oval holes in the SEAHIVE artificial reef. A detection is dropped only when its bbox closely MATCHES the polygon — i.e., IoU(bbox, polygon-bounding-rect) >= min_iou (default 0.5). This drops the hole's own large false-positive without dropping a fish that swims through, since the fish's bbox is much smaller than the hole and so has tiny IoU even when fully overlapping.",
+  "_format": {
+    "polygon": "list of [x, y] integer image-pixel coordinates. Vertices joined in order; the last vertex connects back to the first.",
+    "min_iou": "optional per-region threshold (default 0.5). Raise toward 1.0 if you're worried about false positives on large fish near the hole; lower toward 0.3 if the detector's box on the hole is consistently off-center.",
+    "frame_w / frame_h": "image resolution the polygon was annotated against. If the camera resolution changes, the filter rescales polygons proportionally at load time."
+  },
+  "_admin_ui": "Draw + save regions interactively at /admin/regions.html on the dashboard.",
+  "sources": {
+    "seahivecam": {
+      "frame_w": 1280,
+      "frame_h": 720,
+      "regions": []
+    },
+    "pier_cam": {
+      "frame_w": 1280,
+      "frame_h": 720,
+      "regions": []
+    }
+  }
+}

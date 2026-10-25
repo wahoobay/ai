@@ -20,13 +20,19 @@ if [[ -f .env ]]; then
 fi
 
 export DATABASE_URL="${DATABASE_URL:-postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay}"
+export WAHOOBAY_API_URL="${WAHOOBAY_API_URL:-https://api.wahoobay.net}"
+export WAHOOBAY_API_ENABLED="${WAHOOBAY_API_ENABLED:-1}"
 export SENSESTREAM_BASE_URL="${SENSESTREAM_BASE_URL:-https://api.sensestream.org}"
 export SENSESTREAM_DEPLOYMENT_URI="${SENSESTREAM_DEPLOYMENT_URI:-wahoo_2}"
 export SENSESTREAM_POLL_INTERVAL_S="${SENSESTREAM_POLL_INTERVAL_S:-300}"
 export POLLER_HTTP_PORT="${POLLER_HTTP_PORT:-8082}"
 
-# SENSESTREAM_AUTH_TOKEN left unset on purpose: service runs in "stub" mode
-# (deployment probe only) until we have real credentials.
+# Data-source order (first available wins):
+#   1. Wahoo Bay public API (api.wahoobay.net) — no auth needed; default ON.
+#   2. Direct SenseStream observations (needs SENSESTREAM_AUTH_TOKEN).
+#   3. Synthetic stub generator (last-resort fallback).
+# SENSESTREAM_AUTH_TOKEN is intentionally left unset — the public Wahoo Bay API
+# already gives us live sonde + weather data without a credential.
 
 export PYTHONPATH="$(pwd)/services/sensestream_poller:${PYTHONPATH:-}"
 exec python -m app.main

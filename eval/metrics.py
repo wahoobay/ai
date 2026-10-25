@@ -4,6 +4,7 @@ Kept separate from services/ so the harness has no runtime dependency on the
 dashboard or worker modules — import the worker's fishial.FishialPipeline
 directly when running.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -33,7 +34,7 @@ def iou_xyxy(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def match_detections(
     preds: np.ndarray,
-    gts:   np.ndarray,
+    gts: np.ndarray,
     iou_threshold: float = 0.5,
 ) -> tuple[int, int, int]:
     """Greedy matching. Returns (tp, fp, fn)."""
@@ -65,8 +66,14 @@ def prf1(tp: int, fp: int, fn: int) -> dict:
     p = tp / (tp + fp) if (tp + fp) else 0.0
     r = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * p * r / (p + r) if (p + r) else 0.0
-    return {"tp": int(tp), "fp": int(fp), "fn": int(fn),
-            "precision": float(p), "recall": float(r), "f1": float(f1)}
+    return {
+        "tp": int(tp),
+        "fp": int(fp),
+        "fn": int(fn),
+        "precision": float(p),
+        "recall": float(r),
+        "f1": float(f1),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +106,7 @@ def top_k_accuracy(
 
 def per_class_prf1(
     pred_top1: Sequence[str],
-    truths:    Sequence[str],
+    truths: Sequence[str],
 ) -> list[dict]:
     classes = sorted(set(truths) | set(pred_top1))
     out: list[dict] = []
@@ -126,10 +133,10 @@ def latency_stats(timings_ms: Sequence[float]) -> dict:
     return {
         "n": int(a.size),
         "mean": float(a.mean()),
-        "p50":  float(np.percentile(a, 50)),
-        "p95":  float(np.percentile(a, 95)),
-        "p99":  float(np.percentile(a, 99)),
-        "max":  float(a.max()),
+        "p50": float(np.percentile(a, 50)),
+        "p95": float(np.percentile(a, 95)),
+        "p99": float(np.percentile(a, 99)),
+        "max": float(a.max()),
     }
 
 

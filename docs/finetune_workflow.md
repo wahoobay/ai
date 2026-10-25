@@ -1,249 +1,443 @@
-# Fine-tuning workflow
+# Model training & fine-tuning workflow
 
-Step-by-step playbook from a human reviewer's first correction to a
-fine-tuned classifier checkpoint going live.
+End-to-end playbook from the Wahoo Bay Google Sheet to a deployed v2
+classifier checkpoint, including how reviewer corrections fold back
+into the next iteration.
 
-## Why fine-tune
+The current production classifier is **DINOv2 ViT-S/14 trained from
+random init** on a 223-class dataset assembled from three sources
+(community Drive clips, iNaturalist photos, reviewer corrections — in
+that order of provenance maturity). The legacy Fishial ArcFace + KNN
+classifier remains bundled as the one-env-var rollback path.
 
-The Fishial.ai stock classifier (DINOv2 + ViT, 866 classes) is trained
-on a globally-mixed dataset with limited Atlantic-reef coverage. On
-Wahoo Bay species we measure mean top-1 cosine similarity in the
-0.30–0.50 range and confident misidentifications are common (a Sergeant
-Major sometimes labelled as a Mediterranean species, a Bermuda Chub as
-something Pacific). The pipeline itself is correct; the model just
-hasn't seen enough Wahoo Bay fish.
+---
 
-Fine-tuning on a Wahoo Bay-specific dataset of human-corrected crops
-fixes this. The pipeline already produces every component we need —
-the bottleneck is reviewer hours, not infrastructure.
-
-## The five-step loop
+## The big picture
 
 ```
-   ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-   │ 1. Reviewer     │    │ 2. Export       │    │ 3. Crop         │
-   │    corrects an  │───▶│    labeled_     │───▶│    bboxes into  │
-   │    event        │    │    corrections  │    │    per-species  │
-   │                 │    │    .csv         │    │    train/val/   │
-   │                 │    │                 │    │    test dirs    │
-   └─────────────────┘    └─────────────────┘    └─────────┬───────┘
-                                                            │
-   ┌─────────────────┐    ┌─────────────────┐    ┌──────────▼──────┐
-   │ 5. Switch       │    │ 4. Validate     │    │    Train        │
-   │    worker to    │◀───│    against      │◀───│    classifier   │
-   │    new          │    │    held-out     │    │    head         │
-   │    checkpoint   │    │    eval clips   │    │                 │
-   └─────────────────┘    └─────────────────┘    └─────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ DATASET ASSEMBLY (scripts/)                                        │
+│                                                                    │
+│   species.xlsx ────────────────────────────────────────┐           │
+│   (Wahoo Bay sheet,                                    │           │
+│    auto-refreshed                                      ▼           │
+│    by sheet poller)             build_species_manifest.py          │
+│                                       │                            │
+│                                       ▼                            │
+│                              species_manifest.json                 │
+│                                       │                            │
+│             ┌─────────────────────────┼──────────────────────┐     │
+│             ▼                         ▼                      ▼     │
+│   download_species_clips.py   enrich_taxonomy_from_worms.py        │
+│       (Drive clips)                  │                             │
+│             │                        ▼                             │
+│             ▼                  taxonomy.csv                        │
+│   community_clips/*.mp4                                            │
+│             │                                                      │
+│             │     download_inat_photos.py                          │
+│             │       (iNat permissively-licensed photos)            │
+│             │                  │                                   │
+│             │                  ▼                                   │
+│             │            inat_photos/*.jpg                         │
+│             │            inat_manifest.json                        │
+│             ▼                  │                                   │
+│   build_finetune_dataset_from_clips.py ◀────────────────────┘      │
+│       (YOLO-crop each clip + each photo → per-species dirs)        │
+│             │                                                      │
+│             ▼                                                      │
+│   data/fine_tune/{train,val,test}/<species>/<crop>.jpg             │
+│             │                                                      │
+└─────────────┼──────────────────────────────────────────────────────┘
+              │
+              ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ TRAINING (scripts/train_baseline.py)                              │
+│                                                                    │
+│   • DINOv2 ViT-S/14 from random init                               │
+│   • 3 split modes: stratified / temporal_within_source / by_source │
+│   • bf16, channels-last, mixup, RandAugment, drop_path             │
+│                                                                    │
+│             ▼                                                      │
+│   data/baseline_runs/<run_id>/                                     │
+│       checkpoint_best.pt                                           │
+│       classes.json                                                 │
+│       config.json                                                  │
+│       metrics.json                                                 │
+└────────────────────────┬───────────────────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ DEPLOYMENT                                                         │
+│   cp data/baseline_runs/<best>/{checkpoint_best.pt,classes.json,*} │
+│      data/models/classifier_v2/                                    │
+│   restart workers — v2 picks up the new files at boot              │
+└────────────────────────┬───────────────────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ REVIEWER FEEDBACK LOOP                                             │
+│                                                                    │
+│   detection_events (new model)                                     │
+│        │                                                           │
+│        ▼                                                           │
+│   reviewer corrections via the dashboard                           │
+│        │                                                           │
+│        ▼                                                           │
+│   detection_corrections rows accumulate                            │
+│        │                                                           │
+│        ▼                                                           │
+│   build_finetuning_dataset.py reads labeled_corrections.csv        │
+│        │                                                           │
+│        ▼                                                           │
+│   next training run: same recipe, more data, better accuracy       │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-Steps 1–3 are routine and repeatable. Step 4 needs the eval harness
-to be populated with labelled clips first. Step 5 is a config flip on
-the worker.
+---
 
-## Step 1 — Reviewers correct events
+## Where data comes from
 
-The dashboard's "Recent events" panel has a `correct` button on each
-event row. Click → an inline form opens with:
+Three streams contribute crops to the training set, with increasingly
+authoritative provenance:
 
-- **Species name** field (free-text Latin binomial).
-- **Confidence**: certain / probable / uncertain.
-- **Not a fish** checkbox — for false-positive detections (e.g. the
-  detector found a piece of biofouling).
-- **Notes** (free text).
+### 1. Community Drive clips (the foundation)
 
-The reviewer's email is captured once (in localStorage) and tagged on
-every correction they submit. Submission requires a write token (see
-`docs/operations.md` for where the token lives) so anonymous viewers
-can't pollute the dataset.
+The "Species Log" tab of `assets/species.xlsx` lists every species the
+Wahoo Bay team has identified, with hyperlinks to Google Drive videos
+or stills. As of last refresh: ~302 rows / ~235 unique binomials, of
+which ~140 records have Drive links (~133 unique species with at least
+one clip).
 
-Each correction writes one row to `detection_corrections` linked to
-the original `event_id`. From there it's joined to:
+These clips are filmed by Wahoo Bay program participants under a
+program-internal use grant — they stay private, but we use them as
+training inputs.
 
-- The event's `bbox` and `frame_id`
-- The saved-frame `image_path` (if the frame was saved to disk)
-- The model that produced the original prediction (provenance columns)
+### 2. iNaturalist photos (the supplement)
 
-That join is what the labeled-corrections export consumes.
+iNat has photographs of most of the species we care about with
+explicit Creative Commons licences. We harvest permissively-licensed
+photos to thicken the long tail (species with few or zero Drive
+clips).
 
-## Step 2 — Export labeled corrections
+Licence filter: `cc0`, `cc-by`, `cc-by-nc`, `cc-by-sa`, `cc-by-nc-sa`,
+`cc-by-nd`, `cc-by-nc-nd` — anything except All Rights Reserved. The
+`-nc` and `-nd` clauses are the relevant ones for downstream
+constraints; see [`assets/LICENSES_AND_CREDITS.md`](../assets/LICENSES_AND_CREDITS.md).
+
+### 3. Reviewer corrections (the feedback)
+
+Once v2 is in production, every reviewer correction becomes a new
+training example for the next iteration. The crop is taken from the
+saved frame's bbox; the label is the reviewer's `corrected_name`.
+"Not a fish" corrections become hard negatives for future detector
+retraining.
+
+---
+
+## Phase A: assembling the dataset (one-time per training round)
+
+Each script below is idempotent — re-running picks up where it left
+off without re-downloading existing files. Run them in order; each
+takes 5-60 minutes depending on which species are new.
+
+### A1. Parse the spreadsheet
+
+```bash
+python scripts/build_species_manifest.py
+# → assets/species_manifest.json + assets/species_manifest.csv
+```
+
+Reads `assets/species.xlsx` (which is refreshed daily by the
+dashboard's sheet poller). For each row:
+
+- Parses the "Scientific Name" cell into `genus` + `species`.
+- Pulls the `family` from its own column.
+- Walks every cell looking for `=HYPERLINK(...)` formulas pointing at
+  Google Drive (`/file/d/{id}/...`) and extracts the 33-char Drive
+  file IDs.
+- Emits `display_label` (plain) and `display_label_html` (italicised
+  parenthetical) — e.g. *Blue Angelfish (H. bermudensis)*.
+
+The script does NOT download anything — it's purely a parsing pass.
+
+### A2. Download the Drive clips
+
+```bash
+python scripts/download_species_clips.py
+# → assets/community_clips/<species>/<file>.mp4 (or .jpg, .png, ...)
+```
+
+Anonymously downloads each Drive file ID from the manifest. Handles
+Drive's "virus scan" interstitial that fires for files >100 MB or
+video files: parses the hidden form (`id`, `export`, `confirm=t`,
+`uuid`) and POSTs to `drive.usercontent.google.com/download` to get
+the actual bytes. Sniffs MIME on the response to pick the right
+extension.
+
+Throttle: 1 request/sec by default. Resumes on partial downloads.
+
+### A3. Harvest iNaturalist photos
+
+```bash
+python scripts/download_inat_photos.py
+# → assets/inat_photos/<binomial>/<photo_id>.jpg
+# → assets/inat_manifest.json (per-photo attribution + licence)
+```
+
+For each binomial in `species_manifest.json`, queries
+`https://api.inaturalist.org/v1/observations` with:
+
+- `photo_license=cc0,cc-by,cc-by-nc,cc-by-sa,cc-by-nc-sa,cc-by-nd,cc-by-nc-nd`
+- Up to N photos per species (default 30; raise for thin classes).
+- Photo URL size swapped from `square` to `large`.
+
+Rate-limited to 60 req/min per iNat's published guideline. Manifest
+records `observer`, `license`, `attribution`, `observed_on`,
+`original_url`, `local_path` per photo so the per-photo licence is
+attached to each training example.
+
+### A4. Enrich with WoRMS taxonomy
+
+```bash
+python scripts/enrich_taxonomy_from_worms.py
+# → assets/taxonomy.csv
+```
+
+Batches every distinct name from the Species Log and the classifier's
+class list — misspellings and placeholders included — through the World
+Register of Marine Species `/AphiaRecordsByMatchNames` endpoint (50 per
+batch, `marine_only=false`). Emits one row per raw name, keyed by
+`raw_name`, with columns
+`raw_name, aphia_id, accepted_name, authority, rank, match_type, status,
+species, genus, family, order, class, phylum, kingdom, lowest`. When
+WoRMS only resolves to a coarser rank (genus, family, or order), the
+lowest known rank is repeated down through the species column so every
+row is complete; names WoRMS could not resolve, matched only fuzzily,
+or matched only to a genus also land in
+`assets/taxonomy_unresolved.txt` for a human to fix.
+
+This is the source of truth for any future **taxonomy-aware loss**
+(penalize confusions across distant ranks more than nearby ones — not
+yet implemented in train_baseline.py).
+
+### A5. YOLO-crop everything into per-species directories
+
+```bash
+python scripts/build_finetune_dataset_from_clips.py
+# → data/fine_tune/{train,val,test}/<species_slug>/<crop>.jpg
+```
+
+The core dataset-builder. For every source (Drive clip OR iNat photo):
+
+- **Image source**: single YOLO inference, write each detection's bbox
+  crop as a JPEG.
+- **Video source**: sample at 2 Hz, run YOLO on each sampled frame,
+  write each detection's crop. Cap 120 crops per clip so a 10-minute
+  video doesn't dominate a class.
+
+Each crop is tagged with `(species, source_kind, source_id,
+frame_idx)` in a sidecar JSON so we can group-by source at split time
+and avoid the "same fish in train and val" trap.
+
+The detector is the same YOLO v26 the production worker uses — so the
+training distribution matches inference exactly.
+
+### A6. (Optional) layer in reviewer corrections
+
+Once reviewers have submitted corrections against v2's outputs:
 
 ```bash
 curl -s "http://127.0.0.1:18080/api/export/labeled_corrections.csv" \
      -o labeled_corrections.csv
-```
 
-This is one of 13 export endpoints documented in
-`docs/data_pipeline.md`. The CSV columns are:
-
-| Column | What |
-|---|---|
-| `correction_id`, `created_at`, `reviewer`, `confidence`, `notes` | Who said what when |
-| `corrected_name`, `corrected_species_id`, `not_a_fish` | The human label |
-| `event_ts`, `source_name`, `frame_id`, `track_id`, `bbox`, `det_conf` | Original detection context |
-| `original_name`, `original_species_id`, `original_accuracy`, `original_topk` | What the model said |
-| `frame_image_path`, `frame_coco_path` | Where the saved JPG and COCO sidecar live on disk |
-| `model_version`, `detector_sha256`, `classifier_sha256`, `config_hash`, `pipeline_git_sha` | Full provenance of the original prediction |
-
-If you don't have public access to the dashboard, query the DB
-directly:
-
-```bash
-psql -h 127.0.0.1 -U wahoobay -d wahoobay \
-  -c "\copy (SELECT … FROM detection_corrections JOIN detection_events …) TO 'labeled_corrections.csv' CSV HEADER"
-```
-
-The exact SELECT is in `services/dashboard/app/exports.py`,
-function `export_labeled_corrections`.
-
-## Step 3 — Build the training dataset
-
-```bash
 python scripts/build_finetuning_dataset.py \
   --corrections labeled_corrections.csv \
-  --frames-root /raid/scratch/dzimmerman2021/wahoobay/frames \
-  --out finetune_v1 \
-  --min-confidence probable \
-  --include-not-a-fish \
-  --dedupe-tracks \
-  --max-per-species 200
+  --frames-root frames/ \
+  --out data/fine_tune_v2/ \
+  --merge-into data/fine_tune/   # layer corrections on top of the auto-crops
 ```
 
-The script:
+The script reads the CSV, filters by reviewer confidence, optionally
+drops not-a-fish corrections (or routes them to `negatives/` for
+future detector fine-tuning), and writes the corrected-label crops
+into the per-species directories alongside the auto-generated ones.
 
-1. Reads the CSV, filters by reviewer confidence, optionally drops
-   not-a-fish corrections (or sends them to `negatives/`), and
-   optionally dedupes by `track_id` (so one fish lingering for 100
-   frames doesn't dominate).
-2. Resolves `frame_image_path` (or derives the JPG sibling of
-   `frame_coco_path` if the path column is empty).
-3. Crops each correction's bbox with a 5 % padding margin.
-4. Writes to `out/<split>/<species_slug>/<corrXXXX_eventYYYY>.jpg`,
-   split deterministically (default 80/10/10) by RNG seed.
-5. Writes a `manifest.json` capturing every parameter + the corrections
-   CSV's MD5 (so any future re-run is reproducible).
-6. Writes a `README.md` next to the data so a downstream user can read
-   what's in the directory without consulting our docs.
+---
 
-Output structure:
+## Phase B: training (one run = one v2 checkpoint)
 
-```
-finetune_v1/
-├── train/
-│   ├── Abudefduf_saxatilis/
-│   │   ├── corr0042_event12345.jpg
-│   │   └── ...
-│   ├── Lutjanus_griseus/
-│   └── ...
-├── val/
-│   └── (same shape)
-├── test/
-│   └── (same shape)
-├── negatives/                 # if --include-not-a-fish
-│   └── corrXXXX_eventYYYY.jpg
-├── manifest.json
-└── README.md
+```bash
+python scripts/train_baseline.py \
+  --data-root data/fine_tune \
+  --run-id baseline_$(date +%Y%m%dT%H%M%S) \
+  --arch vit_small_patch14_dinov2 \
+  --epochs 60 \
+  --batch-size 32 \
+  --img-size 224 \
+  --split-mode temporal_within_source \
+  --device cuda:0
 ```
 
-### Filter knobs
+Output:
 
-| Flag | Default | When to use |
+```
+data/baseline_runs/baseline_20260518T...
+├── checkpoint_best.pt        # best macro-F1 epoch (loaded by classifier_v2.py)
+├── checkpoint_last.pt        # final epoch (for sanity / resume)
+├── classes.json              # ["Abudefduf_saxatilis", "Acanthurus_chirurgus", ...]
+├── config.json               # arch, hyperparams, split mode, seed
+├── metrics.json              # best macro_f1, top1, top5, weighted_f1
+├── train_history.json        # per-epoch loss + metrics
+└── classification_report.txt # sklearn-style per-class P/R/F1
+```
+
+### Training recipe
+
+- **Architecture**: timm `vit_small_patch14_dinov2` (22M params,
+  patch=14, embed_dim=384, depth=12). Random init — **no DINOv2
+  pretrained weights**. This matters for the licence picture: the
+  trained checkpoint inherits no constraints from Meta's DINOv2
+  release.
+- **Image size**: 224×224 (native DINOv2 is 518×518; 224 is faster and
+  standard ViT-S).
+- **Optimiser**: AdamW with cosine schedule, 5-epoch warmup, base lr 3e-4,
+  weight decay 0.05.
+- **Augmentation**: RandomResizedCrop (0.7-1.0 scale), HFlip,
+  RandAugment (2 ops, magnitude 9), ColorJitter (0.2/0.2/0.2/0.05),
+  RandomErasing (p=0.1).
+- **Regularisation**: label smoothing 0.1, mixup α=0.2, stochastic
+  depth (drop_path) 0.1.
+- **AMP**: bf16 autocast (preferred on H100/H200 — same throughput as
+  fp16 but the dynamic range of fp32).
+- **Sampler**: WeightedRandomSampler with weight 1/sqrt(class_count)
+  to prevent long-tail starvation when one species dominates.
+
+### Three split modes — pick the right one for the right question
+
+The script's `--split-mode` flag is the most consequential knob.
+
+| Mode | What it does | When it's the right answer |
 |---|---|---|
-| `--min-confidence` | `probable` | Bump to `certain` for the most rigorous training set; drop to `uncertain` to maximise data when starved. |
-| `--include-not-a-fish` | off | Include for joint detector + classifier fine-tuning, or to train a "not a fish" rejection head. |
-| `--dedupe-tracks` | off | On by default for any *classification* training split — one fish lingering should not be a hundred near-duplicate examples. |
-| `--max-per-species N` | unset | Class-balance the dataset. Important if reviewers preferentially correct one species. |
-| `--train-frac` / `--val-frac` | 0.8 / 0.1 | Default 80/10/10 split (test = remainder). |
-| `--seed` | 42 | Deterministic split; record in the manifest. |
-| `--pad-pct` | 0.05 | 5 % margin around the bbox for classifier context. |
+| `stratified` | Random split within each species across all sources. Same clip's frames can land in both train and val. | Optimistic upper bound — gives you the model's ceiling under the assumption that train + val come from the same distribution. Most ML-paper benchmarks default to this. |
+| `temporal_within_source` | Within each source clip, the earliest 80 % of frames go to train, latest 20 % to val. Different frames of the same clip end up on different splits. | **The closest stand-in for "what does this model do on tomorrow's footage from the same camera?"** Recommended for the headline metric you quote externally. |
+| `by_source` | Whole sources land entirely in train or val. A clip never appears in both. | The cruel honest test: brand-new clips, no overlap. Reveals whether the model actually generalises across recording sessions vs. memorises lighting / context. |
 
-### Sanity check
+Run all three; report all three. Last full sweep on the iNat-supplemented
+dataset (May-17 checkpoint):
 
-The script prints a summary at the end and explicitly flags any species
-with **fewer than 10 crops** as too thin for reliable fine-tuning, with
-a per-species "needs more reviewer corrections" list. Use this to
-prioritise reviewer attention.
+| split | best ep | macro F1 | top-1 | top-5 |
+|---|---|---|---|---|
+| stratified | 51 | 0.349 | 0.516 | 0.673 |
+| temporal_within_source | 40 | **0.495** | **0.811** | 0.932 |
+| by_source | 41 | 0.083 | 0.070 | 0.206 |
 
-## Step 4 — Validate against held-out clips
+The by-source number is the floor; the temporal-within-source number
+is the one we quote externally.
 
-Once a fine-tuned checkpoint exists, run the eval harness:
+### Hardware
+
+The current run takes about 7 minutes per split mode on a single
+H200 (60 epochs, ~13k images, batch 32). All three sweeps in ~25
+minutes. Smaller GPUs are fine — DINOv2 ViT-S/14 fits comfortably in
+8 GB.
+
+---
+
+## Phase C: deployment (one-flag flip)
+
+Drop the new artifacts into the `classifier_v2/` directory the worker
+reads, then restart the workers.
+
+```bash
+# 1. Stage the new checkpoint
+cp data/baseline_runs/<best_run>/checkpoint_best.pt  data/models/classifier_v2/
+cp data/baseline_runs/<best_run>/classes.json         data/models/classifier_v2/
+cp data/baseline_runs/<best_run>/config.json          data/models/classifier_v2/
+cp data/baseline_runs/<best_run>/metrics.json         data/models/classifier_v2/
+
+# 2. Restart the workers (see docs/operations.md "Restarting one service")
+for port in 8081 8083; do
+  ss -ltnp 2>/dev/null | grep ":$port" | grep -oP 'pid=\K\d+' | xargs -r kill -TERM
+done
+sleep 5
+nohup ./scripts/dev/run_worker.sh      > logs/app/worker.log      2>&1 &
+nohup ./scripts/dev/run_worker_pier.sh > logs/app/worker_pier.log 2>&1 &
+
+# 3. Verify the new classifier_sha256 is live
+sleep 30  # let torch.compile warmup finish
+curl -s http://127.0.0.1:18080/api/provenance/current | python3 -m json.tool
+```
+
+The new `classifier_sha256` should appear on every detection_events
+row written from then on. Old rows keep their old hash, so SQL filters
+can easily separate pre-/post-cutover data.
+
+### Rollback
+
+If the new checkpoint underperforms in live use:
+
+```bash
+# Option 1: revert just the classifier_v2 files from git or backup
+# Option 2: roll all the way back to Fishial
+echo "CLASSIFIER_BACKEND=fishial" >> .env  # (or edit the existing line)
+# Restart workers as above
+```
+
+The legacy Fishial bundle stays in `data/models/classifier_v0_10_2/`
+permanently — it's the "known good" fallback.
+
+---
+
+## Phase D: validation (the eval harness)
 
 ```bash
 make eval
+# → eval/reports/YYYY-MM-DDTHH-MM-SSZ/{metrics.json,report.md,provenance.json}
 ```
 
-This walks `eval/manifest.json`, replays each clip through the current
-production checkpoints, and writes a dated report to
-`eval/reports/YYYY-MM-DDTHH-MM-SSZ/`:
-
-- `metrics.json` — raw numbers (detector P/R/F1, classifier top-1/3/5,
-  per-class P/R/F1, latency p50/p95/p99).
-- `report.md` — human-readable summary.
-- `provenance.json` — full fingerprint so the run is reproducible.
-
-Each scalar is reported with a 95 % bootstrap CI (B=2000).
+Replays `eval/manifest.json` clips through the current production
+checkpoints. Each scalar is reported with a 95 % bootstrap CI
+(B=2000).
 
 **The eval harness needs a labelled clip set to be useful.** As of
-documentation date the manifest is empty; the `eval/` directory has a
-README explaining what to put there.
-
-A reasonable first eval set:
-
-1. Pick 10–30 short clips from `frames/` covering a range of species
-   and lighting conditions.
-2. Hand-label each with COCO-format ground truth (or use the
-   labeled-corrections export as a starting point and fill in the
-   gaps).
-3. Add entries to `eval/manifest.json`.
-4. `make eval` — the metrics will be honest.
+documentation date the manifest is empty; populating it is on the
+roadmap.
 
 For comparing checkpoints: store the eval reports in git so the
 history is the regression-test record.
 
-## Step 5 — Deploy a new checkpoint
+A reasonable first eval set:
 
-When the fine-tuned classifier passes eval (whatever "passes" means in
-the project's policy — typically: per-class precision ≥ X for the top
-N most-common species), put it into production:
+1. Pick 10-30 short clips from `frames/` covering a range of species
+   and lighting conditions.
+2. Hand-label each with COCO-format ground truth (the
+   labeled-corrections export is a starting point).
+3. Add entries to `eval/manifest.json`.
+4. `make eval` — the metrics will be honest.
 
-1. Copy the new TorchScript bundle to
-   `data/models/classifier_v0_<NN>/model.pt`.
-2. Update the worker config (env var `CLASSIFIER_PATH`) to point at it.
-3. Restart the worker.
-4. The provenance columns on every event written from that point will
-   record the new SHA256, so it's easy to A/B compare event quality
-   pre- and post-deployment via SQL:
+---
 
-```sql
-SELECT classifier_sha256, count(*), avg(best_accuracy)::real
-  FROM detection_events
- WHERE ts > NOW() - INTERVAL '7 days'
- GROUP BY 1
- ORDER BY count DESC;
-```
+## How much reviewer data is enough
 
-If the new checkpoint underperforms, switch the env back to the
-previous SHA and restart — instant rollback.
+Rule of thumb for fine-tuning a vision model on a 223-class problem:
 
-## How much data is enough
+| Per species | Effect |
+|---|---|
+| **< 10 examples** | Useless for fine-tuning that species. The classifier won't learn the new label well. |
+| **10-50 examples** | Noticeable improvement on common-confusion neighbours. Risk of overfitting on small classes. |
+| **50-200 examples** | Solid territory. Most reviewer-feedback rounds should target this band. |
+| **> 200 examples** | Diminishing returns; reallocate reviewer hours to thinner species. |
 
-Rule of thumb for fine-tuning a vision foundation model with strong
-priors (DINOv2 has them):
+For ~50 actively-confused species, that's **~5,000 corrections total**
+to make a substantial improvement. At ~30 corrections per reviewer-hour,
+that's ~150 hours of reviewer time. Spread across several volunteers
+over a season, achievable.
 
-- **<10 examples per species**: too thin to fine-tune reliably; useful
-  only for prompt tuning or a few-shot k-NN over the existing
-  embeddings.
-- **10–100 examples per species**: noticeable improvement on the
-  fine-tuned species; risk of catastrophic forgetting on others
-  without LoRA / careful learning-rate scheduling.
-- **100–500 examples per species**: solid full fine-tune territory.
-- **>500 examples per species**: diminishing returns; spend the
-  reviewer hours on rare species instead.
+The dashboard's correction-stats panel surfaces how many corrections
+have been collected per reviewer + per species, so it's easy to spot
+which species still need attention.
 
-For ~20 common Wahoo Bay species, the realistic target is
-**~2,000–10,000 corrections total** — depending on how rigorous you
-want the model to be. At a typical curation rate of ~30 corrections per
-reviewer-hour, that's 60–300 hours of reviewer time. Not free, but
-absolutely feasible with a few volunteers over a season.
+---
 
 ## Inter-rater reliability
 
@@ -254,8 +448,8 @@ clean protocol:
 1. After every M corrections, sample ~10 % of recent events into a
    "blind" pool — events that have been corrected by exactly one
    reviewer.
-2. A second reviewer corrects those independently (no view of the first
-   correction).
+2. A second reviewer corrects those independently (no view of the
+   first correction).
 3. Compute Cohen's κ (binary "fish vs not") and Krippendorff's α
    (multi-class species).
 4. κ ≥ 0.75 / α ≥ 0.7 is the working threshold for "trustworthy" in
@@ -265,42 +459,90 @@ The dashboard does not yet enforce or track this — it's a process
 decision the reviewer team needs to make. Documented as deferred work
 in `PLAN.md`.
 
+---
+
 ## Common pitfalls
+
+### "The from-scratch baseline numbers look low"
+
+The from-scratch ViT-S/14 has no foundation-model priors — every
+parameter learns from our ~13k crops. For a 223-class problem, that's
+~58 examples per class on average (long-tailed: some have thousands,
+some have ten). The temporal-within-source 0.81 top-1 is actually
+surprisingly good given that math.
+
+If you want better numbers, the most accessible move is to **start
+from DINOv2 pretrained weights** instead of random init — pass
+`--pretrained` to `train_baseline.py` (and adjust the licence picture
+accordingly: the resulting checkpoint inherits Meta's licence terms).
 
 ### "Reviewer A and B label things differently"
 
 Run inter-rater reliability (above). If κ is low for specific species
-pairs (e.g., Acanthurus chirurgus vs Acanthurus coeruleus), that's
+pairs (e.g., *Acanthurus chirurgus* vs *Acanthurus coeruleus*), that's
 informative — those species genuinely look similar and need higher-
 resolution training data or a feature-level intervention, not more
-labels.
+labels. A taxonomy-aware loss using `assets/taxonomy.csv` would let the
+model express "I know it's an Acanthurus but I'm not sure which" with
+less penalty than getting the family wrong.
 
 ### "All my crops are tiny"
 
 The detector returns bbox in source-image coordinates. Some saved
-frames are 1920×1080; some are 1280×720 (after MJPEG resolution change);
-old historical events may differ. The crop script preserves whatever
-size the bbox encloses — it does NOT resize. If your training pipeline
-needs uniform input, resize / pad as a post-process before training,
-not in `build_finetuning_dataset.py`.
+frames are 1920×1080; some are 1280×720 (after MJPEG resolution
+change); old historical events may differ. The crop scripts preserve
+whatever size the bbox encloses — they do NOT resize. The training
+pipeline's `ImageFolder` + `transforms.RandomResizedCrop(224)`
+resizes at load time. If you're inspecting raw crop dirs, expect
+heterogeneous sizes.
 
 ### "Same fish, hundreds of crops"
 
-Use `--dedupe-tracks`. Or filter on `track_id` to keep only the
-median-confidence frame per track if you want exactly-one-per-fish.
+`build_finetune_dataset_from_clips.py` caps per-video crops at 120,
+which mostly handles this for video sources. For reviewer corrections
+(`build_finetuning_dataset.py`) pass `--dedupe-tracks` — one fish
+lingering for 100 frames should not be 100 near-duplicate examples.
+Use `track_id` as the dedup key.
 
 ### "Some species have 200, others have 3"
 
-Use `--max-per-species` to cap the over-represented species. The
-under-represented species still need more corrections — there's no
-shortcut around it. The script's "thin species" warning lists exactly
-which.
+The `WeightedRandomSampler` in `train_baseline.py` already
+class-balances on the fly during training (weight ∝ 1/√count). The
+thin species still need more data — there's no shortcut around it.
+The script logs a warning naming species with <10 examples.
 
 ### "I want detector fine-tuning, not classifier"
 
-The current script outputs classification-style data (per-species
-crops). For YOLO/COCO format with full bbox annotations, the input is
-the same `labeled_corrections.csv` but the output structure is
-different (images/ + labels/ with YOLO-format text files, or full
-COCO JSON). Adding a `--format coco` flag to the script is a 1-day
-extension when needed.
+The current workflow trains only the classifier head — the detector
+(YOLO v26) is unchanged. To fine-tune the detector with reviewer
+"Not a fish" corrections as hard negatives, you'd need to:
+
+1. Export not-a-fish corrections as YOLO-format empty-label images
+   centred on the rejected bbox.
+2. Mix into a YOLO fine-tune dataset alongside positive-labeled
+   reviewer corrections (re-formatted from per-species classifier
+   crops to YOLO bbox-format).
+3. Run `ultralytics` fine-tune from the existing v26 weights.
+
+A `--format yolo` flag for `build_finetuning_dataset.py` is a
+1-day extension when reviewer not-a-fish data has accumulated to a
+useful volume. Not yet implemented.
+
+---
+
+## Reproducibility checklist
+
+For any training run that gets published or compared against in the
+project, capture:
+
+1. **Dataset manifest hash** — `sha256sum data/fine_tune/manifest.json`
+2. **Training config** — `data/baseline_runs/<run>/config.json`
+3. **Random seed** — recorded in config.json (default 42)
+4. **Git SHA** — `git rev-parse HEAD` at training time, capture in the
+   run dir
+5. **Eval report SHA** — `data/baseline_runs/<run>/metrics.json`
+6. **Provenance fingerprint at deploy time** — `/api/provenance/current`
+   when the worker has loaded the new checkpoint
+
+Stash all six in a commit message or a dated decision log so the run
+can be regenerated end-to-end.

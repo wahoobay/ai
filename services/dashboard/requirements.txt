@@ -20,3 +20,4 @@ numpy==2.4.3
 scipy==1.17.1
 pyarrow==24.0.0
 pandas==3.0.2
+pillow==12.1.1

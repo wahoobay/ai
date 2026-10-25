@@ -29,6 +29,7 @@ Provenance: ``manifest.json`` records the corrections CSV's MD5,
 filtering parameters, RNG seed, and per-species counts so any model
 trained from this dataset can be reproduced from the same corrections.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -107,9 +108,9 @@ def _frame_from_coco(coco_path: str) -> str | None:
     if not coco_path:
         return None
     if coco_path.endswith(".coco.json"):
-        return coco_path[:-len(".coco.json")] + ".jpg"
+        return coco_path[: -len(".coco.json")] + ".jpg"
     if coco_path.endswith(".json"):
-        return coco_path[:-len(".json")] + ".jpg"
+        return coco_path[: -len(".json")] + ".jpg"
     return None
 
 
@@ -199,31 +200,48 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--corrections", required=True,
-                    help="Path to labeled_corrections.csv")
-    ap.add_argument("--frames-root", default=None,
-                    help="Directory where frame_image_path values resolve from "
-                         "(needed if running on a different host than the worker; "
-                         "absolute paths are tried first)")
-    ap.add_argument("--out", required=True,
-                    help="Output dataset directory")
-    ap.add_argument("--min-confidence",
-                    choices=["uncertain", "probable", "certain"],
-                    default="probable",
-                    help="Drop reviewer corrections below this confidence "
-                         "(default: probable, i.e. include probable + certain)")
-    ap.add_argument("--include-not-a-fish", action="store_true",
-                    help="Also export false-positive crops to negatives/")
-    ap.add_argument("--dedupe-tracks", action="store_true",
-                    help="Keep only one correction per track_id (avoid overfit "
-                         "on a single fish that lingered in frame)")
-    ap.add_argument("--max-per-species", type=int, default=None,
-                    help="Cap N crops per species (over-sampling guard)")
+    ap.add_argument("--corrections", required=True, help="Path to labeled_corrections.csv")
+    ap.add_argument(
+        "--frames-root",
+        default=None,
+        help="Directory where frame_image_path values resolve from "
+        "(needed if running on a different host than the worker; "
+        "absolute paths are tried first)",
+    )
+    ap.add_argument("--out", required=True, help="Output dataset directory")
+    ap.add_argument(
+        "--min-confidence",
+        choices=["uncertain", "probable", "certain"],
+        default="probable",
+        help="Drop reviewer corrections below this confidence "
+        "(default: probable, i.e. include probable + certain)",
+    )
+    ap.add_argument(
+        "--include-not-a-fish",
+        action="store_true",
+        help="Also export false-positive crops to negatives/",
+    )
+    ap.add_argument(
+        "--dedupe-tracks",
+        action="store_true",
+        help="Keep only one correction per track_id (avoid overfit "
+        "on a single fish that lingered in frame)",
+    )
+    ap.add_argument(
+        "--max-per-species",
+        type=int,
+        default=None,
+        help="Cap N crops per species (over-sampling guard)",
+    )
     ap.add_argument("--train-frac", type=float, default=0.8)
-    ap.add_argument("--val-frac",   type=float, default=0.1)
-    ap.add_argument("--seed",       type=int,   default=42)
-    ap.add_argument("--pad-pct",    type=float, default=0.05,
-                    help="Bbox padding as fraction of bbox size (default 0.05)")
+    ap.add_argument("--val-frac", type=float, default=0.1)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument(
+        "--pad-pct",
+        type=float,
+        default=0.05,
+        help="Bbox padding as fraction of bbox size (default 0.05)",
+    )
     args = ap.parse_args()
 
     csv_path = Path(args.corrections).resolve()
@@ -275,14 +293,16 @@ def main() -> int:
         if frame_path is None:
             skipped["frame_missing"] += 1
             continue
-        kept.append({
-            "row": r,
-            "bbox": bbox,
-            "frame_path": frame_path,
-            "not_a_fish": not_a_fish,
-            "species": species_name or "_NEGATIVE_",
-            "track_id": (r.get("track_id") or "").strip() or None,
-        })
+        kept.append(
+            {
+                "row": r,
+                "bbox": bbox,
+                "frame_path": frame_path,
+                "not_a_fish": not_a_fish,
+                "species": species_name or "_NEGATIVE_",
+                "track_id": (r.get("track_id") or "").strip() or None,
+            }
+        )
 
     if not kept:
         print(f"All {len(rows)} corrections filtered out:", file=sys.stderr)
@@ -325,12 +345,12 @@ def main() -> int:
         rng.shuffle(items)
         n = len(items)
         n_train = int(round(n * args.train_frac))
-        n_val   = int(round(n * args.val_frac))
+        n_val = int(round(n * args.val_frac))
         for it in items[:n_train]:
             splits["train"].append((sp, it))
-        for it in items[n_train:n_train + n_val]:
+        for it in items[n_train : n_train + n_val]:
             splits["val"].append((sp, it))
-        for it in items[n_train + n_val:]:
+        for it in items[n_train + n_val :]:
             splits["test"].append((sp, it))
 
     # Write crops
@@ -352,58 +372,62 @@ def main() -> int:
                 failed["bad_crop"] += 1
                 continue
             corr_id = (it["row"].get("correction_id") or "0").zfill(4)
-            event_id = (it["row"].get("event_id") or "0")
+            event_id = it["row"].get("event_id") or "0"
             fname = f"corr{corr_id}_event{event_id}.jpg"
             cv2.imwrite(str(target_dir / fname), crop, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             written[(split, sp)] += 1
 
     # Manifest
     n_species = len({sp for (_, sp) in written if sp != "_NEGATIVE_"})
-    species_counts: dict[str, dict[str, int]] = defaultdict(lambda: {"train": 0, "val": 0, "test": 0})
+    species_counts: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"train": 0, "val": 0, "test": 0}
+    )
     for (split, sp), n in written.items():
         species_counts[sp][split] = n
 
     manifest = {
-        "generated_at":          datetime.now(UTC).isoformat(),
-        "corrections_csv":       str(csv_path),
-        "corrections_csv_md5":   corrections_md5,
-        "frames_root":           str(frames_root) if frames_root else None,
-        "min_confidence":        args.min_confidence,
-        "include_not_a_fish":    args.include_not_a_fish,
-        "dedupe_tracks":         args.dedupe_tracks,
-        "max_per_species":       args.max_per_species,
-        "pad_pct":               args.pad_pct,
-        "train_frac":            args.train_frac,
-        "val_frac":              args.val_frac,
-        "seed":                  args.seed,
-        "n_corrections_input":   len(rows),
-        "n_kept":                len(kept),
-        "skipped_reasons":       dict(skipped),
-        "n_written":             sum(written.values()),
-        "n_failed":              dict(failed),
-        "n_species":             n_species,
-        "species_counts":        dict(species_counts),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "corrections_csv": str(csv_path),
+        "corrections_csv_md5": corrections_md5,
+        "frames_root": str(frames_root) if frames_root else None,
+        "min_confidence": args.min_confidence,
+        "include_not_a_fish": args.include_not_a_fish,
+        "dedupe_tracks": args.dedupe_tracks,
+        "max_per_species": args.max_per_species,
+        "pad_pct": args.pad_pct,
+        "train_frac": args.train_frac,
+        "val_frac": args.val_frac,
+        "seed": args.seed,
+        "n_corrections_input": len(rows),
+        "n_kept": len(kept),
+        "skipped_reasons": dict(skipped),
+        "n_written": sum(written.values()),
+        "n_failed": dict(failed),
+        "n_species": n_species,
+        "species_counts": dict(species_counts),
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
 
     # README
-    (out / "README.md").write_text(README_TEMPLATE.format(
-        generated_at=manifest["generated_at"],
-        corrections_csv=manifest["corrections_csv"],
-        corrections_csv_md5=corrections_md5,
-        min_confidence=args.min_confidence,
-        include_not_a_fish=args.include_not_a_fish,
-        dedupe_tracks=args.dedupe_tracks,
-        max_per_species=args.max_per_species,
-        train_frac=args.train_frac,
-        val_frac=args.val_frac,
-        seed=args.seed,
-        n_corrections_input=len(rows),
-        n_kept=len(kept),
-        n_written=sum(written.values()),
-        n_failed=sum(failed.values()),
-        n_species=n_species,
-    ))
+    (out / "README.md").write_text(
+        README_TEMPLATE.format(
+            generated_at=manifest["generated_at"],
+            corrections_csv=manifest["corrections_csv"],
+            corrections_csv_md5=corrections_md5,
+            min_confidence=args.min_confidence,
+            include_not_a_fish=args.include_not_a_fish,
+            dedupe_tracks=args.dedupe_tracks,
+            max_per_species=args.max_per_species,
+            train_frac=args.train_frac,
+            val_frac=args.val_frac,
+            seed=args.seed,
+            n_corrections_input=len(rows),
+            n_kept=len(kept),
+            n_written=sum(written.values()),
+            n_failed=sum(failed.values()),
+            n_species=n_species,
+        )
+    )
 
     # Summary
     print(f"=== fine-tuning dataset built at {out} ===")
@@ -413,7 +437,9 @@ def main() -> int:
     print(f"  crops written:          {sum(written.values()):>6}")
     print(f"  crops failed:           {sum(failed.values()):>6}  ({dict(failed)})")
     print(f"  positive species:       {n_species:>6}")
-    print(f"  splits  train/val/test: {len(splits['train']):>5}/{len(splits['val'])}/{len(splits['test'])}")
+    print(
+        f"  splits  train/val/test: {len(splits['train']):>5}/{len(splits['val'])}/{len(splits['test'])}"
+    )
     if skipped:
         print()
         print("  skipped reasons:")
@@ -428,15 +454,18 @@ def main() -> int:
         )
         for sp, n in sorted_species[:10]:
             counts = species_counts[sp]
-            print(f"    {n:>4}  {sp:40s}  train={counts['train']:>3} val={counts['val']:>3} test={counts['test']:>3}")
+            print(
+                f"    {n:>4}  {sp:40s}  train={counts['train']:>3} val={counts['val']:>3} test={counts['test']:>3}"
+            )
         if "_NEGATIVE_" in species_counts:
             n_neg = sum(species_counts["_NEGATIVE_"].values())
             print(f"    {n_neg:>4}  (false positives)")
 
     # Health check / advisory
     if n_species > 0:
-        thin = [sp for sp, c in species_counts.items()
-                if sp != "_NEGATIVE_" and sum(c.values()) < 10]
+        thin = [
+            sp for sp, c in species_counts.items() if sp != "_NEGATIVE_" and sum(c.values()) < 10
+        ]
         if thin:
             print()
             print(f"  ⚠  {len(thin)} species have <10 crops total — too few for")

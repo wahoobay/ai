@@ -1,0 +1,21 @@
+{
+  "run_id": "baseline2_temporal_within_source",
+  "arch": "vit_small_patch14_dinov2",
+  "img_size": 224,
+  "num_classes": 223,
+  "batch_size": 32,
+  "val_batch_size": 64,
+  "epochs": 60,
+  "warmup_epochs": 5,
+  "lr": 0.0003,
+  "weight_decay": 0.05,
+  "label_smoothing": 0.1,
+  "mixup_alpha": 0.2,
+  "drop_path": 0.1,
+  "seed": 42,
+  "val_split": 0.2,
+  "device": "cuda:0",
+  "amp_dtype": "bf16",
+  "num_workers": 4,
+  "split_mode": "temporal_within_source"
+}

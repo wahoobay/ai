@@ -15,6 +15,7 @@ Current rules:
 Rules are data-driven in SLO_RULES; adding a new one is one dataclass entry.
 Alerts auto-resolve (``resolved_at`` set) once the condition clears.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,13 +32,13 @@ from psycopg_pool import AsyncConnectionPool
 log = logging.getLogger("wahoobay.slo")
 
 
-RuleResult = tuple[bool, str, dict]           # (firing, message, details)
+RuleResult = tuple[bool, str, dict]  # (firing, message, details)
 
 
 @dataclass
 class SLORule:
     name: str
-    severity: str                             # info | warning | critical
+    severity: str  # info | warning | critical
     check: Callable[[SLOChecker], Awaitable[RuleResult]]
     description: str = ""
 
@@ -56,9 +57,11 @@ async def _check_pipeline_silence(c: SLOChecker) -> RuleResult:
         return (True, "no detection_events ever written", {"last_event_ts": None})
     age_s = (datetime.now(UTC) - last).total_seconds()
     if age_s > 300:
-        return (True,
-                f"no detections in {age_s/60:.1f} min (threshold 5 min)",
-                {"last_event_ts": last.isoformat(), "age_seconds": age_s})
+        return (
+            True,
+            f"no detections in {age_s/60:.1f} min (threshold 5 min)",
+            {"last_event_ts": last.isoformat(), "age_seconds": age_s},
+        )
     return (False, "ok", {"last_event_ts": last.isoformat(), "age_seconds": age_s})
 
 
@@ -71,8 +74,11 @@ async def _check_frame_stats_stalled(c: SLOChecker) -> RuleResult:
         return (False, "no frame_stats yet (waiting for worker)", {})
     age_s = (datetime.now(UTC) - last).total_seconds()
     if age_s > 300:
-        return (True, f"frame_stats sampler silent for {age_s/60:.1f} min",
-                {"last_ts": last.isoformat(), "age_seconds": age_s})
+        return (
+            True,
+            f"frame_stats sampler silent for {age_s/60:.1f} min",
+            {"last_ts": last.isoformat(), "age_seconds": age_s},
+        )
     return (False, "ok", {"age_seconds": age_s})
 
 
@@ -90,8 +96,11 @@ async def _check_inference_latency(c: SLOChecker) -> RuleResult:
     if last_ms is None:
         return (False, "no inference samples yet", {})
     if last_ms > 100.0:
-        return (True, f"last inference took {last_ms:.1f} ms (threshold 100)",
-                {"last_infer_ms": last_ms})
+        return (
+            True,
+            f"last inference took {last_ms:.1f} ms (threshold 100)",
+            {"last_infer_ms": last_ms},
+        )
     return (False, "ok", {"last_infer_ms": last_ms})
 
 
@@ -112,8 +121,11 @@ async def _check_poller_probe_stale(c: SLOChecker) -> RuleResult:
         return (False, f"bad timestamp from poller: {last}", {})
     age_s = (datetime.now(UTC) - last_dt).total_seconds()
     if age_s > 1800:
-        return (True, f"poller last probe was {age_s/60:.1f} min ago",
-                {"last_probe_ok_at": last, "age_seconds": age_s})
+        return (
+            True,
+            f"poller last probe was {age_s/60:.1f} min ago",
+            {"last_probe_ok_at": last, "age_seconds": age_s},
+        )
     return (False, "ok", {"age_seconds": age_s})
 
 
@@ -126,8 +138,11 @@ async def _check_drift_luma(c: SLOChecker) -> RuleResult:
         return (False, "baseline not yet established", {})
     delta = float(row["luma_1h"]) - float(row["luma_7d"])
     if abs(delta) > 25.0:
-        return (True, f"luma shift of {delta:+.1f} vs 7d baseline (threshold ±25)",
-                {"luma_1h": row["luma_1h"], "luma_7d": row["luma_7d"], "delta": delta})
+        return (
+            True,
+            f"luma shift of {delta:+.1f} vs 7d baseline (threshold ±25)",
+            {"luma_1h": row["luma_1h"], "luma_7d": row["luma_7d"], "delta": delta},
+        )
     return (False, "ok", {"delta": delta})
 
 
@@ -142,25 +157,51 @@ async def _check_drift_fish_rate(c: SLOChecker) -> RuleResult:
         return (False, "insufficient samples in last hour", {})
     fr1, fr7 = float(row["fish_rate_1h"]), float(row["fish_rate_7d"])
     if fr7 > 0.01 and fr1 < 0.5 * fr7:
-        return (True,
-                f"fish-frame rate collapsed: {fr1*100:.1f}% vs 7d {fr7*100:.1f}%",
-                {"fish_rate_1h": fr1, "fish_rate_7d": fr7})
+        return (
+            True,
+            f"fish-frame rate collapsed: {fr1*100:.1f}% vs 7d {fr7*100:.1f}%",
+            {"fish_rate_1h": fr1, "fish_rate_7d": fr7},
+        )
     return (False, "ok", {"fish_rate_1h": fr1, "fish_rate_7d": fr7})
 
 
 SLO_RULES: list[SLORule] = [
-    SLORule("pipeline_silence",       "critical", _check_pipeline_silence,
-            "No detection_events inserted in the last 5 min."),
-    SLORule("frame_stats_stalled",    "warning",  _check_frame_stats_stalled,
-            "Drift sampler stopped producing frame_stats rows."),
-    SLORule("inference_latency_p95",  "warning",  _check_inference_latency,
-            "Last per-frame inference exceeded 100 ms."),
-    SLORule("poller_probe_stale",     "warning",  _check_poller_probe_stale,
-            "SenseStream poller hasn't successfully probed the deployment recently."),
-    SLORule("drift_luma_delta",       "warning",  _check_drift_luma,
-            "Current-hour brightness differs from 7-day baseline by >25 (biofouling, lighting change)."),
-    SLORule("drift_fish_rate_crash",  "warning",  _check_drift_fish_rate,
-            "Fish-frame rate in the last hour is less than half the 7-day baseline."),
+    SLORule(
+        "pipeline_silence",
+        "critical",
+        _check_pipeline_silence,
+        "No detection_events inserted in the last 5 min.",
+    ),
+    SLORule(
+        "frame_stats_stalled",
+        "warning",
+        _check_frame_stats_stalled,
+        "Drift sampler stopped producing frame_stats rows.",
+    ),
+    SLORule(
+        "inference_latency_p95",
+        "warning",
+        _check_inference_latency,
+        "Last per-frame inference exceeded 100 ms.",
+    ),
+    SLORule(
+        "poller_probe_stale",
+        "warning",
+        _check_poller_probe_stale,
+        "SenseStream poller hasn't successfully probed the deployment recently.",
+    ),
+    SLORule(
+        "drift_luma_delta",
+        "warning",
+        _check_drift_luma,
+        "Current-hour brightness differs from 7-day baseline by >25 (biofouling, lighting change).",
+    ),
+    SLORule(
+        "drift_fish_rate_crash",
+        "warning",
+        _check_drift_fish_rate,
+        "Fish-frame rate in the last hour is less than half the 7-day baseline.",
+    ),
 ]
 
 
@@ -198,8 +239,7 @@ class SLOChecker:
         return results
 
     async def run_forever(self, interval_s: float = 30.0) -> None:
-        log.info("SLO checker starting (%d rules, interval=%.0fs)",
-                 len(self.rules), interval_s)
+        log.info("SLO checker starting (%d rules, interval=%.0fs)", len(self.rules), interval_s)
         while True:
             await self.run_once()
             await asyncio.sleep(interval_s)

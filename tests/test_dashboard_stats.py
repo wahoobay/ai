@@ -4,6 +4,7 @@ These functions are pure and side-effect free, so they're a clean
 target for the first pytest entries. The bigger goal is to make sure
 the stats helpers behave at the boundaries (count=0, trials=0,
 bootstrap with a single class) — that's where they used to break."""
+
 from __future__ import annotations
 
 import math
@@ -27,6 +28,7 @@ from app.stats import (  # noqa: E402
 # CI dataclass
 # ---------------------------------------------------------------------------
 
+
 def test_ci_as_dict_is_json_safe():
     ci = CI(point=1.5, lo=1.0, hi=2.0, method="x", n=10)
     d = ci.as_dict()
@@ -43,6 +45,7 @@ def test_ci_as_dict_is_json_safe():
 # ---------------------------------------------------------------------------
 # Poisson exact CI
 # ---------------------------------------------------------------------------
+
 
 def test_poisson_zero_count_has_zero_lower_bound():
     ci = poisson_count_ci(0)
@@ -66,6 +69,7 @@ def test_poisson_negative_raises():
 # Wilson rate CI
 # ---------------------------------------------------------------------------
 
+
 def test_rate_ci_zero_trials_returns_nan():
     ci = rate_ci(0, 0)
     assert math.isnan(ci.point)
@@ -88,6 +92,7 @@ def test_rate_ci_extremes_stay_in_unit_interval():
 # ---------------------------------------------------------------------------
 # Bootstrap CIs
 # ---------------------------------------------------------------------------
+
 
 def test_bootstrap_count_ci_empty_input():
     ci = bootstrap_count_ci([], species_id="X", seed=0)
