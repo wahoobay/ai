@@ -32,7 +32,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    # No GitHub environment on purpose: the deploy role in infra trusts the ref:refs/heads/main OIDC
+    # subject, and a job that names an environment gets environment:<name> as its subject instead.
     env:
       LOCATION_ID: ${{ vars.LOCATION_ID || 'wahoobay' }}
       FUNCTIONS: ${{ vars.PROD_FUNCTIONS }}
