@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-palette="blue" data-mode="light">
+<html lang="en" data-palette="blue" data-mode="light" data-tz="{{ tz }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -92,7 +92,7 @@ async function getJSON(url) {
   return r.json();
 }
 
-// Wahoo Bay's own time, US Eastern (time-et.js); "—" for never.
+// the site's own time (time-et.js); "—" for never.
 const when = (iso) => (iso ? fmtET(iso, "short") : "—");
 
 function el(tag, className, text) {

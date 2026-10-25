@@ -60,7 +60,7 @@ def test_the_dashboard_formats_every_time_through_the_eastern_helpers():
 @needs_node
 def test_eastern_times_follow_daylight_saving(tmp_path):
     out = run_node(
-        [read("time-et.js")],
+        ['document.documentElement = { dataset: { tz: "America/New_York" } };', read("time-et.js")],
         """
       return {
         summer: fmtET("2026-07-01T14:40:56Z", "time"),

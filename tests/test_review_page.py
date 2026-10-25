@@ -609,13 +609,13 @@ def test_the_review_page_is_one_centred_column():
 
 # Demo walk-through 2026-09-26: times were formatted in the viewer's own zone
 # (a frame at 10:40:56 EDT showed as 7:40:56 AM on a Pacific-time laptop).
-# Every time on the review page goes through RV.fmtTime, which always uses
-# US Eastern (Wahoo Bay's time; the browser applies daylight saving).
-def test_every_time_is_shown_in_eastern():
+# Every time on the review page goes through RV.fmtTime, which always uses the
+# site's zone (<html data-tz>, from TZ; the browser applies daylight saving).
+def test_every_time_is_shown_in_the_site_zone():
     core = _read("review-core.js")
     body = _function_body(core, "fmtTime")
     assert "timeZone: RV.TIME_ZONE" in body
-    assert 'RV.TIME_ZONE = "America/New_York"' in core
+    assert "document.documentElement.dataset.tz" in core
     outside = core.replace(body, "")
     for name in ("review-core.js", "review-single.js", "review-frame.js", "review-browse.js"):
         src = outside if name == "review-core.js" else _read(name)

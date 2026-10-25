@@ -19,11 +19,18 @@ from zoneinfo import ZoneInfo
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
+from .config import site_tz
 from .review_labels import agreement_summary, load_verdicts, outcome_of, resolve
 from .review_pool import read_window, retire_outside_window
 from .review_queue import Invalid, fetch_all, fetch_one
 
-LOCAL_TZ = ZoneInfo("America/New_York")
+
+def local_tz() -> ZoneInfo:
+    """The site's zone (TZ, default UTC), read when used so the environment stays
+    authoritative; review windows are whole local days in it."""
+    return ZoneInfo(site_tz())
+
+
 STATUSES = (
     "any",
     "verified",
@@ -79,7 +86,7 @@ class AdjudicateIn(BaseModel):
 
 
 def local_day_start(d: date) -> datetime:
-    return datetime.combine(d, dtime.min, tzinfo=LOCAL_TZ)
+    return datetime.combine(d, dtime.min, tzinfo=local_tz())
 
 
 def _check_date(d: date | None, label: str) -> None:
@@ -482,10 +489,10 @@ async def get_window(conn) -> dict:
 
 
 async def set_window(conn, *, admin_id: int, start: date | None, end: date | None) -> dict:
-    """Both days are local (America/New_York) and inclusive: the stored end
+    """Both days are local (the site's TZ) and inclusive: the stored end
     is local midnight at the start of the day after `end` (Review Focus 4).
     Both bounds are stored as timezone-aware ISO strings (local_day_start
-    always attaches LOCAL_TZ), because read_window feeds them straight to
+    always attaches local_tz()), because read_window feeds them straight to
     datetime.fromisoformat for the background pool to compare against
     now(UTC) -- a naive or date-only value would raise TypeError there on
     every run."""
@@ -493,7 +500,7 @@ async def set_window(conn, *, admin_id: int, start: date | None, end: date | Non
     _check_date(end, "end")
     if start and end and start > end:
         raise Invalid("the window starts after it ends")
-    if start and start > datetime.now(LOCAL_TZ).date():
+    if start and start > datetime.now(local_tz()).date():
         # The pool never re-adds an event that already has a review_items
         # row (review_pool.py's _free()/_FREE_EVENTS_SQL), so a future
         # start would retire every open pass-1 item and none of them

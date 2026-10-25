@@ -6,7 +6,7 @@ the system — no manual curation, no result selection. Use them as you
 would any other research dataset and treat the caveats below as binding.
 
 The pipeline that produced this data is described at
-`/raid/scratch/dzimmerman2021/wahoobay/PLAN.md` and the source code is
+`PLAN.md` at the root of the wahoobay/ai repository and the source code is
 available on request.
 
 ---

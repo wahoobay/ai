@@ -4,9 +4,9 @@ Every POLL_INTERVAL_S the poller tries three data sources in order:
 
   1. **Wahoo Bay public API** (``api.wahoobay.net``). No auth required.
      Endpoints:
-       - ``/api/v1/sitedata/latest?site=3`` — wahoo_2 EXO2 sonde
+       - ``/api/v1/sitedata/latest?site=3`` — the EXO2 sonde (WAHOOBAY_SITE_SONDE)
          (water temp, pH, DO, chlorophyll, phycoerythrin, turbidity, sPCond)
-       - ``/api/v1/sitedata/latest?site=1`` — wahoo_1 Vaisala WXT-536
+       - ``/api/v1/sitedata/latest?site=1`` — the Vaisala WXT-536 (WAHOOBAY_SITE_WEATHER)
          weather station (pressure, wind, air temp, humidity, rain, hail,
          water level, solar radiation)
        - ``/api/v1/weatherdata/latest``      — Tomorrow.io forecast layer
@@ -31,7 +31,7 @@ Storage: all rows land in ``sensor_readings`` / ``weather_readings`` with
 ``source='synthetic'`` (stub generator). ``UNIQUE (deployment_uri, ts)``
 makes every path idempotent.
 
-Sonde parameter mapping (wahoo_2 EXO2):
+Sonde parameter mapping (EXO2):
     Water Temperature  -> water_temp_c
     pH                 -> ph
     DO                 -> do_pct
@@ -62,6 +62,8 @@ import psycopg
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+
+from .config import settings
 
 log = logging.getLogger("wahoobay.sensestream")
 
@@ -102,8 +104,8 @@ def _int(key: str, default: int) -> int:
 class Config:
     base_url: str
     auth_token: str  # optional; legacy direct-SenseStream path uses this
-    deployment_uri: str  # sonde deployment URI (defaults to wahoo_2; used as DB tag)
-    weather_deployment_uri: str  # weather-station deployment URI (defaults to wahoo_1)
+    deployment_uri: str  # tag on sonde readings; required, there is no default site
+    weather_deployment_uri: str  # tag on weather rows; defaults to deployment_uri
     poll_interval_s: int
     backfill_minutes: int  # window to fetch each poll (overlap tolerated; UNIQUE prevents dupes)
     initial_backfill_days: int  # one-shot historical window on first tick
@@ -125,16 +127,16 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
+        site = settings()
         return cls(
             base_url=_env("SENSESTREAM_BASE_URL", "https://api.sensestream.org").rstrip("/"),
             auth_token=_env("SENSESTREAM_AUTH_TOKEN", ""),
-            deployment_uri=_env("SENSESTREAM_DEPLOYMENT_URI", "wahoo_2"),
+            deployment_uri=site.deployment_uri,
             # Weather rows go under the same deployment tag as the sonde so the
-            # dashboard's default `deployment=wahoo_2` query keeps returning data
-            # without a migration. Override with SENSESTREAM_WEATHER_DEPLOYMENT_URI
-            # if you want to split them out (the actual SenseStream uri for the
-            # weather station is `wahoo_1`).
-            weather_deployment_uri=_env("SENSESTREAM_WEATHER_DEPLOYMENT_URI", "wahoo_2"),
+            # dashboard's default query (this site's deployment) returns them
+            # without a migration; SENSESTREAM_WEATHER_DEPLOYMENT_URI splits
+            # them out.
+            weather_deployment_uri=site.weather_deployment_uri,
             poll_interval_s=_int("SENSESTREAM_POLL_INTERVAL_S", 300),
             backfill_minutes=_int("SENSESTREAM_BACKFILL_MINUTES", 60),
             initial_backfill_days=_int("SENSESTREAM_INITIAL_BACKFILL_DAYS", 30),
@@ -153,10 +155,7 @@ class Config:
             nws_user_agent=_env("NWS_USER_AGENT", "wahoobay-dashboard (scoopnisker@gmail.com)"),
             site_latitude=float(_env("WAHOOBAY_LAT", "26.2603")),
             site_longitude=float(_env("WAHOOBAY_LON", "-80.0834")),
-            database_url=_env(
-                "DATABASE_URL",
-                "postgresql://wahoobay:wahoobay@localhost:5432/wahoobay",
-            ),
+            database_url=site.database_url,
             http_host=_env("POLLER_HTTP_HOST", "0.0.0.0"),
             http_port=_int("POLLER_HTTP_PORT", 8082),
             log_level=_env("LOG_LEVEL", "INFO"),
@@ -298,7 +297,7 @@ def parse_observations(payload: Any) -> list[tuple[datetime, dict]]:
 # All three Wahoo Bay endpoints return either ``{"time": <ms>, "readings": [...]}``
 # (latest) or a JSON array of those (range). Index order is fixed by Wahoo Bay's
 # backend; the mappings below come from:
-#   - sonde:    /manager/deployments/by-uri/wahoo_2 sensor metadata
+#   - sonde:    /manager/deployments/by-uri/<SENSESTREAM_DEPLOYMENT_URI> sensor metadata
 #   - weather:  progressNotes.md in the wahoobay/wahoobay.github.io repo
 #   - forecast: Tomorrow.io field order (alphabetical) — confirmed against
 #     live values (pressureSeaLevel ≈ 1015, temperature ≈ 27°C, weatherCode = 1000).
@@ -354,9 +353,9 @@ def _get(arr: list, idx: int) -> float | None:
 
 
 def parse_wahoobay_sonde(payload: Any) -> list[tuple[datetime, dict]]:
-    """Convert wahoo_2 EXO2 sonde readings (8 positional values).
+    """Convert EXO2 sonde readings (8 positional values).
 
-    Index order from /manager/deployments/by-uri/wahoo_2:
+    Index order from /manager/deployments/by-uri/<deployment>:
         0 Water Temperature (°C)
         1 pH
         2 DO (%)
@@ -384,7 +383,7 @@ def parse_wahoobay_sonde(payload: Any) -> list[tuple[datetime, dict]]:
 
 
 def parse_wahoobay_weather_station(payload: Any) -> list[tuple[datetime, dict]]:
-    """Convert wahoo_1 Vaisala WXT-536 readings (24 positional values).
+    """Convert Vaisala WXT-536 weather-station readings (24 positional values).
 
     Index order from progressNotes.md (Wahoo Bay frontend repo) and confirmed
     against the live SenseStream sensor metadata:
@@ -638,7 +637,7 @@ class Poller:
         end_ms = int(end.timestamp() * 1000)
         base = cfg.base_url
 
-        # Sonde (wahoo_2) → sensor_readings
+        # Sonde → sensor_readings
         try:
             r = await client.get(
                 f"{base}/observations/measurements/{cfg.deployment_uri}/0",
@@ -662,21 +661,28 @@ class Poller:
         except Exception as e:
             log.warning("sensestream-direct sonde failed: %s", e)
 
-        # Weather station (wahoo_1) — returned, not upserted yet
+        # Weather station — returned, not upserted yet. The direct path needs
+        # the station's own SenseStream URI (SENSESTREAM_WEATHER_FETCH_URI);
+        # without one the station is skipped.
         station_rows: list[tuple[datetime, dict]] = []
-        try:
-            uri = _env("SENSESTREAM_WEATHER_FETCH_URI", "wahoo_1")
-            r = await client.get(
-                f"{base}/observations/measurements/{uri}/0",
-                params={"start": start_ms, "end": end_ms},
-            )
-            if r.status_code == 200:
-                station_rows = parse_wahoobay_weather_station(r.json())
-                log.info("sensestream-direct weather station: %d row(s) fetched", len(station_rows))
-            else:
-                log.warning("sensestream-direct weather HTTP %s", r.status_code)
-        except Exception as e:
-            log.warning("sensestream-direct weather failed: %s", e)
+        uri = _env("SENSESTREAM_WEATHER_FETCH_URI", "")
+        if not uri:
+            log.debug("SENSESTREAM_WEATHER_FETCH_URI unset; direct weather-station fetch skipped")
+        else:
+            try:
+                r = await client.get(
+                    f"{base}/observations/measurements/{uri}/0",
+                    params={"start": start_ms, "end": end_ms},
+                )
+                if r.status_code == 200:
+                    station_rows = parse_wahoobay_weather_station(r.json())
+                    log.info(
+                        "sensestream-direct weather station: %d row(s) fetched", len(station_rows)
+                    )
+                else:
+                    log.warning("sensestream-direct weather HTTP %s", r.status_code)
+            except Exception as e:
+                log.warning("sensestream-direct weather failed: %s", e)
 
         return station_rows
 
@@ -702,7 +708,7 @@ class Poller:
         end_ms = int(end.timestamp() * 1000)
         base = cfg.wahoobay_api_url
 
-        # Sonde (wahoo_2) → sensor_readings
+        # Sonde → sensor_readings
         try:
             r = await client.get(
                 f"{base}/api/v1/sitedata",
@@ -734,7 +740,7 @@ class Poller:
             self.stats.wahoobay_last_error = f"sonde: {e}"
             log.warning("wahoobay sonde fetch failed: %s", e)
 
-        # Weather station (wahoo_1) — returned, not upserted yet
+        # Weather station — returned, not upserted yet
         station_rows: list[tuple[datetime, dict]] = []
         try:
             r = await client.get(

@@ -87,7 +87,10 @@ def test_every_text_colour_meets_wcag_aa(palette, mode):
 @pytest.mark.parametrize("page", THEMED_PAGES)
 def test_each_themed_page_loads_the_palettes_early_and_has_the_controls(page):
     html = (APP / "templates" / page).read_text()
-    assert '<html lang="en" data-palette="blue" data-mode="light">' in html
+    # The palette and mode ride on the <html> tag itself so they apply before
+    # first paint; other attributes (the site's data-tz) may sit beside them.
+    tag = html[html.index("<html") : html.index(">", html.index("<html")) + 1]
+    assert 'lang="en"' in tag and 'data-palette="blue"' in tag and 'data-mode="light"' in tag
     head = html[: html.index("</head>")]
     assert "/static/theme.css?v={{ asset_version }}" in head
     assert (

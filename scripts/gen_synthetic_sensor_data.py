@@ -2,7 +2,7 @@
 """Synthetic EXO2 sonde readings for Hillsboro Inlet / Wahoo Bay.
 
 Generates a physics-motivated time series for the eight parameters reported
-by the ``wahoo_2`` deployment on sensestream.org:
+by an EXO2 deployment on sensestream.org:
 
     - Water Temperature (°C)
     - pH
@@ -43,9 +43,6 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 SAMPLE_PERIOD_S = 600            # 10-minute cadence, matches sPeriod=600
-LAT = 26.2603                    # Hillsboro Inlet / Wahoo Bay
-LNG = -80.0834
-DEPLOYMENT_URI = "wahoo_2"
 
 
 # ---------------------------------------------------------------------------
@@ -434,16 +431,22 @@ def _parse_args() -> argparse.Namespace:
                     help="ISO UTC end timestamp (default: now)")
     ap.add_argument("--seed", type=int, default=20260414,
                     help="RNG seed (default: deterministic date-based)")
-    ap.add_argument("--deployment", type=str, default=DEPLOYMENT_URI)
+    ap.add_argument("--deployment", type=str, default=os.environ.get("SENSESTREAM_DEPLOYMENT_URI"),
+                    help="SenseStream deployment URI the rows are tagged with "
+                         "(default: $SENSESTREAM_DEPLOYMENT_URI; required)")
     ap.add_argument("--source-tag", type=str, default="synthetic",
                     help="Value stored in the 'source' column (default: synthetic)")
-    ap.add_argument("--csv", type=str,
-                    default="data/synthetic/wahoo_2_sensor_readings.csv",
-                    help="CSV output path (relative to repo root)")
+    ap.add_argument("--csv", type=str, default=None,
+                    help="CSV output path (default: data/synthetic/<deployment>_sensor_readings.csv)")
     ap.add_argument("--no-csv", action="store_true", help="Skip CSV write")
     ap.add_argument("--load-postgres", action="store_true",
                     help="Insert into Postgres (requires DATABASE_URL env var)")
-    return ap.parse_args()
+    args = ap.parse_args()
+    if not args.deployment:
+        ap.error("--deployment (or SENSESTREAM_DEPLOYMENT_URI) is required: there is no default site")
+    if args.csv is None:
+        args.csv = f"data/synthetic/{args.deployment}_sensor_readings.csv"
+    return args
 
 
 def main() -> int:

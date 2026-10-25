@@ -871,7 +871,7 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
 
     if resource == "hourly_summary":
         hours = kwargs["hours"]
-        deployment = kwargs.get("deployment", "wahoo_2")
+        deployment = kwargs["deployment"]  # the route fills in the site's deployment
         sql = """
             WITH detection_buckets AS (
                 SELECT date_trunc('hour', ts) AS hour,

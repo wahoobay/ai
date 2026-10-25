@@ -22,7 +22,9 @@ ensures rows produced under different settings are distinguishable.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import quote
 
 
 def _bool(key: str, default: bool = False) -> bool:
@@ -44,8 +46,32 @@ def _str(key: str, default: str) -> str:
     return os.environ.get(key, default)
 
 
+def database_url_from_env(env: Mapping[str, str] = os.environ) -> str:
+    """DATABASE_URL, or the same URL assembled from DB_HOST, DB_PORT (5432),
+    DB_NAME, DB_USER and DB_PASSWORD. App Runner and Lambda inject the password
+    as its own variable straight from Secrets Manager, so the parts form is
+    what the cloud uses; compose and the bare-metal launchers pass one URL."""
+    url = env.get("DATABASE_URL", "").strip()
+    if url:
+        return url
+    missing = [k for k in ("DB_HOST", "DB_NAME", "DB_USER") if not env.get(k)]
+    if missing:
+        raise RuntimeError(
+            "set DATABASE_URL, or DB_HOST/DB_NAME/DB_USER (+ DB_PASSWORD, DB_PORT) "
+            f"(missing: {', '.join(missing)})"
+        )
+    user = quote(env["DB_USER"], safe="")
+    password = quote(env.get("DB_PASSWORD", ""), safe="")
+    auth = f"{user}:{password}" if password else user
+    port = env.get("DB_PORT", "5432")
+    return f"postgresql://{auth}@{env['DB_HOST']}:{port}/{env['DB_NAME']}"
+
+
 @dataclass(frozen=True)
 class Config:
+    # site (nothing site-specific is written into the code; see .env.example)
+    location_id: str
+
     # video source
     video_source: str
     video_loop: bool
@@ -147,6 +173,7 @@ class Config:
     @classmethod
     def from_env(cls) -> Config:
         return cls(
+            location_id=_str("LOCATION_ID", "wahoobay"),
             video_source=_str("VIDEO_SOURCE", "file:///data/test_videos"),
             video_loop=_bool("VIDEO_LOOP", True),
             playlist_shuffle=_bool("PLAYLIST_SHUFFLE", False),
@@ -184,10 +211,7 @@ class Config:
             min_accept_accuracy=_float("MIN_ACCEPT_ACCURACY", 0.0),
             min_classify_det_conf=_float("MIN_CLASSIFY_DET_CONF", 0.40),
             classifier_autocast=_str("CLASSIFIER_AUTOCAST", "bfloat16"),
-            database_url=_str(
-                "DATABASE_URL",
-                "postgresql://wahoobay:wahoobay@localhost:5432/wahoobay",
-            ),
+            database_url=database_url_from_env(),
             events_log_dir=_str("EVENTS_LOG_DIR", "/data/logs/events"),
             frames_dir=_str("FRAMES_DIR", "/data/frames"),
             save_timelapse_seconds=_int("SAVE_TIMELAPSE_SECONDS", 0),

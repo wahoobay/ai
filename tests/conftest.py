@@ -15,6 +15,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# The services refuse to start without a site and a database address (the code
+# has no default site). The suite is not a site, so it names one here; tests
+# that need a real database still set DATABASE_URL to TEST_DATABASE_URL.
+os.environ.setdefault("SENSESTREAM_DEPLOYMENT_URI", "test_site")
+os.environ.setdefault("DATABASE_URL", "postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay")
+
 # The test database DSN can be handed over in a file rather than the
 # environment, so it never appears on a command line or needs shell
 # expansion: TEST_DATABASE_URL_FILE=.superpowers/test_dsn pytest ...
