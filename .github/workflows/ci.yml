@@ -6,8 +6,9 @@ name: CI
 # On main the images are pushed to the AI repositories in ECR (account
 # 226594054743, us-east-1) with the role the infra repository defines
 # (ai-wahoobay-images-gha, assumed over OIDC: no stored keys), tagged
-# sha-<12>[-lambda|-cpu] and main[-lambda|-cpu]. The infra repository's deploy
-# workflow promotes a sha to staging / prod by retagging. Pull requests (forks
+# sha-<12>[-lambda|-cpu] and main[-lambda|-cpu]. Then the deploy-staging job
+# points staging at the build (scripts/deploy_env.sh); production is
+# deploy-prod.yml, by hand, with a sha that reached main. Pull requests (forks
 # included) build everything and push nothing.
 
 on:
@@ -177,3 +178,34 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+  # -------------------------------------------------------------------
+  # Staging follows main. Once the six images are in ECR: point the staging
+  # tags at this build, update the four Lambdas, run the migrations, wait for
+  # App Runner, smoke the hostname (scripts/deploy_env.sh). The repository
+  # variables come from the AiStack's outputs (wahoobay/infra README, "AI
+  # stacks"): STAGING_ROLE_ARN, STAGING_FUNCTIONS, STAGING_SERVICE_ARN,
+  # STAGING_HOSTNAME, STAGING_SERVICE_URL. No STAGING_ROLE_ARN = no deploy.
+  # -------------------------------------------------------------------
+  deploy-staging:
+    needs: build-image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.STAGING_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: ai-deploy-staging
+      cancel-in-progress: false
+    env:
+      LOCATION_ID: ${{ vars.LOCATION_ID || 'wahoobay' }}
+      FUNCTIONS: ${{ vars.STAGING_FUNCTIONS }}
+      SERVICE_ARN: ${{ vars.STAGING_SERVICE_ARN }}
+      HOSTNAME: ${{ vars.STAGING_HOSTNAME }}
+      SERVICE_URL: ${{ vars.STAGING_SERVICE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.STAGING_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy this build to staging
+        run: scripts/deploy_env.sh staging "$(echo "${{ github.sha }}" | cut -c1-12)"

@@ -1,0 +1,65 @@
+name: deploy-prod
+
+# Production, by hand: a commit that reached main (its images were pushed by CI
+# and ran on staging) is promoted with scripts/deploy_env.sh prod. Rollback is
+# the same dispatch with the previous sha; ECR keeps the last twenty builds.
+# The repository variables come from the AiStack's outputs (wahoobay/infra
+# README, "AI stacks"): PROD_ROLE_ARN, PROD_FUNCTIONS, PROD_SERVICE_ARN,
+# PROD_HOSTNAME, PROD_SERVICE_URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to deploy (full SHA; must be on main)"
+        required: true
+      confirm:
+        description: 'Type "deploy" to confirm a production deployment'
+        required: true
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 226594054743.dkr.ecr.us-east-1.amazonaws.com
+
+permissions:
+  contents: write # the release tag
+  id-token: write # the OIDC token the production deploy role trusts
+
+concurrency:
+  group: ai-deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      LOCATION_ID: ${{ vars.LOCATION_ID || 'wahoobay' }}
+      FUNCTIONS: ${{ vars.PROD_FUNCTIONS }}
+      SERVICE_ARN: ${{ vars.PROD_SERVICE_ARN }}
+      HOSTNAME: ${{ vars.PROD_HOSTNAME }}
+      SERVICE_URL: ${{ vars.PROD_SERVICE_URL }}
+    steps:
+      - name: Guard
+        if: inputs.confirm != 'deploy'
+        run: |
+          echo "::error::Refusing to deploy: the confirm input must be exactly 'deploy'."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Only commits that reached main
+        run: scripts/assert-on-main.sh "${{ inputs.sha }}"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.PROD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy to production
+        run: scripts/deploy_env.sh prod "$(echo "${{ inputs.sha }}" | cut -c1-12)"
+      - name: Record a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          tag="ai-prod-$(date -u +%Y%m%d-%H%M)-${SHA::7}"
+          gh release create "$tag" --target "$SHA" --title "$tag" --notes "Deployed to production: $SHA"

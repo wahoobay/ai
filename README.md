@@ -23,6 +23,7 @@ endpoint, so the cloud migration is on the roadmap.
 - [Repository layout](#repository-layout)
 - [Quick start](#quick-start)
 - [Environment contract](#environment-contract)
+- [Deploying (AWS)](#deploying-aws)
 - [What's currently running](#whats-currently-running)
 - [Component map](#component-map)
 - [Operating glossary](#operating-glossary)
@@ -344,6 +345,28 @@ laptop (`make up`, compose profiles `web` / `gpu` / `cpu`) and AWS (App
 Runner for the dashboard, Lambdas for jobs, migrate, fetch and write; see
 `wahoobay/infra`). Every image CI builds carries `GIT_SHA`, which the
 worker stamps on its rows.
+
+---
+
+## Deploying (AWS)
+
+- **Staging follows `main`.** CI builds the six images, pushes them to ECR as
+  `sha-<12>` (`-lambda`, `-cpu`) and, when the repository variables are set,
+  runs `scripts/deploy_env.sh staging <sha12>`: `scripts/promote.sh` points the
+  `staging` tags at the build (App Runner auto-deploys the dashboard), the four
+  Lambdas are updated, the migrate Lambda runs (a failure stops the deploy
+  before the dashboard rolls), App Runner's deployment is awaited, and the
+  hostname is smoked (`/healthz`, `/login`, `/robots.txt`; the direct App Runner
+  URL must answer 403).
+- **Production is by hand:** Actions → `deploy-prod` → the full SHA (it must be
+  on `main`) and `confirm=deploy`. Same steps against `prod`; a release
+  `ai-prod-<date>-<sha7>` records it.
+- **Rollback** is the same dispatch with the previous SHA; ECR keeps the last
+  twenty builds of each image.
+- The variables (`STAGING_*`, `PROD_*`: role ARN, function names, App Runner
+  service ARN, hostname, service URL) come from the `AiStack` outputs; the
+  infra repository's README ("AI stacks") says how to set them. The DGX is not
+  deployed this way: see `docs/operations.md`.
 
 ---
 
