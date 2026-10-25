@@ -112,6 +112,19 @@ def seed(
             if admin_created is not None:
                 skipped["admin_created"] = admin_created
             return skipped
+        replaced = False
+        if existing and force:
+            # A reload replaces what the seed wrote (and the poller's placeholder readings,
+            # which carry the same marker); real readings and the accounts are not touched.
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM detection_events WHERE model_version = 'sample'")
+                cur.execute("DELETE FROM saved_frames WHERE model_version = 'sample'")
+                for table in ("sensor_readings", "weather_readings"):
+                    cur.execute(
+                        f"DELETE FROM {table} WHERE source = 'synthetic' AND deployment_uri = %s",
+                        (deployment_uri,),
+                    )
+            replaced = True
         with conn.cursor() as cur:
             frames_payload = []
             for row in data["saved_frames"]:
@@ -227,6 +240,7 @@ def seed(
         conn.commit()
     if admin_created is not None:
         counts["admin_created"] = admin_created
+    counts["replaced"] = replaced
     return counts
 
 

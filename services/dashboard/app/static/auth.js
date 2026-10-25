@@ -76,8 +76,10 @@ async function renderIdentityChip() {
   slot.hidden = false;
   const parts = [];
   const active = me.status === "active";
+  // A site can run without the review tool (FEATURE_REVIEW_TOOL); the page says so on <html>.
+  const reviewTool = document.documentElement.dataset.reviewTool !== "false";
   const canReview = active && (me.role === "reviewer" || me.role === "admin");
-  if (canReview && !window.location.pathname.startsWith("/review")) {
+  if (canReview && reviewTool && !window.location.pathname.startsWith("/review")) {
     parts.push(link("/review", "Review fish →", "chip-review"));
   }
   if (active && me.role === "admin") parts.push(link("/admin/users.html", "Accounts", "chip-admin"));

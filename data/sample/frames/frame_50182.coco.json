@@ -12,54 +12,54 @@
    "id": 1,
    "image_id": 1,
    "bbox": [
-    112,
-    100,
-    52,
-    29
+    3,
+    129,
+    31,
+    24
    ],
-   "category": "Pomacanthus paru"
+   "category": "Stegastes partitus"
   },
   {
    "id": 2,
    "image_id": 1,
    "bbox": [
-    160,
-    88,
-    46,
-    18
+    149,
+    37,
+    28,
+    27
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Sparisoma viride"
   },
   {
    "id": 3,
    "image_id": 1,
    "bbox": [
-    106,
-    148,
-    26,
-    20
+    47,
+    91,
+    35,
+    34
    ],
-   "category": "Sparisoma viride"
+   "category": "Lutjanus griseus"
   },
   {
    "id": 4,
    "image_id": 1,
    "bbox": [
-    33,
-    43,
-    51,
-    36
+    41,
+    155,
+    62,
+    16
    ],
-   "category": "Holacanthus bermudensis"
+   "category": "Lutjanus griseus"
   },
   {
    "id": 5,
    "image_id": 1,
    "bbox": [
-    177,
-    39,
-    40,
-    37
+    68,
+    90,
+    58,
+    23
    ],
    "category": "Acanthurus coeruleus"
   },
@@ -67,34 +67,34 @@
    "id": 6,
    "image_id": 1,
    "bbox": [
-    125,
-    43,
-    57,
-    36
+    191,
+    130,
+    38,
+    20
    ],
-   "category": "Stegastes partitus"
+   "category": "Haemulon flavolineatum"
   },
   {
    "id": 7,
    "image_id": 1,
    "bbox": [
-    9,
-    27,
-    50,
-    23
+    113,
+    116,
+    58,
+    20
    ],
-   "category": "Lutjanus griseus"
+   "category": "Holacanthus bermudensis"
   },
   {
    "id": 8,
    "image_id": 1,
    "bbox": [
-    55,
-    4,
-    57,
-    16
+    71,
+    142,
+    52,
+    26
    ],
-   "category": "Pomacanthus paru"
+   "category": "Lutjanus griseus"
   }
  ]
 }

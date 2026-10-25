@@ -76,3 +76,19 @@ def settings(env: Mapping[str, str] = os.environ) -> Settings:
         export_prefix=env.get("EXPORT_PREFIX", "").strip() or site,
         database_url=database_url_from_env(env),
     )
+
+
+def autoplay_embed(url: str) -> str:
+    """The live-video embed URL with the parameters that make the player start by
+    itself. Browsers autoplay only a muted player, so mute=1 goes with autoplay=1;
+    playsinline=1 keeps phones from taking it full screen. Parameters already in the
+    URL win, and an empty URL stays empty (no embed configured)."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    if not url:
+        return url
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    for key, value in (("autoplay", "1"), ("mute", "1"), ("playsinline", "1")):
+        query.setdefault(key, value)
+    return urlunsplit(parts._replace(query=urlencode(query)))

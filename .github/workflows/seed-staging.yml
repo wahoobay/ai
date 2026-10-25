@@ -1,12 +1,17 @@
 name: seed-staging
 
 # Load the sample dataset into staging, never production: invokes staging's jobs
-# Lambda with {"job": "seed"}. The job leaves a database that already has
-# detections alone, and creates the first admin account from the app secret's
+# Lambda with {"job": "seed"} (or "reseed" with force=true, which replaces the
+# sample's rows). The seed leaves a database that already has detections alone, and creates the first admin account from the app secret's
 # admin_password (ADMIN_PASSWORD on the Lambda) when the users table is empty.
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Reload the sample over an earlier one (replaces its rows; accounts stay)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,9 +30,10 @@ jobs:
       - name: Invoke the seed job
         env:
           FUNCTIONS: ${{ vars.STAGING_FUNCTIONS }}
+          JOB: ${{ inputs.force && 'reseed' || 'seed' }}
         run: |
           fn="$(tr ',' '\n' <<<"$FUNCTIONS" | grep -- '-jobs$')"
-          response="$(aws lambda invoke --function-name "$fn" --payload '{"job":"seed"}' \
+          response="$(aws lambda invoke --function-name "$fn" --payload "{\"job\":\"$JOB\"}" \
             --cli-binary-format raw-in-base64-out out.json)"
           cat out.json; echo
           if grep -q FunctionError <<<"$response" || ! grep -q '"ok": true' out.json; then

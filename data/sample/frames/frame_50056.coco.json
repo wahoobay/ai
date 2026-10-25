@@ -12,89 +12,89 @@
    "id": 1,
    "image_id": 1,
    "bbox": [
-    73,
-    108,
-    28,
-    37
+    167,
+    127,
+    29,
+    14
    ],
-   "category": "Abudefduf saxatilis"
+   "category": "Haemulon flavolineatum"
   },
   {
    "id": 2,
    "image_id": 1,
    "bbox": [
-    74,
-    129,
-    29,
-    30
+    229,
+    45,
+    55,
+    33
    ],
-   "category": "Abudefduf saxatilis"
+   "category": "Sparisoma viride"
   },
   {
    "id": 3,
    "image_id": 1,
    "bbox": [
-    249,
-    129,
+    229,
+    106,
     45,
-    15
+    38
    ],
-   "category": "Abudefduf saxatilis"
+   "category": "Haemulon flavolineatum"
   },
   {
    "id": 4,
    "image_id": 1,
    "bbox": [
-    26,
-    5,
-    59,
-    23
+    12,
+    104,
+    67,
+    25
    ],
-   "category": "Holacanthus bermudensis"
+   "category": "Pomacanthus paru"
   },
   {
    "id": 5,
    "image_id": 1,
    "bbox": [
-    56,
-    24,
-    60,
-    35
+    109,
+    67,
+    57,
+    21
    ],
-   "category": "Stegastes partitus"
+   "category": "Sparisoma viride"
   },
   {
    "id": 6,
    "image_id": 1,
    "bbox": [
-    147,
-    54,
-    68,
-    31
+    74,
+    98,
+    49,
+    29
    ],
-   "category": "Acanthurus coeruleus"
+   "category": "Pomacanthus paru"
   },
   {
    "id": 7,
    "image_id": 1,
    "bbox": [
-    190,
-    54,
-    53,
-    35
+    243,
+    127,
+    67,
+    23
    ],
-   "category": "Sparisoma viride"
+   "category": "Lutjanus griseus"
   },
   {
    "id": 8,
    "image_id": 1,
    "bbox": [
-    126,
-    2,
-    60,
-    37
+    165,
+    62,
+    59,
+    29
    ],
-   "category": "Haemulon flavolineatum"
+   "category": "Stegastes partitus"
   }
  ]
 }

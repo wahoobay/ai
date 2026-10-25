@@ -33,7 +33,9 @@ async def test_video_panel_is_the_embed_when_no_worker(rdb, review_assets, monke
     with TestClient(app) as client:
         login(client, "viewer")
         html = client.get("/").text
-    assert "<iframe" in html and f'src="{EMBED}"' in html
+    # The player starts by itself: browsers only autoplay a muted player, and
+    # playsinline keeps phones from taking it full screen.
+    assert "<iframe" in html and f'src="{EMBED}?autoplay=1&amp;mute=1&amp;playsinline=1"' in html
     assert 'id="stream"' not in html and 'id="bbox-toggle"' not in html
 
 
@@ -52,6 +54,18 @@ async def test_video_panel_is_the_worker_stream_when_there_is_one(rdb, review_as
         login(client, "viewer")
         html = client.get("/").text
     assert 'id="stream"' in html and 'id="bbox-toggle"' in html and "<iframe" not in html
+
+
+def test_autoplay_parameters_are_added_once_and_keep_what_is_there():
+    from app.config import autoplay_embed
+
+    assert autoplay_embed("") == ""
+    assert autoplay_embed(EMBED) == f"{EMBED}?autoplay=1&mute=1&playsinline=1"
+    assert (
+        autoplay_embed(f"{EMBED}?si=abc&mute=0")
+        == f"{EMBED}?si=abc&mute=0&autoplay=1&playsinline=1"
+    )
+    assert autoplay_embed(autoplay_embed(EMBED)) == autoplay_embed(EMBED)
 
 
 def test_origin_header_required_when_secret_set(monkeypatch):
