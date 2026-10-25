@@ -143,8 +143,9 @@ what is not already listening, and the schema change below must not run while
 the old dashboard still refreshes the matviews.
 
 ```bash
-# 1. stop the dashboard, the workers and the poller (the "Stopping" section;
-#    leave postgres up). The public demo is down from here to step 6: ~3 min.
+# 1. touch logs/app/MAINTENANCE (pauses the five-minute health check), then stop
+#    the dashboard, the workers and the poller (the "Stopping" section; leave
+#    postgres up). The public demo is down from here to step 6: ~3 min.
 git pull                                                       # 2. the code
 git show dgx-2026-10-24:data/models/classifier_v2/checkpoint_best.pt \
   > data/models/classifier_v2/checkpoint_best.pt               # 3. the checkpoint git no longer tracks (ignored from now on)
@@ -190,6 +191,9 @@ stack (`make up`, `make seed`) on a laptop, where the ports are free.
 
 ## Stopping
 
+Pause the five-minute health check first (`touch logs/app/MAINTENANCE`,
+see "Recovery from a DGX reboot"), or it restarts whatever you stop.
+
 ```bash
 # kill by listening port — robust against pid-file drift
 for port in 8081 8083 18080 8082; do
@@ -224,38 +228,62 @@ harmless but ugly.
 
 ## Recovery from a DGX reboot
 
-Two minutes after boot, this `@reboot` entry in the user crontab runs
-`scripts/dev/start_all.sh`:
+Every five minutes, this entry in the user crontab runs
+`scripts/dev/health_check.sh`:
 
 ```
-@reboot sleep 120 && /raid/scratch/dzimmerman2021/wahoobay/scripts/dev/start_all.sh >> /raid/scratch/dzimmerman2021/wahoobay/logs/app/start_all.log 2>&1
+*/5 * * * * /raid/scratch/dzimmerman2021/wahoobay/scripts/dev/health_check.sh >> /raid/scratch/dzimmerman2021/wahoobay/logs/app/health_check.log 2>&1
 ```
 
-The script follows "Starting from cold" above (postgres, both workers,
-dashboard, poller) and skips any service whose port is already
-listening, so it is also the quickest by-hand restart:
+The check looks at the five ports (5432, 8081, 8083, 18080, 8082) and the
+jobs loop. When everything is up it only rewrites `logs/app/health_check.last`
+(the heartbeat: its mtime is the last time cron ran it) and prints nothing.
+When something is down it writes what was missing to
+`logs/app/health_check.log` and runs `start_all.sh`, which follows "Starting
+from cold" above (postgres, both workers, dashboard, poller, jobs loop) and
+skips any service whose port is already listening — so it is also the
+quickest by-hand restart:
 
 ```bash
 ./scripts/dev/start_all.sh
 ```
 
-It does **not** start the public tunnel. A restarted tunnel has a new
-URL that has to be sent to the people using it, and the lab machine
-should only be exposed while demoing. Start it by hand (step 5 above)
-when you need it.
+Before stopping anything on purpose, pause the check, or it brings the
+service back within five minutes:
 
-Check `logs/app/start_all.log` and the quick health check after a
-reboot. If nothing came up, `crontab -l` first: after the October 2026
-`/raid` snapshot restore the entry did not fire and the stack stayed down
-for eight days until started by hand. The workers use the GPUs pinned in `.env`; if a neighbour has
-taken them by then, see "GPU pinning" above.
+```bash
+touch logs/app/MAINTENANCE   # health_check.sh only heartbeats while this exists
+rm logs/app/MAINTENANCE      # when the stack is back
+```
+
+It never kills a process: a dashboard that listens but fails `/healthz` is
+logged, and restarting it stays a by-hand decision ("Restarting one service").
+
+Why not `@reboot`: that entry (2026-10-07 to 2026-10-25) ran once per boot,
+and only if cron had this crontab loaded at that moment. After the October
+2026 `/raid` restore it did not — probably because the account is resolved
+through SSSD, which started two seconds before cron — and the stack stayed
+down for eight days with nothing in the log to show for it. A recurring entry
+gets a new chance every five minutes, and a stale heartbeat is the signal
+that cron itself is not running the crontab: re-save it with
+`crontab -l | crontab -`.
+
+Neither starts the public tunnel. A restarted tunnel has a new URL that has
+to be sent to the people using it, and the lab machine should only be
+exposed while demoing. Start it by hand (step 5 above) when you need it.
+
+After a reboot, check `logs/app/start_all.log` and the quick health check.
+The workers use the GPUs pinned in `.env`; if a neighbour has taken them by
+then, see "GPU pinning" above.
 
 ---
 
 ## Restarting one service
 
 The pattern is the same for all of them: kill by listening port, then
-re-run the launcher script. Common cases:
+re-run the launcher script. `touch logs/app/MAINTENANCE` first and `rm` it
+afterwards, or the five-minute health check may race you for the port.
+Common cases:
 
 ```bash
 # Just the SEAHIVECAM worker
