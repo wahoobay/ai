@@ -152,7 +152,9 @@ pip install -r services/dashboard/requirements.txt \
             -r services/sensestream_poller/requirements.txt    # 4. alembic, SQLAlchemy, boto3, pillow, ... -- not the worker's
                                                                #    requirements: torch stays exactly as installed
 ./scripts/dev/start_postgres.sh                                # 5. postgres is up, so this only runs the migrations: stamp 0001,
-                                                               #    then 0002 (location_id; ~seconds with nothing reading) and 0003
+                                                               #    then 0002 and 0003. 0002 builds an index CONCURRENTLY over all of
+                                                               #    detection_events: ~7 min for the DGX's 668M rows (280 GB). The
+                                                               #    script prints no alembic lines; step 7 is the check.
 ./scripts/dev/start_all.sh                                     # 6. workers, dashboard, poller and the new jobs loop
 alembic -c db/alembic.ini current                              # 7. check: 0003 (head)
 curl -s localhost:18080/healthz && curl -s localhost:18080/robots.txt
@@ -164,6 +166,12 @@ still reading `detection_events`; nothing changed -- stop it and run step 5
 again. An interrupted index build leaves an INVALID index, which the revision
 drops and rebuilds on the retry (`SELECT indexrelid::regclass FROM pg_index
 WHERE NOT indisvalid` should print nothing afterwards).
+
+The checkout must be on `main` for `git pull` to fast-forward (the October
+2026 upgrade found it on a feature branch that `main` already contained). While
+the dashboard runs, `git status` shows `assets/species.xlsx` modified: the sheet
+poller rewrites that tracked file on every sync. `git checkout -- assets/species.xlsx`
+before a `git pull`; the next poll rewrites it.
 
 Nothing in `.env` has to change: the launchers export the Wahoo Bay values
 (`SENSESTREAM_DEPLOYMENT_URI=wahoo_2`, `TZ=America/New_York`,
@@ -237,7 +245,9 @@ should only be exposed while demoing. Start it by hand (step 5 above)
 when you need it.
 
 Check `logs/app/start_all.log` and the quick health check after a
-reboot. The workers use the GPUs pinned in `.env`; if a neighbour has
+reboot. If nothing came up, `crontab -l` first: after the October 2026
+`/raid` snapshot restore the entry did not fire and the stack stayed down
+for eight days until started by hand. The workers use the GPUs pinned in `.env`; if a neighbour has
 taken them by then, see "GPU pinning" above.
 
 ---
@@ -819,6 +829,11 @@ ls pgdata/PG_VERSION                     # cluster initialised?
 cat logs/app/postgres.log | tail         # last error?
 pg_ctl -D pgdata status                  # is it actually running?
 ```
+
+`FATAL: data directory "pgdata" has invalid permissions` means the
+directory is not mode 0700 or 0750; a `/raid` snapshot restore left every
+directory at 2755 in October 2026. `chmod 700 pgdata` and start again; the
+data is intact.
 
 If the cluster is corrupted or you want to start fresh:
 
