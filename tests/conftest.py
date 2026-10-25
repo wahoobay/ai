@@ -9,11 +9,16 @@ to apply — is the fix."""
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# The dashboard is imported as `app` (review_fixtures puts services/dashboard on
+# the path); the poller and the worker, whose packages are also called `app`,
+# are imported through the repository root as services.<service>.app.
+sys.path.insert(0, str(REPO_ROOT))
 
 # The services refuse to start without a site and a database address (the code
 # has no default site). The suite is not a site, so it names one here; tests

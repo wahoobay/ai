@@ -41,7 +41,7 @@ def _site(monkeypatch, **extra):
 
 
 def test_deployment_uri_is_required(monkeypatch):
-    from services.dashboard.app.config import settings
+    from app.config import settings
 
     _site(monkeypatch)
     monkeypatch.delenv("SENSESTREAM_DEPLOYMENT_URI")
@@ -59,7 +59,7 @@ def test_poller_deployment_uri_is_required(monkeypatch):
 
 
 def test_database_url_is_assembled_from_parts(monkeypatch):
-    from services.dashboard.app.config import settings
+    from app.config import settings
 
     _site(monkeypatch)
     monkeypatch.delenv("DATABASE_URL")
@@ -69,7 +69,7 @@ def test_database_url_is_assembled_from_parts(monkeypatch):
 
 
 def test_database_url_or_parts_are_required(monkeypatch):
-    from services.dashboard.app.config import settings
+    from app.config import settings
 
     _site(monkeypatch)
     monkeypatch.delenv("DATABASE_URL")
@@ -80,7 +80,7 @@ def test_database_url_or_parts_are_required(monkeypatch):
 
 
 def test_dashboard_config_carries_the_site(monkeypatch):
-    from services.dashboard.app.main import DashboardCfg
+    from app.main import DashboardCfg
 
     _site(monkeypatch)
     cfg = DashboardCfg()
@@ -96,7 +96,7 @@ def test_dashboard_config_carries_the_site(monkeypatch):
 
 
 def test_export_prefix_follows_location_id(monkeypatch):
-    from services.dashboard.app.config import settings
+    from app.config import settings
 
     _site(monkeypatch, LOCATION_ID="reef_b")
     assert settings().export_prefix == "reef_b"

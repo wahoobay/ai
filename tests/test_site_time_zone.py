@@ -10,7 +10,7 @@ APP = Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app"
 
 
 def test_review_windows_use_the_configured_time_zone(monkeypatch):
-    from services.dashboard.app import review_browse
+    from app import review_browse
 
     monkeypatch.setenv("TZ", "Pacific/Auckland")
     assert review_browse.local_day_start(date(2026, 1, 1)).tzinfo == ZoneInfo("Pacific/Auckland")
@@ -32,7 +32,7 @@ def test_pages_hand_the_browser_the_site_time_zone():
 
 
 def test_the_app_publishes_its_zone_to_the_templates(monkeypatch):
-    from services.dashboard.app import main
+    from app import main
 
     monkeypatch.setenv("SENSESTREAM_DEPLOYMENT_URI", "site_x")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h:5432/d")
