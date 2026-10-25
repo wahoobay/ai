@@ -14,7 +14,7 @@
     <h1><a href="/">Wahoo Bay · Live Fish ID</a></h1>
     <nav class="admin-nav" aria-label="Pages">
       <a href="/">Dashboard</a>
-      <a href="/review">Review</a>
+      {% if feature_review_tool %}<a href="/review">Review</a>{% endif %}
       <span class="admin-me">Signed in as <b>{{ me }}</b></span>
     </nav>
     <div id="theme-controls" class="theme-controls"></div>

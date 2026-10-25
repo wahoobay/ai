@@ -24,11 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # the path); the poller and the worker, whose packages are also called `app`,
 # are imported through the repository root as services.<service>.app.
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "services"))  # `common`, shared by the services
 
 # The services refuse to start without a site and a database address (the code
 # has no default site). The suite is not a site, so it names one here; tests
 # that need a real database still set DATABASE_URL to TEST_DATABASE_URL.
 os.environ.setdefault("SENSESTREAM_DEPLOYMENT_URI", "test_site")
+os.environ.setdefault("FEATURE_REVIEW_TOOL", "true")  # the suite exercises the review tool
 os.environ.setdefault("DATABASE_URL", "postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay")
 
 # The test database DSN can be handed over in a file rather than the

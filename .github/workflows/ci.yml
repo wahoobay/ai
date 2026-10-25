@@ -83,7 +83,7 @@ jobs:
         run: pip install -r services/sensestream_poller/requirements.txt
       - name: Smoke-import dashboard.app
         env:
-          PYTHONPATH: services/dashboard
+          PYTHONPATH: services/dashboard:services
           DATABASE_URL: postgresql://wahoobay:wahoobay@localhost:5432/wahoobay
         run: python -c "from app import main; print('dashboard ok')"
       - name: Smoke-import poller.app
@@ -99,8 +99,8 @@ jobs:
 
   # -------------------------------------------------------------------
   # Build (and on main, push) container images. Matrix over the three
-  # services. Worker gets placeholder model files so the COPY layer
-  # succeeds without checking 400 MB of weights into git.
+  # services. No weights travel in the worker image: its entrypoint fetches
+  # them from MODELS_URL at start.
   # -------------------------------------------------------------------
   build-image:
     needs: [lint, smoke-test]
@@ -118,19 +118,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /opt/hostedtoolcache /usr/local/share/boost
           df -h
-
-      - name: Create placeholder model files
-        if: matrix.service == 'worker'
-        run: |
-          mkdir -p data/models/detector_v26 data/models/classifier_v0_10_2
-          : > data/models/detector_v26/model.pt
-          echo '{"placeholder": true}' > data/models/detector_v26/info.json
-          : > data/models/classifier_v0_10_2/model.pt
-          echo '{"placeholder": true}' > data/models/classifier_v0_10_2/info.json
-          echo "# CI placeholder; real bundle fetched at deploy time." \
-            > data/models/classifier_v0_10_2/inference.py
-          echo "# CI placeholder" \
-            > data/models/classifier_v0_10_2/requirements.txt
 
       - uses: docker/setup-buildx-action@v3
 

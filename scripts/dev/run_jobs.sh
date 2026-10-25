@@ -15,7 +15,7 @@ fi
 export DATABASE_URL="${DATABASE_URL:-postgresql://wahoobay:wahoobay@127.0.0.1:5432/wahoobay}"
 export SENSESTREAM_DEPLOYMENT_URI="${SENSESTREAM_DEPLOYMENT_URI:-wahoo_2}"
 export WORKER_URL="${WORKER_URL:-http://127.0.0.1:8081}"
-export PYTHONPATH="$(pwd)/services/dashboard:${PYTHONPATH:-}"
+export PYTHONPATH="$(pwd)/services/dashboard:$(pwd)/services:${PYTHONPATH:-}"
 INTERVAL="${JOBS_INTERVAL_S:-60}"
 
 while true; do

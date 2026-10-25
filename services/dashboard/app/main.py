@@ -82,6 +82,7 @@ from .exports import (
     hide_pending_spot_checks,
     query_for,
 )
+from .frames import frame_exists, open_frame
 from .review_queue import ReviewError, legacy_verdict, submit_verdict
 from .sheet_poller import SheetPoller
 from .stats import (
@@ -113,7 +114,7 @@ TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 def _crop_roi(
-    image_path: Path,
+    image_path: str,
     bbox: list[int],
     pad_frac: float,
     max_edge: int,
@@ -126,7 +127,7 @@ def _crop_roi(
     Output is downscaled so the longer edge is at most `max_edge` px.
     """
     x1, y1, x2, y2 = bbox
-    with Image.open(image_path) as src:
+    with Image.open(open_frame(image_path)) as src:
         src.load()
         W, H = src.size
         w = max(1, x2 - x1)
@@ -145,13 +146,13 @@ def _crop_roi(
     return roi
 
 
-def _resize_frame(image_path: Path, max_edge: int) -> Image.Image:
+def _resize_frame(image_path: str, max_edge: int) -> Image.Image:
     """Return the source frame downscaled so the longest edge is at most
     ``max_edge`` pixels. No bbox is drawn. Used by the reviewer modal's
     edit-bbox mode — the SVG overlay handles the bbox interactively, so
     the underlying image must be unannotated.
     """
-    with Image.open(image_path) as src:
+    with Image.open(open_frame(image_path)) as src:
         src.load()
         frame = src.convert("RGB").copy()
     W, H = frame.size
@@ -162,7 +163,7 @@ def _resize_frame(image_path: Path, max_edge: int) -> Image.Image:
 
 
 def _annotate_frame(
-    image_path: Path,
+    image_path: str,
     bbox: list[int],
     label: str | None,
     max_edge: int,
@@ -176,7 +177,7 @@ def _annotate_frame(
     from PIL import ImageDraw, ImageFont
 
     x1, y1, x2, y2 = bbox
-    with Image.open(image_path) as src:
+    with Image.open(open_frame(image_path)) as src:
         src.load()
         frame = src.convert("RGB").copy()
     W, H = frame.size
@@ -295,6 +296,14 @@ class DashboardCfg:
         self.db_timeout_s = float(_env("DASHBOARD_DB_TIMEOUT_S", "5"))
 
         # --- review tool (docs/superpowers/specs/2026-09-24-...) ---
+        # The volunteer review tool (routes, pool task, admin link) is a
+        # feature of a site with reviewers; a public-only instance leaves
+        # it off. Off is the code's default; the launchers turn it on.
+        self.feature_review_tool = _env("FEATURE_REVIEW_TOOL", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         repo_root = Path(__file__).resolve().parents[3]
         # The rollback switch: the usual spellings of "off" all work;
         # anything else, or unset, leaves the pool on.
@@ -362,6 +371,7 @@ def build_app() -> FastAPI:
     # Every page tells the browser the site's zone (<html data-tz>), so the
     # time helpers in time-et.js / review-core.js format in it.
     TEMPLATES.env.globals["tz"] = cfg.tz
+    TEMPLATES.env.globals["feature_review_tool"] = cfg.feature_review_tool
 
     state: dict = {}
 
@@ -504,7 +514,7 @@ def build_app() -> FastAPI:
 
         state["review_catalogue"] = CatalogueStore(cfg.review_catalogue_paths())
         review_task: asyncio.Task | None = None
-        if state.get("pool") is not None:
+        if cfg.feature_review_tool and state.get("pool") is not None:
             state["review_pool"] = ReviewPool(
                 state["pool"],
                 PoolSettings.from_cfg(cfg),
@@ -599,9 +609,10 @@ def build_app() -> FastAPI:
 
     app.include_router(build_admin_users_router(cfg, state, TEMPLATES))
 
-    from .routes_review import build_review_router
+    if cfg.feature_review_tool:
+        from .routes_review import build_review_router
 
-    app.include_router(build_review_router(cfg, state, TEMPLATES))
+        app.include_router(build_review_router(cfg, state, TEMPLATES))
 
     from .auth import effective_role, make_optional_user
 
@@ -994,14 +1005,13 @@ def build_app() -> FastAPI:
                 {"error": "no frame saved for this detection"},
                 status_code=404,
             )
-        path = Path(image_path)
-        if not path.exists():
-            return JSONResponse({"error": "frame file missing on disk"}, status_code=404)
+        if not frame_exists(image_path):
+            return JSONResponse({"error": "frame file missing"}, status_code=404)
         try:
             img = await asyncio.get_running_loop().run_in_executor(
                 None,
                 _crop_roi,
-                path,
+                image_path,
                 bbox,
                 pad,
                 size,
@@ -1068,9 +1078,8 @@ def build_app() -> FastAPI:
                 {"error": "no frame saved for this detection"},
                 status_code=404,
             )
-        path = Path(image_path)
-        if not path.exists():
-            return JSONResponse({"error": "frame file missing on disk"}, status_code=404)
+        if not frame_exists(image_path):
+            return JSONResponse({"error": "frame file missing"}, status_code=404)
         label_parts = []
         if row.get("best_name"):
             label_parts.append(str(row["best_name"]))
@@ -1082,7 +1091,7 @@ def build_app() -> FastAPI:
                 img = await asyncio.get_running_loop().run_in_executor(
                     None,
                     _annotate_frame,
-                    path,
+                    image_path,
                     bbox,
                     label,
                     size,
@@ -1091,7 +1100,7 @@ def build_app() -> FastAPI:
                 img = await asyncio.get_running_loop().run_in_executor(
                     None,
                     _resize_frame,
-                    path,
+                    image_path,
                     size,
                 )
         except Exception as e:

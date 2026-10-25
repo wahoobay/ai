@@ -23,6 +23,7 @@ RUN apt-get update \
 COPY services/dashboard/requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt
 
+COPY services/common /app/common
 COPY services/dashboard/app /app/app
 
 # Schema migrations: `python -m app.migrate` (and the migrate Lambda) run them.

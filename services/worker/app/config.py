@@ -121,7 +121,8 @@ class Config:
     # persistence
     database_url: str
     events_log_dir: str
-    frames_dir: str
+    frames_dir: str  # legacy spelling; frames_url is what the saver uses
+    frames_url: str  # file:///data/frames locally, s3://<bucket>/ on AWS
     save_timelapse_seconds: int
     save_per_detection: bool
     save_interesting_only: bool
@@ -214,6 +215,7 @@ class Config:
             database_url=database_url_from_env(),
             events_log_dir=_str("EVENTS_LOG_DIR", "/data/logs/events"),
             frames_dir=_str("FRAMES_DIR", "/data/frames"),
+            frames_url=_str("FRAMES_URL", "") or "file://" + _str("FRAMES_DIR", "/data/frames"),
             save_timelapse_seconds=_int("SAVE_TIMELAPSE_SECONDS", 0),
             save_per_detection=_bool("SAVE_PER_DETECTION", False),
             save_interesting_only=_bool("SAVE_INTERESTING_ONLY", True),
