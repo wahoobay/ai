@@ -531,6 +531,7 @@ _VERDICT_NON_IDENTITY_COLUMNS = (
     "event_id",  # lookup key: only rows on this same box are compared
     "user_id",  # lookup key: only this user's own rows are compared
     "is_adjudication",  # filter: adjudications are never compared or deduplicated
+    "location_id",  # provenance: the site the verdict was recorded at, not what it says
     "review_item_id",  # which queue item served the box: a link (NULL on the dedup path)
     "session_id",  # which login recorded it, not what was answered
     "reviewer",  # who, not what: the user's display name (a legacy column)

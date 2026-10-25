@@ -21,6 +21,9 @@ RUN pip install -r /app/requirements.txt
 
 COPY services/dashboard/app /app/app
 
+# Schema migrations: `python -m app.migrate` (and the migrate Lambda) run them.
+COPY db /app/db
+
 # Static sidecar served by /api/export/camera_metadata.json. Ships with
 # the image so the dashboard works without bind-mounts.
 COPY data/camera_metadata.json /data/camera_metadata.json

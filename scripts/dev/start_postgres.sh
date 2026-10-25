@@ -40,6 +40,14 @@ psql -h 127.0.0.1 -p "$PORT" -d postgres -tc "SELECT 1 FROM pg_roles WHERE rolna
 psql -h 127.0.0.1 -p "$PORT" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='wahoobay'" | grep -q 1 \
   || psql -h 127.0.0.1 -p "$PORT" -d postgres -c "CREATE DATABASE wahoobay OWNER wahoobay"
 
-# Apply schema (idempotent)
-psql -h 127.0.0.1 -p "$PORT" -U wahoobay -d wahoobay -f db/init.sql >/dev/null
+# Schema: Alembic brings the database to the current revision. A database that
+# predates Alembic (built by the old db/init.sql -- the DGX) is stamped at the
+# baseline first, so only the newer revisions run. alembic comes with
+# services/dashboard/requirements.txt.
+LOCAL_DATABASE_URL="postgresql://wahoobay:wahoobay@127.0.0.1:$PORT/wahoobay"
+if psql -h 127.0.0.1 -p "$PORT" -U wahoobay -d wahoobay -tAc \
+     "SELECT to_regclass('alembic_version') IS NULL AND to_regclass('detection_events') IS NOT NULL" | grep -q t; then
+  DATABASE_URL="$LOCAL_DATABASE_URL" alembic -c db/alembic.ini stamp 0001
+fi
+DATABASE_URL="$LOCAL_DATABASE_URL" alembic -c db/alembic.ini upgrade head
 echo "postgres ready: postgresql://wahoobay:wahoobay@127.0.0.1:$PORT/wahoobay"

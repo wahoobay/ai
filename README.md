@@ -170,7 +170,7 @@ their own table and are the seed corpus for the next training run.
 │   └── dev/                             start_postgres.sh, run_worker.sh, run_worker_pier.sh,
 │                                        run_dashboard.sh, run_poller.sh, stop_postgres.sh
 │
-├── db/init.sql                     All tables + indexes + matviews; idempotent
+├── db/                             Alembic: alembic.ini + migrations/versions/ (0001_baseline.sql = all tables, indexes, matviews)
 │
 ├── data/                           Gitignored or partially gitignored — see .gitignore
 │   ├── models/
@@ -319,7 +319,7 @@ as the system evolves.
 | Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard (or hand-edit `data/camera_negative_regions.json`); restart worker |
 | Curated Latin→common-name overrides | `services/dashboard/app/common_names.py` `COMMON_NAMES` dict (no restart hot-reload yet for the curated layer) |
 | Reviewer flow / correction modal | `services/dashboard/app/static/app.js` (`correctionFormHtml`, `submitCorrection`, `_enterBboxEdit`) |
-| Postgres schema | `db/init.sql` (idempotent on an idle database — but **not** safe to re-run against the live one: its `CREATE OR REPLACE VIEW`s lock views the dashboard is reading). For a live DB change, apply only your new statements in one guarded transaction and update init.sql too — see "Applying a schema change to the live database" in `docs/operations.md`. |
+| Postgres schema | Alembic revisions in `db/migrations/versions/`: `alembic -c db/alembic.ini upgrade head` (see docs/operations.md, "Applying a schema change to the live database") |
 
 ---
 

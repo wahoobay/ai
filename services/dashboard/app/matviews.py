@@ -7,7 +7,7 @@ request. This module owns the refresh loop that keeps the matview from
 going stale.
 
 Refresh uses `CONCURRENTLY` so reads are never blocked. That requires a
-unique index on the matview, which db/init.sql already creates on
+unique index on the matview, which the baseline migration already creates on
 track_id.
 """
 
@@ -56,7 +56,7 @@ class MatviewRefresher:
 
     async def run_forever(self) -> None:
         log.info("matview refresher: cadence=%.0fs targets=%s", self.interval_s, list(self.names))
-        # Don't run an initial refresh on startup — db/init.sql already
+        # Don't run an initial refresh on startup — the baseline migration already
         # creates the matview WITH DATA, so the first read sees fresh data
         # already; sleep through the first cadence before refreshing.
         while True:

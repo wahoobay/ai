@@ -391,11 +391,12 @@ privilege).
 
 ---
 
-## Schema (`db/init.sql`)
+## Schema (Alembic: `db/alembic.ini`, `db/migrations/versions/`)
 
-Idempotent (every `CREATE` is `IF NOT EXISTS`, every `ALTER` is
-`ADD COLUMN IF NOT EXISTS`). Re-running the file always converges the
-schema to the current state. See [`docs/data_pipeline.md`](data_pipeline.md)
+`0001_baseline.sql` is the whole schema as `db/init.sql` used to build it;
+later revisions add to it (0002: `location_id` on every data table).
+`alembic -c db/alembic.ini upgrade head` brings any database to the current
+revision. See [`docs/data_pipeline.md`](data_pipeline.md)
 for the column-by-column reference.
 
 | Table | What it holds | Written by |
@@ -454,7 +455,7 @@ Common changes, with the file you'd touch:
 
 | Change | Where |
 |---|---|
-| Add a new column to `detection_events` | `db/init.sql` (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) + apply to the live DB + update `services/worker/app/persistence.py` `PgWriter.record_detections` |
+| Add a new column to `detection_events` | a new Alembic revision in `db/migrations/versions/` (`ADD COLUMN IF NOT EXISTS`), applied with `alembic upgrade head` + update `services/worker/app/persistence.py` `PgWriter.record_detections` |
 | Add a new SLO rule | `services/dashboard/app/alerts.py` `SLO_RULES` list |
 | Add a CSV export | `services/dashboard/app/exports.py` (new streamer) + `services/dashboard/app/main.py` (new endpoint) + `services/dashboard/app/templates/index.html` (new button) |
 | Add a new view to the Reports panel | `services/dashboard/app/templates/index.html` (new tab + panel) + `services/dashboard/app/static/app.js` (`tickReports` dispatcher + renderer) + any new API endpoints |

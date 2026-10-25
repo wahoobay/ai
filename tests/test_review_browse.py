@@ -362,13 +362,14 @@ async def test_agreement_numbers(rdb, tmp_path):
     assert a["by_label_source"]["model_guess"]["pairs"] == 2
 
 
-async def test_the_window_end_day_is_inclusive_in_local_time(rdb, tmp_path):
+async def test_the_window_end_day_is_inclusive_in_local_time(rdb, tmp_path, monkeypatch):
     """Review Focus 4: 2026-06-25 22:00 EDT (2026-06-26T02:00Z) is inside
     a window ending 2026-06-25. That instant is AFTER UTC midnight on the
     26th, so a naive UTC-only end check -- which a 2026-06-25T22:00Z
     fixture couldn't tell apart from the correct local-time one, since
     both are before UTC midnight either way -- would wrongly retire it
-    too (fix round 1, finding 9a)."""
+    too (fix round 1, finding 9a). The site's zone comes from TZ."""
+    monkeypatch.setenv("TZ", "America/New_York")
     boss = await make_user(rdb, "boss", role="admin")
     inside = await seed_frame(
         rdb,

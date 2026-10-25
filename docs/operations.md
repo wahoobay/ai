@@ -63,11 +63,11 @@ mkdir -p logs/app
 
 # 1. postgres
 ./scripts/dev/start_postgres.sh
-# Starts the cluster if not running, then applies ALL of db/init.sql —
-# on every run, even when postgres was already up. Safe here because
-# nothing is reading the database yet. Do NOT run it against a live,
-# in-use cluster "to be safe": see "Applying a schema change to the
-# live database" below for why, and for what to do instead.
+# Starts the cluster if not running, then brings the schema to the current
+# Alembic revision (`alembic upgrade head`; a database that predates Alembic
+# is stamped at the baseline first). Safe here because nothing is reading
+# the database yet. Do NOT run it against a live, in-use cluster "to be
+# safe": see "Applying a schema change to the live database" below.
 
 # 2. workers (one per camera)
 nohup ./scripts/dev/run_worker.sh      > logs/app/worker.log      2>&1 &
@@ -233,7 +233,7 @@ IDs restart at 1 after the restart.
 | Dashboard Python code | dashboard | **Yes** — restart dashboard |
 | Worker Python code | worker(s) | **Yes** — restart worker(s) |
 | `.env` value | depends on knob — all if shared | **Yes** for the affected service(s) |
-| `db/init.sql` | none directly | **No** — but the new DDL must also reach the running DB. Apply *only the new statements*, never the whole file — see "Applying a schema change to the live database" below |
+| A new Alembic revision in `db/migrations/versions/` | none directly | **No** — but the running DB needs it: `alembic -c db/alembic.ini upgrade head` with the care described in "Applying a schema change to the live database" below |
 | `data/camera_negative_regions.json` (polygon mask) | worker(s) | **Yes** — workers load the file at subprocess startup |
 | `assets/celebrities.json` | dashboard | **No** — hot-reloaded automatically by the sheet poller; manual force: `POST /api/admin/refresh_sheets` |
 | `assets/species_manifest.json` (common-name fallbacks) | dashboard | **No** — same hot-reload path |
@@ -242,68 +242,50 @@ IDs restart at 1 after the restart.
 
 ### Applying a schema change to the live database
 
-`db/init.sql` is **idempotent** — re-running it converges the schema —
-but that is not the same as **safe to re-run against a database that
-is serving traffic**. Don't `psql -f db/init.sql` against the live
-cluster, and don't run `start_postgres.sh` "to be safe" while the
-dashboard and workers are up (it applies the whole file too).
+The schema is owned by Alembic: `db/alembic.ini` and `db/migrations/versions/`.
+`0001_baseline.sql` is the schema the old `db/init.sql` used to build (with
+the `saved_frames` ALTERs placed after the table they alter, so a fresh
+database gets every column); later revisions are small and additive.
+`alembic` comes with `services/dashboard/requirements.txt`.
 
-Why: the file contains four `CREATE OR REPLACE VIEW` statements
-(`frame_stats_hourly`, `frame_stats_drift`, `species_sightings`,
-`species_counts_hourly`). Replacing a view takes an `ACCESS EXCLUSIVE`
-lock even when the definition is unchanged. The dashboard reads those
-views constantly, and the matview refresher runs
-`REFRESH MATERIALIZED VIEW CONCURRENTLY` over a multi-GB view for
-anywhere from tens of seconds to minutes. The replacement queues behind
-that refresh — and while it queues, **every other query on that view
-queues behind it**. The public species endpoints stall for the length
-of the refresh.
+- **Fresh database**: `alembic -c db/alembic.ini upgrade head`. This is what
+  `start_postgres.sh`, the compose `migrate` service (`make migrate`) and the
+  AWS migrate Lambda run.
+- **The DGX database** (built by `init.sql` over the years, no
+  `alembic_version` table): one-time `alembic -c db/alembic.ini stamp 0001`,
+  then `upgrade head`. `start_postgres.sh` does exactly this itself when it
+  finds the tables but no `alembic_version`, so a cold start needs nothing
+  extra. Revision 0002 (`location_id` on every data table) adds the column as
+  a catalog-only change and builds its indexes `CONCURRENTLY`, so it can run
+  while the workers write.
+- **Writing a change**: `alembic -c db/alembic.ini revision -m "<what>"`,
+  then fill in `upgrade()` / `downgrade()`. Keep statements idempotent
+  (`IF NOT EXISTS`), build large indexes `CONCURRENTLY` inside
+  `op.get_context().autocommit_block()` (0002 is the model), and never
+  re-run the baseline against a live database.
 
-**Changing a foreign key that points at `detection_events`** (adding
-is fine; dropping or swapping one is not) needs a brief `ACCESS EXCLUSIVE`
-lock on `detection_events`, and the dashboard's matview refresher keeps
-that table busy almost continuously. With the dashboard running, the
-statement just hits its `lock_timeout` (the review-tool migration did,
-2026-09-26). Stop the dashboard, apply the migration, then start it
-again: a few seconds of downtime.
+Why the care: `CREATE OR REPLACE VIEW` takes an `ACCESS EXCLUSIVE` lock even
+when the definition is unchanged. The dashboard reads the views constantly,
+and the matview refresher runs `REFRESH MATERIALIZED VIEW CONCURRENTLY` over
+a multi-GB view for anywhere from tens of seconds to minutes. A replacement
+queues behind that refresh, and **every other query on that view queues
+behind it** -- the public species endpoints stall for the length of the
+refresh. Changing a foreign key that points at `detection_events` (adding is
+fine; dropping or swapping one is not) needs a brief `ACCESS EXCLUSIVE` lock
+on `detection_events`, which the matview refresher keeps busy almost
+continuously: stop the dashboard, run the migration, start it again (a few
+seconds of downtime). A revision that must do either should set
+`lock_timeout` (`op.execute("SET lock_timeout = '5s'")`) so it gives up
+rather than queue behind a long refresh; a timed-out migration changed
+nothing and can be retried in a minute.
 
-Instead, apply only the statements you added, as one guarded
-transaction:
+Before touching production, see what a revision would do:
 
 ```bash
-# new_ddl.sql = just your new statements, prefixed with:
-#   SET lock_timeout = '5s';
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f new_ddl.sql
+alembic -c db/alembic.ini current          # what the database is at
+alembic -c db/alembic.ini history          # what exists
+alembic -c db/alembic.ini upgrade head --sql  # not supported here: read the revision instead
 ```
-
-- `-1` wraps the file in one transaction, and `ON_ERROR_STOP=1` makes
-  any failure roll the whole thing back — no half-applied schema.
-  (Without it, `psql -f` carries on past errors and still exits 0.)
-- `lock_timeout` makes it give up after 5 s rather than queue behind a
-  long refresh and block every reader behind it. If it times out,
-  nothing changed; retry in a minute.
-- Add the same statements to `db/init.sql` so a fresh deploy gets them.
-
-Before touching production, check what would actually be created — a
-statement in `init.sql` whose object already exists is a no-op, and one
-whose object is missing will do real work:
-
-```sql
--- objects init.sql declares that this database lacks
-SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
-UNION SELECT matviewname FROM pg_matviews
-UNION SELECT tablename FROM pg_tables WHERE schemaname = 'public';
-```
-
-**Known issue — fresh databases.** Three `ALTER TABLE saved_frames ADD
-COLUMN IF NOT EXISTS ...` statements (model_version, config_hash,
-pipeline_git_sha) appear *above* the `CREATE TABLE saved_frames` further
-down the file, so on an empty database they fail. `start_postgres.sh`
-applies the file without `ON_ERROR_STOP`, so the error scrolls past and
-the rest succeeds — leaving `saved_frames` **without those three
-columns**. Production has them only because the table already existed
-when those lines were added. Anyone standing up a fresh deployment
-should check `\d saved_frames` afterwards until the file is reordered.
 
 ---
 
@@ -665,7 +647,8 @@ added, how many probes it used, and any timeouts or errors.
 ### Schema
 
 The review tool's tables and columns are in
-`db/migrations/2026-09-24-review-tool.sql` (mirrored in `db/init.sql`).
+`db/migrations/2026-09-24-review-tool.sql` (part of the Alembic baseline,
+`db/migrations/versions/0001_baseline.sql`, so a fresh database has them).
 Apply it to the live database with the procedure in "Applying a schema
 change to the live database" above:
 

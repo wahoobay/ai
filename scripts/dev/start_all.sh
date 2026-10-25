@@ -28,8 +28,8 @@ done
 
 listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 
-# start_postgres.sh re-applies all of db/init.sql, which must not run
-# against a live cluster, so only call it when postgres is down.
+# start_postgres.sh runs the schema migrations (alembic upgrade head), which
+# should not run against a live cluster, so only call it when postgres is down.
 if listening 5432; then
   echo "postgres: already running"
 else

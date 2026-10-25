@@ -1,4 +1,4 @@
-.PHONY: help up down build rebuild ps logs psql worker-logs dashboard-logs poller-logs eval test
+.PHONY: help up migrate down build rebuild ps logs psql worker-logs dashboard-logs poller-logs eval test
 
 PY ?= python
 
@@ -7,6 +7,7 @@ help:
 	@echo ""
 	@echo "  Containerised stack (docker compose):"
 	@echo "    make up              start postgres + worker + dashboard + poller"
+	@echo "    make migrate         bring the database schema to the current revision (alembic upgrade head)"
 	@echo "    make down            stop the stack (volumes preserved)"
 	@echo "    make build           rebuild service images"
 	@echo "    make rebuild         build --no-cache"
@@ -26,8 +27,11 @@ help:
 
 # ----- containerised stack ----------------------------------------------
 
-up:
+up: migrate
 	docker compose up -d
+
+migrate:
+	docker compose --profile web run --rm migrate
 
 down:
 	docker compose down

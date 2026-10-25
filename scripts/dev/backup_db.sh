@@ -21,7 +21,17 @@ set -euo pipefail
 umask 077
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-BIN=/raid/scratch/dzimmerman2021/miniconda3/envs/wahoobay/bin
+# PostgreSQL client binaries: PG_BIN, else whatever pg_dump is on PATH, else the
+# DGX conda environment this script was written for.
+if [[ -n "${PG_BIN:-}" ]]; then
+  BIN="$PG_BIN"
+elif command -v pg_dump >/dev/null 2>&1; then
+  BIN="$(dirname "$(command -v pg_dump)")"
+else
+  BIN=/raid/scratch/dzimmerman2021/miniconda3/envs/wahoobay/bin
+fi
+# The Python that counts the CSV records (needs psycopg): PYTHON, else the DGX env.
+PYTHON="${PYTHON:-/raid/scratch/dzimmerman2021/miniconda3/envs/wahoobay/bin/python}"
 if [[ -n "${BACKUP_DATABASE_URL:-}" ]]; then
   DSN="$BACKUP_DATABASE_URL"
 else
@@ -62,7 +72,7 @@ mv "$DUMP.part" "$DUMP"
 mv "$LABELS.part" "$LABELS"
 
 # Count CSV records (notes may hold newlines, so not lines) against the table.
-ROWS="$("$BIN/python" -c 'import csv, gzip, sys
+ROWS="$("$PYTHON" -c 'import csv, gzip, sys
 print(sum(1 for _ in csv.reader(gzip.open(sys.argv[1], "rt", newline=""))) - 1)' "$LABELS")"
 EXPECT="$("$BIN/psql" "$DSN" -X -A -t -c "SELECT count(*) FROM detection_corrections")"
 if [[ "$ROWS" != "$EXPECT" ]]; then
