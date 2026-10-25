@@ -51,7 +51,9 @@ launch 8083  run_worker_pier.sh worker_pier.log
 launch 18080 run_dashboard.sh   dashboard.log
 launch 8082  run_poller.sh      poller.log
 # The jobs loop (matview refresh + alert rules) has no port; one copy is enough.
-if pgrep -f "scripts/dev/run_jobs.sh" >/dev/null 2>&1; then
+# -x with -f: the whole command line must match, so a shell, editor or pgrep
+# whose arguments merely mention the path does not count as the jobs loop.
+if pgrep -x -f '(\S*/)?bash (\S*/)?scripts/dev/run_jobs\.sh' >/dev/null 2>&1; then
   echo "run_jobs.sh: already running"
 else
   nohup ./scripts/dev/run_jobs.sh >> logs/app/jobs.log 2>&1 &
