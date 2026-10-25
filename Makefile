@@ -45,10 +45,12 @@ up-cpu: migrate
 migrate:
 	$(COMPOSE) --profile web run --rm --build migrate
 
-# The dashboard image runs the seed against the compose database; the sample and
-# the frames directory are mounted in, so the frames land where the dashboard reads them.
+# The dashboard image runs the seed against the compose database. The sample is
+# mounted in, and the host's frames directory is mounted writable at a path of
+# its own (the service's own /data/frames mount is read-only), so the frames
+# land where the running dashboard reads them.
 seed:
-	$(COMPOSE) --profile web run --rm --build -v ./data/sample:/data/sample:ro -v ./frames:/data/frames dashboard python -m app.seed --source file:///data/sample
+	$(COMPOSE) --profile web run --rm --build -e FRAMES_URL=file:///seed/frames -v ./data/sample:/seed/sample:ro -v ./frames:/seed/frames dashboard python -m app.seed --source file:///seed/sample
 
 down:
 	$(COMPOSE) $(ALL_PROFILES) down
