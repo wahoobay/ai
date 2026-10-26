@@ -27,7 +27,12 @@ secret() {
 
 db_json="$(secret "$WB_DB_SECRET_ARN")"
 cameras_json="$(secret "$WB_CAMERAS_SECRET")"
-origin_secret="$(secret "$WB_ORIGIN_SECRET_ARN")"
+# The stream origin's own header secret, by name (an existing host keeps its first host.env, so the name is
+# derived here); before it exists, the ARN host.env names.
+stream_secret_name="${WB_STREAM_SECRET_NAME:-/ai/${WB_LOCATION_ID}/${WB_ENV}/stream-origin-verify}"
+if ! origin_secret="$(secret "$stream_secret_name" 2>/dev/null)"; then
+  origin_secret="$(secret "$WB_ORIGIN_SECRET_ARN")"
+fi
 
 database_url="$(DB_JSON="$db_json" python3 -c '
 import json, os, urllib.parse
