@@ -22,6 +22,7 @@ case "$1 $2" in
       arn:db) echo '{"username":"ai","password":"pw","host":"db.local","port":5432,"dbname":"ai"}' ;;
       */cameras) echo '{"seahivecam":"rtsp://u:p@cam/x","pier":""}' ;;
       arn:origin) echo 'origin-secret' ;;
+      */stream-origin-verify) if [ "${FAKE_STREAM_SECRET:-0}" = "1" ]; then echo 'stream-secret'; else echo "ResourceNotFoundException" >&2; exit 254; fi ;;
       *) echo "unknown secret $id" >&2; exit 1 ;;
     esac ;;
   "ecr get-login-password") echo token ;;
@@ -163,6 +164,17 @@ def test_boot_reports_a_camera_that_sends_no_frames_but_still_succeeds(tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert "camera: no frame yet" in proc.stdout and "docker compose logs worker" in proc.stdout
     assert "readyz" in log.read_text()
+
+
+def test_boot_prefers_the_stream_origins_own_secret_when_it_exists(tmp_path):
+    """The stream origin got its own header secret (/ai/<location>/<env>/stream-origin-verify) after the first
+    hosts booted with the dashboard's origin secret in host.env. boot.sh looks the new one up by name, so an
+    existing host follows the change on its next boot.sh run, and falls back to host.env's ARN before it exists."""
+    proc, env_file, log = _boot(tmp_path, FAKE_STREAM_SECRET="1")
+    assert proc.returncode == 0, proc.stderr
+    assert "ORIGIN_VERIFY_SECRET='stream-secret'" in env_file.read_text()
+    assert "/ai/wahoobay/staging/stream-origin-verify" in log.read_text()
+    assert "stream-secret" not in proc.stdout + proc.stderr
 
 
 def test_boot_fails_when_the_worker_never_becomes_healthy(tmp_path):
