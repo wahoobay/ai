@@ -66,3 +66,52 @@ def test_dashboard_image_carries_boto3_for_s3_storage():
     requirements = (REPO / "services" / "dashboard" / "requirements.txt").read_text()
     assert "boto3==" in requirements
     assert importlib.util.find_spec("boto3") is not None
+
+
+def test_worker_image_carries_what_its_code_imports():
+    """The GPU host's first boot crash-looped on `ModuleNotFoundError: httpx` (and boto3 before it):
+    the DGX's conda environment had them, the image did not. Every third-party module the worker
+    and the shared code import must be named in the worker's requirements."""
+    import ast
+    import sys
+
+    aliases = {
+        "cv2": "opencv",
+        "PIL": "pillow",
+        "yaml": "pyyaml",
+        "psycopg_pool": "psycopg-pool",
+        "sklearn": "scikit-learn",
+    }
+    local = {
+        "app",
+        "common",
+        "services",
+        "fetch_models",
+        "inference",
+    }  # `inference`: the legacy classifier module loaded from /data/models
+    modules: set[str] = set()
+    for folder in ("services/worker/app", "services/common"):
+        for path in (REPO / folder).rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Import):
+                    modules.update(alias.name.split(".")[0] for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    modules.add(node.module.split(".")[0])
+    third_party = {m for m in modules if m not in sys.stdlib_module_names and m not in local}
+    requirements = "\n".join(
+        (REPO / "services" / "worker" / name).read_text().lower()
+        for name in ("requirements.txt", "requirements-cuda.txt")
+    )
+    pinned: set[str] = set()
+    for line in requirements.splitlines():
+        if "==" not in line or line.startswith("#"):
+            continue
+        name, _, extras = line.split("==")[0].strip().partition("[")
+        pinned.add(name)
+        pinned.update(
+            f"{name}-{extra.strip()}" for extra in extras.rstrip("]").split(",") if extra.strip()
+        )  # psycopg[pool] -> psycopg-pool
+    missing = sorted(
+        m for m in third_party if not any(p.startswith(aliases.get(m, m).lower()) for p in pinned)
+    )  # cv2 -> opencv-python-headless
+    assert not missing, f"imported by the worker but not in its requirements: {missing}"

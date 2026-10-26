@@ -33,3 +33,5 @@ pyyaml==6.0.3
 psycopg[binary,pool]==3.3.3
 # S3 for MODELS_URL and FRAMES_URL on AWS (common.storage imports it lazily); same pin as the dashboard.
 boto3==1.43.118
+# The PTZ poller (app/ptz.py) and the worker's HTTP client; same pin as the dashboard and the poller.
+httpx==0.28.1
