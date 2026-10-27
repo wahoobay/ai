@@ -177,6 +177,20 @@ def test_boot_prefers_the_stream_origins_own_secret_when_it_exists(tmp_path):
     assert "stream-secret" not in proc.stdout + proc.stderr
 
 
+def test_boot_prunes_dangling_images_before_the_pull_and_after_the_start(tmp_path):
+    """Every deploy pulls a ~14 GB worker image and left the previous one dangling: after four deploys the
+    100 GB root disk was 96% full and the next pull failed, taking the SSM document worker down with it
+    (2026-10-27). Dangling images are pruned before the pull (room for the new image next to the running
+    one) and again after the start (the image just replaced)."""
+    proc, _env, log = _boot(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    calls = log.read_text().splitlines()
+    prunes = [i for i, c in enumerate(calls) if c == "docker image prune -f"]
+    pull = next(i for i, c in enumerate(calls) if c.startswith("docker compose pull"))
+    up = next(i for i, c in enumerate(calls) if c.startswith("docker compose up -d"))
+    assert len(prunes) == 2 and prunes[0] < pull < up < prunes[1]
+
+
 def test_boot_fails_when_the_worker_never_becomes_healthy(tmp_path):
     proc, _, _ = _boot(tmp_path, FAKE_CURL_FAILS="1", BOOT_HEALTH_TIMEOUT_S="1")
     assert proc.returncode == 1 and "healthz" in proc.stdout + proc.stderr
