@@ -449,7 +449,7 @@ def build_auth_router(cfg, state, templates) -> APIRouter:
         "ok": True,
         "message": (
             "If that address has an account, a reset link is on its way."
-            if mailer.backend == "smtp"
+            if mailer.backend in ("smtp", "ses")  # the backends that send
             else "If that address has an account, an administrator can issue a reset "
             "link for it. Automatic email is not enabled on this deployment, so "
             "please contact an administrator."

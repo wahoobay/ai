@@ -1371,3 +1371,38 @@ async def test_forgot_password_message_is_honest_about_the_manual_backend(pool, 
     message = known.json()["message"]
     assert "on its way" not in message
     assert "administrator" in message.lower()
+
+
+@pytest.mark.anyio
+async def test_forgot_password_message_says_the_link_is_on_its_way_with_ses(pool, monkeypatch):
+    """2026-10-27, staging: the mail went out through SES and the page still said "Automatic email is
+    not enabled on this deployment", because the wording only recognised the smtp backend. Any backend
+    that actually sends gets the honest message; it stays identical for known and unknown addresses."""
+    import boto3
+
+    from app.main import build_app
+
+    class _Sent:
+        def __init__(self, service, **kwargs):
+            assert service == "sesv2"
+
+        def send_email(self, **kwargs):
+            return {"MessageId": "0100-fake"}
+
+    monkeypatch.setattr(boto3, "client", _Sent)
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("DASHBOARD_COOKIE_SECURE", "false")
+    monkeypatch.setenv("DASHBOARD_MAIL_BACKEND", "ses")
+    monkeypatch.setenv("MAIL_BACKEND", "ses")
+    monkeypatch.setenv("MAIL_FROM", "no-reply@wahoobay.net")
+    await _make_user(pool, username="dan")
+
+    with TestClient(build_app()) as c:
+        known = c.post("/api/auth/forgot-password", json={"email": "dan@example.org"}, headers=CSRF)
+        unknown = c.post("/api/auth/forgot-password", json={"email": "ghost@example.org"}, headers=CSRF)
+
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json()
+    message = known.json()["message"]
+    assert "on its way" in message
+    assert "not enabled" not in message
