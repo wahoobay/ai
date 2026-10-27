@@ -170,6 +170,60 @@ def test_smtp_backend_sends_one_message(monkeypatch):
     assert context.verify_mode == ssl.CERT_REQUIRED
 
 
+class _FakeSes:
+    """boto3's SESv2 client as the mailer uses it; records the calls, can fail on demand."""
+
+    calls: list[dict] = []
+    fail = False
+
+    def __init__(self, service, **kwargs):
+        assert service == "sesv2"
+        self.kwargs = kwargs
+
+    def send_email(self, **kwargs):
+        if _FakeSes.fail:
+            raise RuntimeError("MessageRejected: sandbox")
+        _FakeSes.calls.append(kwargs)
+        return {"MessageId": "0100-fake"}
+
+
+def test_ses_backend_sends_one_message_through_the_role(monkeypatch):
+    """On AWS the dashboard mails through SES with its own role: no SMTP host, no credentials."""
+    import boto3
+
+    _FakeSes.calls, _FakeSes.fail = [], False
+    monkeypatch.setattr(boto3, "client", _FakeSes)
+    m = Mailer(
+        backend="ses",
+        smtp=None,
+        from_addr="no-reply@wahoobay.net",
+        base_url="https://staging-ai.wahoobay.net",
+    )
+    assert m.backend == "ses"
+    assert m.send("someone@example.org", "Verify your account", "Body text") == "ses"
+    (call,) = _FakeSes.calls
+    assert call["FromEmailAddress"] == "no-reply@wahoobay.net"
+    assert call["Destination"] == {"ToAddresses": ["someone@example.org"]}
+    assert call["Content"]["Simple"]["Subject"]["Data"] == "Verify your account"
+    assert call["Content"]["Simple"]["Body"]["Text"]["Data"] == "Body text"
+
+
+def test_ses_delivery_failure_holds_the_message_like_smtp(monkeypatch):
+    import boto3
+
+    _FakeSes.calls, _FakeSes.fail = [], True
+    monkeypatch.setattr(boto3, "client", _FakeSes)
+    m = Mailer(
+        backend="ses", smtp=None, from_addr="no-reply@wahoobay.net", base_url="https://x.org"
+    )
+    assert m.send("someone@example.org", "Hello", "Body") == "manual"
+
+
+def test_ses_backend_needs_a_from_address():
+    m = Mailer(backend="ses", smtp=None, from_addr="", base_url="https://x.org")
+    assert m.backend == "manual"  # misconfigured: hold the mail, never guess a sender
+
+
 def test_smtp_messages_carry_a_date_and_a_message_id(monkeypatch):
     # 2026-09-26: Gmail silently dropped the dashboard's confirmation
     # emails. The relay (Resend) accepted them, but Gmail refuses
