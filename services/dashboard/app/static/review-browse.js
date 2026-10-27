@@ -1,7 +1,7 @@
 // services/dashboard/app/static/review-browse.js
 // Browse: headline counts, filters, a grid of boxes with their status and
 // species progress; for administrators, disputes, agreement, the date
-// window and pool status.
+// and pool status.
 //
 // Adapted from the phase-1 brief to the server's real behaviour (Tasks
 // 9's review and this task's own reading of routes_review.py /
@@ -10,11 +10,11 @@
 // is shown as a note, not an error; progress and browse can both answer
 // 503 under load, so a failed progress load offers a retry instead of
 // leaving the view dead; and the two mutating admin actions (settling a
-// dispute, saving or clearing the date window) get the same busy guard,
+// dispute) get the same busy guard,
 // reset in `finally`, that submit()/skip()/reopen() and
 // answerModel()/saveAddedBox()/removeAddedBox()/complete() use in the
 // single-box and whole-frame views, so a double click can't fire two
-// overlapping requests for the same box or window save.
+// overlapping requests for the same box.
 "use strict";
 
 RV.views.browse = (() => {
@@ -172,12 +172,11 @@ RV.views.browse = (() => {
       RV.el("h3", { text: "Administrator" }),
       disputesPanel(disputes.ok ? disputes.data.disputes : []),
       agreementPanel(agreement.ok ? agreement.data : null),
-      windowPanel(status.ok ? status.data.window : { start: null, end: null }),
       statusPanel(status.ok ? status.data : null));
   }
 
   // Shared by disputesPanel()'s "Use answer" / "Relabel…" buttons and
-  // windowPanel()'s save()/clear(): both are the browse view's mutating
+  // (the browse view's mutating
   // admin actions (spec parity with submit()/skip()/reopen() in
   // review-single.js and answerModel()/saveAddedBox()/removeAddedBox()/
   // complete() in review-frame.js), so a double click can't fire two
@@ -229,45 +228,6 @@ RV.views.browse = (() => {
       RV.el("ul", {}, Object.entries(a.by_label_source).map(([k, b]) =>
         RV.el("li", { text: `When the first volunteer ${how[k] || k}: ${fmt(b)}` }))));
     return panel;
-  }
-
-  function windowPanel(w) {
-    // Stored start: local midnight of the first day. Stored end: local
-    // midnight of the day AFTER the last day (the end day is inclusive).
-    const day = (iso) => (iso ? iso.slice(0, 10) : "");
-    const dayBefore = (iso) => {
-      if (!iso) return "";
-      const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
-      d.setUTCDate(d.getUTCDate() - 1);
-      return d.toISOString().slice(0, 10);
-    };
-    const start = RV.el("input", { type: "date", value: day(w.start) });
-    const end = RV.el("input", { type: "date", value: dayBefore(w.end) });
-    // GET /api/review/settings/window and PUT both take plain (local,
-    // date-only) dates -- WindowIn.start/end are `date`, not `datetime`
-    // (services/dashboard/app/review_browse.py) -- so an <input
-    // type="date">'s own "YYYY-MM-DD" value is exactly what the endpoint
-    // accepts; the server itself converts to the tz-aware local-midnight
-    // ISO string that's actually stored (set_window/local_day_start).
-    async function save(clear) {
-      if (busy) return;
-      busy = true;
-      try {
-        const body = clear ? { start: null, end: null } : { start: start.value || null, end: end.value || null };
-        const r = await RV.put("/api/review/settings/window", body);
-        if (!r.ok) { RV.toast(r.data.error || "Not saved."); return; }
-        RV.toast(`Window saved; ${r.data.retired} open boxes outside it were retired.`);
-        await loadAdmin();
-      } finally {
-        busy = false;
-      }
-    }
-    return RV.el("div", { class: "rv-panel" }, RV.el("h4", { text: "Date window" }),
-      RV.el("p", { class: "rv-muted",
-        text: "Only footage from these days (inclusive, local time) enters the queue. Live water readings exist from 2026-05-17 to 2026-06-25." }),
-      RV.el("div", { class: "rv-row rv-small" }, "From ", start, " to ", end,
-        RV.el("button", { type: "button", onclick: () => save(false) }, "Save"),
-        RV.el("button", { type: "button", onclick: () => save(true) }, "Clear")));
   }
 
   function statusPanel(s) {

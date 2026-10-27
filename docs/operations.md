@@ -728,8 +728,7 @@ added, how many probes it used, and any timeouts or errors.
 
 - **Status:** `GET /api/review/status` (admin) shows the last run, item
   counts broken down by lane/pass/status, how many open items still
-  lack model hints, and the date window. The Browse tab shows the same
-  to admins.
+  lack model hints. The Browse tab shows the same to admins.
 - **Progress and browse under load:** `GET /api/review/progress`
   answers with `"stale": true` when the pool's own progress refresh
   (training-set baseline + verified-box counts) hits its statement
@@ -741,14 +740,14 @@ added, how many probes it used, and any timeouts or errors.
   the dashboard (`0`, `no` and `off` work too, in any case; any other
   value leaves it on). Queued boxes keep being served; nothing new is
   added.
-- **Date window:** admins can limit the queue to a range of days on the
-  Browse tab (for example 2026-05-17 to 2026-06-25, the period with live
-  sonde readings) via `PUT /api/review/settings/window`. Open pass-1
-  boxes outside the window are retired at once (pass-2 spot-checks are
-  unaffected). **Narrowing the window retires boxes permanently:** the
-  pool never re-adds an event that already has a `review_items` row,
-  retired or not, so widening the window back out later does not bring
-  those boxes back — only newly-probed events fill the queue back in.
+- **Date window:** each reviewer can limit *their own* queue to a range of
+  days with the From/To pickers in the review page's header. The choice
+  lives in that browser tab (session storage) and travels with each claim
+  request (`GET /api/review/next?date_from=…&date_to=…`, local days,
+  inclusive); nothing is stored on the server, nothing is retired, and
+  other reviewers are unaffected. Until 2026-10-27 the window was one
+  shared setting that retired boxes outside it for everyone; migration
+  0004 reopened what it had retired.
 - **Before enabling on production:** run
   `scripts/dev/explain_review_probes.py --env <path to .env>` against
   the live database first. It `EXPLAIN`s (never executes) the pool's

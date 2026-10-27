@@ -465,6 +465,44 @@ RV.setMode = function setMode(value) {
   }
 };
 
+// ---- the reviewer's own date window ------------------------------------------------
+// Days (local, inclusive) this reviewer wants boxes from. It lives in sessionStorage, so it
+// dies with the tab, and it rides on each /next request: the server stores nothing and
+// retires nothing for it. (Until 2026-10-27 one shared, stored window decided the queue for
+// everyone and, left at a sample's dates, kept it empty.)
+RV.WINDOW_KEY = "rv.window";
+RV.windowValue = null;
+
+RV.window = function reviewWindow() {
+  if (RV.windowValue) return RV.windowValue;
+  try {
+    const stored = JSON.parse(window.sessionStorage.getItem(RV.WINDOW_KEY) || "null");
+    if (stored && typeof stored === "object") {
+      return { from: String(stored.from || ""), to: String(stored.to || "") };
+    }
+  } catch (err) {
+    /* storage blocked or unreadable: no window */
+  }
+  return { from: "", to: "" };
+};
+
+RV.setWindow = function setWindow(value) {
+  RV.windowValue = { from: String(value.from || ""), to: String(value.to || "") };
+  try {
+    window.sessionStorage.setItem(RV.WINDOW_KEY, JSON.stringify(RV.windowValue));
+  } catch (err) {
+    /* storage blocked: the in-memory value still applies in this tab */
+  }
+};
+
+RV.windowQuery = function windowQuery() {
+  const w = RV.window();
+  let q = "";
+  if (w.from) q += `&date_from=${encodeURIComponent(w.from)}`;
+  if (w.to) q += `&date_to=${encodeURIComponent(w.to)}`;
+  return q;
+};
+
 // ---- the next piece of work ------------------------------------------------------
 // The one place /api/review/next is called, so a box is never claimed
 // twice. A spot-check (item.pass 2; its item.lane is null) always goes to
@@ -498,7 +536,7 @@ RV.next = async function next(startToken) {
   try {
     await turn;
     if (token !== RV.navToken) return;       // superseded before it asked
-    r = await RV.get(`/api/review/next?lane=${encodeURIComponent(RV.lane)}`);
+    r = await RV.get(`/api/review/next?lane=${encodeURIComponent(RV.lane)}${RV.windowQuery()}`);
     if (token !== RV.navToken) {             // superseded while it asked
       if (r.ok && r.data.item) await RV.post(`/api/review/items/${r.data.item.id}/release`);
       return;
@@ -595,6 +633,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         await RV.show(view);
       }
     });
+  }
+  const fromDay = document.getElementById("rv-window-from");
+  const toDay = document.getElementById("rv-window-to");
+  if (fromDay && toDay) {
+    const w = RV.window();
+    fromDay.value = w.from;
+    toDay.value = w.to;
+    const apply = async () => {
+      RV.setWindow({ from: fromDay.value, to: toDay.value });
+      if (!RV.lane) return;                 // Browse keeps its own From/To filters
+      await RV.releaseAll();                // the box in hand may be outside the new window
+      await RV.next();
+    };
+    fromDay.addEventListener("change", apply);
+    toDay.addEventListener("change", apply);
+    const clear = document.getElementById("rv-window-clear");
+    if (clear) clear.addEventListener("click", () => { fromDay.value = ""; toDay.value = ""; apply(); });
   }
   if (!(await RV.loadCatalogue())) {
     RV.banner("Couldn't load the species list. Reload the page to try again.");

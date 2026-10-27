@@ -17,6 +17,10 @@
       <button type="button" data-lane="identify">Identify new fish</button>
       <button type="button" data-view="browse">Browse</button>
     </nav>
+    <label class="rv-meta rv-window" title="Only boxes from these days (local, inclusive) are handed to you. Yours alone; forgotten when this tab closes.">Days
+      <input type="date" id="rv-window-from" aria-label="From day"> to
+      <input type="date" id="rv-window-to" aria-label="To day">
+      <button type="button" id="rv-window-clear">Clear</button></label>
     <span class="rv-spacer"></span>
     <span class="rv-meta">This session: <b id="rv-session-count">0</b> answered</span>
     <span id="identity-chip" class="rv-meta"></span>

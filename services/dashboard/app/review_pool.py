@@ -3,7 +3,7 @@
 A background task in the dashboard's lifespan. Each run:
 
 1. refreshes the progress counts (training-set baseline + verified boxes);
-2. retires open items outside the admin's date window;
+2. (the reviewer's own date window is applied at claim time, never here);
 3. tops up the `check` lane species by species, thinnest first;
 4. tops up the `identify` lane with the largest unguessed box per frame.
 
@@ -156,29 +156,6 @@ def _area(bbox) -> int:
     return max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])
 
 
-async def read_window(conn) -> tuple[datetime | None, datetime | None]:
-    """The admin's date window as stored, or (None, None) when unset."""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT value FROM review_settings WHERE key = 'window'")
-        row = await cur.fetchone()
-    value = row[0] if row else None
-    if not value:
-        return None, None
-    start = datetime.fromisoformat(value["start"]) if value.get("start") else None
-    end = datetime.fromisoformat(value["end"]) if value.get("end") else None
-    return start, end
-
-
-async def retire_outside_window(conn, start: datetime, end: datetime) -> int:
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """UPDATE review_items SET status = 'retired', retired_reason = 'outside_window'
-                WHERE status = 'open' AND pass = 1 AND (ts < %s OR ts > %s)""",
-            (start, end),
-        )
-        return cur.rowcount
-
-
 class ReviewPool:
     def __init__(
         self,
@@ -200,13 +177,6 @@ class ReviewPool:
         self._baseline_catalogue: object = None
         self._verified: dict[str, int] = {}
         self._empty_until: dict[str, float] = {}
-        # The admin-configured window ((None, None) when unset), as of the
-        # last run that actually had a window to work with -- NOT the
-        # effective window _window() computes for probing, which moves
-        # every call through its now()-based end clamp and so would never
-        # compare equal twice. Comparing this one is what makes a skip
-        # survive a run that didn't change the setting.
-        self._last_window: tuple[datetime | None, datetime | None] | None = None
         self.last_run: dict | None = None
 
     # ---- progress ---------------------------------------------------------
@@ -312,31 +282,16 @@ class ReviewPool:
                 "check_added": 0,
                 "identify_added": 0,
                 "probes": 0,
-                "retired": 0,
                 "timeouts": 0,
                 "errors": 0,
             }
             try:
                 await self.refresh_progress()
                 async with self.db.connection() as conn:
-                    window, admin_window = await self._window(conn)
+                    window = await self._window(conn)
                     if window is None:
-                        stats["note"] = "no saved frames in the window yet"
+                        stats["note"] = "no saved frames yet"
                     else:
-                        # A real admin change (not the effective window's
-                        # own now()-based drift) makes any earlier "found
-                        # nothing" skip, or timeout backoff, unreliable --
-                        # it may have looked at data that's no longer, or
-                        # wasn't yet, in range.
-                        if admin_window != self._last_window:
-                            self._empty_until.clear()
-                            self._last_window = admin_window
-                        async with conn.transaction():
-                            await conn.execute(
-                                "SELECT set_config('statement_timeout', %s, true)",
-                                (str(self.s.statement_timeout_ms),),
-                            )
-                            stats["retired"] = await retire_outside_window(conn, *window)
                         # The lanes share one probe budget, so they take turns going
                         # first: the check lane alone can spend it all, which left
                         # "Identify new fish" empty for as long as the check lane
@@ -371,29 +326,20 @@ class ReviewPool:
             self.last_run = stats
             return stats
 
-    async def _window(
-        self, conn
-    ) -> tuple[tuple[datetime, datetime] | None, tuple[datetime | None, datetime | None]]:
-        """(effective, admin). `effective` is the window probes and retire
-        use -- start falls back to min(saved_frames.ts) when unset, end is
-        clamped to now - recent_exclusion_s -- or None when there's
-        nothing to work with yet. `admin` is exactly what's stored in
-        review_settings, unclamped, for run_once's change detection."""
+    async def _window(self, conn) -> tuple[datetime, datetime] | None:
+        """The span probes draw from: the oldest saved frame up to now minus recent_exclusion_s,
+        or None while there is nothing to work with. A reviewer's own date window is applied
+        when a box is claimed (review_queue.next_item), never here."""
         async with conn.transaction():
             await conn.execute(
                 "SELECT set_config('statement_timeout', %s, true)",
                 (str(self.s.statement_timeout_ms),),
             )
-            admin_start, admin_end = await read_window(conn)
-            start = admin_start
-            if start is None:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT min(ts) FROM saved_frames")
-                    start = (await cur.fetchone())[0]
-        latest = datetime.now(UTC) - timedelta(seconds=self.s.recent_exclusion_s)
-        end = min(admin_end, latest) if admin_end else latest
-        effective = None if start is None or start >= end else (start, end)
-        return effective, (admin_start, admin_end)
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT min(ts) FROM saved_frames")
+                start = (await cur.fetchone())[0]
+        end = datetime.now(UTC) - timedelta(seconds=self.s.recent_exclusion_s)
+        return None if start is None or start >= end else (start, end)
 
     def _exhausted(self, stats: dict, t0: float) -> bool:
         return stats["probes"] >= self.s.max_probes or time.monotonic() - t0 >= self.s.max_run_s

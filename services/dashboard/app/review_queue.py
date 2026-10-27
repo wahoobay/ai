@@ -139,12 +139,18 @@ _CLAIM = (
     "status = 'claimed', claimed_by = %(uid)s, "
     "claimed_until = now() + make_interval(secs => %(claim_s)s)"
 )
+# The reviewer's own date window (per session, never stored): bounds every claim, retires nothing.
+_IN_WINDOW = (
+    "(%(w_start)s::timestamptz IS NULL OR ri.ts >= %(w_start)s::timestamptz) "
+    "AND (%(w_end)s::timestamptz IS NULL OR ri.ts < %(w_end)s::timestamptz)"
+)
 _PASS1_SQL = f"""
     UPDATE review_items SET {_CLAIM}
      WHERE id = (
         SELECT ri.id FROM review_items ri
          WHERE ri.status = 'open' AND ri.pass = 1 AND ri.lane = %(lane)s
            AND {not_skipped("ri")}
+           AND {_IN_WINDOW}
          ORDER BY COALESCE(array_position(%(order)s::text[], ri.route_species), 1000000),
                   random()
          LIMIT 1
@@ -153,6 +159,7 @@ _PASS1_SQL = f"""
 """
 _SPOT_ELIGIBLE = f"""
     ri.status = 'open' AND ri.pass = 2
+    AND {_IN_WINDOW}
     AND ri.exclude_user_id IS DISTINCT FROM %(uid)s
     AND NOT EXISTS (SELECT 1 FROM detection_corrections c
                      WHERE c.event_id = ri.event_id AND c.user_id = %(uid)s)
@@ -185,7 +192,11 @@ async def next_item(
     claim_s: int,
     rng: random.Random,
     skip_ttl_days: int = SKIP_TTL_DAYS,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> dict | None:
+    """`window_start`/`window_end` (tz-aware; end exclusive) are the reviewer's own date window:
+    only boxes inside it are handed out, nothing outside it is touched."""
     if lane not in LANES:
         raise Invalid("unknown lane")
     params = {
@@ -194,6 +205,8 @@ async def next_item(
         "order": list(species_order),
         "claim_s": claim_s,
         "skip_days": skip_ttl_days,
+        "w_start": window_start,
+        "w_end": window_end,
     }
     async with conn.transaction():
         async with conn.cursor() as cur:
@@ -224,15 +237,28 @@ async def next_item(
         # outer WHERE of only `id = ...` would pass that re-check
         # regardless (id never changes), refreshing and returning a claim
         # that is no longer this volunteer's live one.
+        #
+        # The reviewer's own date window bounds what they are handed, held or fresh: a box held
+        # from before they narrowed it goes back to the queue first.
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"""UPDATE review_items SET status = 'open', claimed_by = NULL, claimed_until = NULL
+                     WHERE id IN (SELECT ri.id FROM review_items ri
+                                   WHERE ri.status = 'claimed' AND ri.claimed_by = %(uid)s
+                                     AND NOT ({_IN_WINDOW})
+                                   FOR UPDATE SKIP LOCKED)""",
+                params,
+            )
         held = await fetch_one(
             conn,
-            """
+            f"""
             UPDATE review_items
                SET claimed_until = now() + make_interval(secs => %(claim_s)s)
-             WHERE id = (SELECT id FROM review_items
-                          WHERE status = 'claimed' AND claimed_by = %(uid)s
-                            AND (lane = %(lane)s OR pass = 2)
-                          ORDER BY id LIMIT 1)
+             WHERE id = (SELECT ri.id FROM review_items ri
+                          WHERE ri.status = 'claimed' AND ri.claimed_by = %(uid)s
+                            AND (ri.lane = %(lane)s OR ri.pass = 2)
+                            AND {_IN_WINDOW}
+                          ORDER BY ri.id LIMIT 1)
                AND status = 'claimed' AND claimed_by = %(uid)s
             RETURNING *""",
             params,

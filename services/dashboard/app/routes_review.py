@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,14 +20,13 @@ from .auth import effective_role, make_require_role, require_csrf
 from .review_browse import (
     AdjudicateIn,
     BrowseFilters,
-    WindowIn,
+    _check_date,
     agreement,
     browse,
-    get_window,
     list_disputes,
+    local_day_start,
     pool_status,
     progress_summary,
-    set_window,
 )
 from .review_frames import (
     AddedBoxIn,
@@ -47,6 +46,7 @@ from .review_labels import resolve_all
 from .review_queue import (
     Conflict,
     FrameMissing,
+    Invalid,
     ReviewError,
     VerdictIn,
     build_payload,
@@ -115,12 +115,26 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         )
 
     @router.get("/api/review/next", dependencies=[Depends(require_csrf)])
-    async def next_box(lane: str = Query("check"), user=Depends(reviewer)):
+    async def next_box(
+        lane: str = Query("check"),
+        date_from: date | None = Query(None),
+        date_to: date | None = Query(None),
+        user=Depends(reviewer),
+    ):
+        """`date_from`/`date_to` are the reviewer's own date window (local days, inclusive), kept
+        in their browser session: only boxes inside it are handed out; nothing is stored or
+        retired for anyone (2026-10-27)."""
         pool_obj = _pool()
         order = pool_obj.species_order() if pool_obj else []
         empty = {"item": None, "pool": pool_obj.last_run if pool_obj else None}
         async with _db().connection() as conn:
             try:
+                _check_date(date_from, "date_from")
+                _check_date(date_to, "date_to")
+                if date_from and date_to and date_from > date_to:
+                    raise Invalid("the window starts after it ends")
+                window_start = local_day_start(date_from) if date_from else None
+                window_end = local_day_start(date_to + timedelta(days=1)) if date_to else None
                 for _attempt in range(5):
                     item = await next_item(
                         conn,
@@ -131,6 +145,8 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                         claim_s=cfg.review_claim_s,
                         rng=rng,
                         skip_ttl_days=cfg.review_skip_ttl_days,
+                        window_start=window_start,
+                        window_end=window_end,
                     )
                     if item is None:
                         return JSONResponse(empty)
@@ -501,20 +517,5 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def status(user=Depends(admin_only)):
         async with _db().connection() as conn:
             return JSONResponse(await pool_status(conn, pool_obj=_pool()))
-
-    @router.get("/api/review/settings/window")
-    async def window_get(user=Depends(admin_only)):
-        async with _db().connection() as conn:
-            return JSONResponse(await get_window(conn))
-
-    @router.put("/api/review/settings/window", dependencies=[Depends(require_csrf)])
-    async def window_put(body: WindowIn, user=Depends(admin_only)):
-        async with _db().connection() as conn:
-            try:
-                return JSONResponse(
-                    await set_window(conn, admin_id=user.id, start=body.start, end=body.end)
-                )
-            except ReviewError as e:
-                return _fail(e)
 
     return router

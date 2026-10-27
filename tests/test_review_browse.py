@@ -16,10 +16,9 @@ from app.review_browse import (
     list_disputes,
     pool_status,
     progress_summary,
-    set_window,
 )
 from app.review_catalogue import CatalogueStore
-from app.review_pool import PoolSettings, ReviewPool, read_window
+from app.review_pool import PoolSettings, ReviewPool
 from app.review_queue import Invalid
 from review_fixtures import (
     CSRF,
@@ -362,84 +361,6 @@ async def test_agreement_numbers(rdb, tmp_path):
     assert a["by_label_source"]["model_guess"]["pairs"] == 2
 
 
-async def test_the_window_end_day_is_inclusive_in_local_time(rdb, tmp_path, monkeypatch):
-    """Review Focus 4: 2026-06-25 22:00 EDT (2026-06-26T02:00Z) is inside
-    a window ending 2026-06-25. That instant is AFTER UTC midnight on the
-    26th, so a naive UTC-only end check -- which a 2026-06-25T22:00Z
-    fixture couldn't tell apart from the correct local-time one, since
-    both are before UTC midnight either way -- would wrongly retire it
-    too (fix round 1, finding 9a). The site's zone comes from TZ."""
-    monkeypatch.setenv("TZ", "America/New_York")
-    boss = await make_user(rdb, "boss", role="admin")
-    inside = await seed_frame(
-        rdb,
-        tmp_path,
-        ts=datetime(2026, 6, 26, 2, 0, tzinfo=UTC),
-        frame_id=1,
-        boxes=[{"bbox": [10, 10, 90, 90]}],
-    )
-    outside = await seed_frame(
-        rdb,
-        tmp_path,
-        ts=datetime(2026, 6, 26, 9, 0, tzinfo=UTC),
-        frame_id=2,
-        boxes=[{"bbox": [10, 10, 90, 90]}],
-    )
-    i_in, i_out = (
-        await add_item(rdb, inside, lane="identify"),
-        await add_item(rdb, outside, lane="identify"),
-    )
-    async with rdb.connection() as conn:
-        out = await set_window(conn, admin_id=boss, start=date(2026, 5, 17), end=date(2026, 6, 25))
-        assert out["retired"] == 1
-        statuses = dict(
-            await (await conn.execute("SELECT id, status FROM review_items")).fetchall()
-        )
-    assert statuses[i_in] == "open" and statuses[i_out] == "retired"
-    assert out["end"].endswith("-04:00")  # local (EDT), not UTC
-
-
-async def test_set_window_stores_timezone_aware_datetimes(rdb, store, review_assets):
-    """A naive or date-only stored value makes the background pool's own
-    `end = min(admin_end, now(UTC) - ...)` in ReviewPool._window raise
-    TypeError on every run. read_window must hand back aware datetimes,
-    and the pool's own comparison against them must not raise."""
-    boss = await make_user(rdb, "boss", role="admin")
-    async with rdb.connection() as conn:
-        await set_window(conn, admin_id=boss, start=date(2026, 5, 17), end=date(2026, 6, 25))
-        start, end = await read_window(conn)
-        assert start.tzinfo is not None and end.tzinfo is not None
-        pool = ReviewPool(rdb, PoolSettings(), store, review_assets["baseline"])
-        effective, admin_window = await pool._window(conn)
-    assert admin_window == (start, end)
-    assert effective is not None
-    assert effective[0].tzinfo is not None and effective[1].tzinfo is not None
-
-
-async def test_set_window_refuses_a_future_start_or_a_backwards_range(rdb):
-    """A start after today (local time) would retire every open pass-1
-    item permanently: the pool never re-adds an event that already has a
-    review_items row. An end before the start stays refused too. Fix
-    round 1, finding 4."""
-    boss = await make_user(rdb, "boss", role="admin")
-    async with rdb.connection() as conn:
-        with pytest.raises(Invalid):
-            await set_window(conn, admin_id=boss, start=date.today() + timedelta(days=30), end=None)
-        with pytest.raises(Invalid):
-            await set_window(conn, admin_id=boss, start=date(2026, 6, 25), end=date(2026, 5, 17))
-
-
-async def test_set_window_rejects_an_out_of_range_date(rdb):
-    """end=9999-12-31 + one day overflows Python's date range and would
-    otherwise surface as a 500. Fix round 1, finding 5."""
-    boss = await make_user(rdb, "boss", role="admin")
-    async with rdb.connection() as conn:
-        with pytest.raises(Invalid):
-            await set_window(conn, admin_id=boss, start=None, end=date(9999, 12, 31))
-        with pytest.raises(Invalid):
-            await set_window(conn, admin_id=boss, start=date(1, 1, 1), end=None)
-
-
 async def test_browse_rejects_bad_filters_instead_of_a_500(rdb, store):
     """date_to=9999-12-31 raises OverflowError at `+ timedelta(days=1)`
     unless it is caught first; who and lane accept only their documented
@@ -483,20 +404,10 @@ async def test_admin_endpoints_are_admin_only(rdb, rclient):
         "/api/review/disputes",
         "/api/review/agreement",
         "/api/review/status",
-        "/api/review/settings/window",
     ):
         assert rclient.get(path).status_code == 403
     assert rclient.get("/api/review/progress").status_code == 200
-    # fix round 1, finding 9b: PUT window and POST adjudicate as a plain
-    # reviewer, not just the GETs above.
-    assert (
-        rclient.put(
-            "/api/review/settings/window",
-            headers=CSRF,
-            json={"start": "2026-05-17", "end": "2026-06-25"},
-        ).status_code
-        == 403
-    )
+    # fix round 1, finding 9b: POST adjudicate as a plain reviewer, not just the GETs above.
     assert (
         rclient.post(
             "/api/review/disputes/1/adjudicate",
@@ -507,12 +418,6 @@ async def test_admin_endpoints_are_admin_only(rdb, rclient):
     )
     await make_user(rdb, "boss", role="admin")
     login(rclient, "boss")
-    assert (
-        rclient.put(
-            "/api/review/settings/window", json={"start": "2026-05-17", "end": "2026-06-25"}
-        ).status_code
-        == 403
-    )
     # fix round 1, finding 9b: adjudicate without the CSRF header, as admin.
     assert (
         rclient.post(
@@ -521,14 +426,8 @@ async def test_admin_endpoints_are_admin_only(rdb, rclient):
         ).status_code
         == 403
     )
-    r = rclient.put(
-        "/api/review/settings/window",
-        headers=CSRF,
-        json={"start": "2026-05-17", "end": "2026-06-25"},
-    )
-    assert r.status_code == 200 and r.json()["end"].startswith("2026-06-26T00:00:00")
     status = rclient.get("/api/review/status").json()
-    assert status["window"]["end"].startswith("2026-06-26") and "last_run" in status
+    assert "last_run" in status and "window" not in status  # the window is each reviewer's own now
 
 
 async def test_pool_status_counts_items(rdb, tmp_path):

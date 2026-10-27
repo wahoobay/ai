@@ -104,12 +104,14 @@ def test_frame_mutating_handlers_share_the_busy_guard(name):
     _assert_busy_guarded(body, name)
 
 
-# review-browse.js's own mutating admin actions (Task 12): settling a
-# dispute and saving or clearing the date window. Loading the grid, the
-# progress KPIs and the admin panels are plain re-reads (same class as
-# review-single.js's loadNext() and review-frame.js's reload(), neither of
-# which is in the lists above), so only these two get the guard.
-BROWSE_MUTATING_HANDLERS = ("adjudicate", "save")
+# review-browse.js's own mutating admin action (Task 12): settling a
+# dispute. (The date window used to be saved here too; since 2026-10-27 it
+# is each reviewer's own, kept in the browser session, and the server has
+# no setting.) Loading the grid, the progress KPIs and the admin panels are
+# plain re-reads (same class as review-single.js's loadNext() and
+# review-frame.js's reload(), neither of which is in the lists above), so
+# only this one gets the guard.
+BROWSE_MUTATING_HANDLERS = ("adjudicate",)
 
 
 @pytest.mark.parametrize("name", BROWSE_MUTATING_HANDLERS)

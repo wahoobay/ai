@@ -39,7 +39,7 @@ def test_jobs_run_from_an_event(pg_url, monkeypatch):
     assert handler({"job": "migrate"}, None) == {
         "job": "migrate",
         "ok": True,
-        "detail": {"revision": "0003"},
+        "detail": {"revision": "0004"},
     }
     out = handler({"job": "refresh_matviews"}, None)
     assert out["ok"] is True
@@ -117,7 +117,7 @@ def test_status_reports_the_last_runs_and_the_pollers(pg_url, monkeypatch):
     out = handler({"job": "status"}, None)
     assert out["ok"] is True
     detail = out["detail"]
-    assert detail["revision"] == "0003"
+    assert detail["revision"] == "0004"
     assert [r["job"] for r in detail["job_runs"]][:2] == ["refresh_matviews", "migrate"]
     assert detail["pollers"][0]["name"] == "sensestream" and detail["pollers"][0]["last_ok"]
     assert detail["counts"]["detection_events"] == 0 and "species_sightings_mat" in detail["counts"]
