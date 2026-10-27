@@ -32,6 +32,14 @@ COPY db /app/db
 # Catalogues the page and the review tool read: species sheet, celebrities, taxonomy.
 COPY assets /app/assets
 
+# The Species Log manifest the review catalogue reads is git-ignored (the DGX's sheet poller
+# rebuilds it daily), so the image builds it once from the tracked spreadsheet; without it the
+# catalogue, and the review queue, were empty on AWS (2026-10-27). fetch_models.py is here for the
+# pinned model versions only: the dashboard fetches each classifier's classes.json, never weights.
+COPY scripts/build_species_manifest.py /app/scripts/build_species_manifest.py
+RUN python /app/scripts/build_species_manifest.py
+COPY scripts/fetch_models.py /app/fetch_models.py
+
 # Static sidecar served by /api/export/camera_metadata.json. Ships with
 # the image so the dashboard works without bind-mounts.
 COPY data/camera_metadata.json /data/camera_metadata.json

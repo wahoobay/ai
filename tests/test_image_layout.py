@@ -4,6 +4,7 @@ copied beside app/). Paths must resolve in both; the image layout is shallow."""
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -115,3 +116,29 @@ def test_worker_image_carries_what_its_code_imports():
         m for m in third_party if not any(p.startswith(aliases.get(m, m).lower()) for p in pinned)
     )  # cv2 -> opencv-python-headless
     assert not missing, f"imported by the worker but not in its requirements: {missing}"
+
+
+def test_dashboard_image_builds_the_species_manifest_from_the_tracked_sheet(tmp_path):
+    """On AWS the review tool's catalogue was empty (2026-10-27): assets/species_manifest.json is
+    git-ignored (the DGX's sheet poller rebuilds it daily), so the image never had it. The image now
+    builds it from the tracked assets/species.xlsx; the build needs openpyxl."""
+    dockerfile = (REPO / "services" / "dashboard" / "Dockerfile").read_text()
+    base = dockerfile.split("FROM base AS")[0]  # the stage both targets inherit
+    assert "COPY scripts/build_species_manifest.py" in base
+    assert base.index("COPY assets /app/assets") < base.index(
+        "RUN python /app/scripts/build_species_manifest.py"
+    )
+    assert "openpyxl==" in (REPO / "services" / "dashboard" / "requirements.txt").read_text()
+    # The script itself, run the way the image runs it (a tree with scripts/ and assets/ side by side).
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "assets").mkdir()
+    shutil.copy(REPO / "scripts" / "build_species_manifest.py", tmp_path / "scripts")
+    shutil.copy(REPO / "assets" / "species.xlsx", tmp_path / "assets")
+    subprocess.run(
+        [sys.executable, str(tmp_path / "scripts" / "build_species_manifest.py")],
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
+    records = json.loads((tmp_path / "assets" / "species_manifest.json").read_text())
+    assert len(records) >= 50 and all(r.get("binomial") for r in records)
