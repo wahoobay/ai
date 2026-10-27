@@ -1379,7 +1379,6 @@ async def test_forgot_password_message_says_the_link_is_on_its_way_with_ses(pool
     not enabled on this deployment", because the wording only recognised the smtp backend. Any backend
     that actually sends gets the honest message; it stays identical for known and unknown addresses."""
     import boto3
-
     from app.main import build_app
 
     class _Sent:
@@ -1399,7 +1398,9 @@ async def test_forgot_password_message_says_the_link_is_on_its_way_with_ses(pool
 
     with TestClient(build_app()) as c:
         known = c.post("/api/auth/forgot-password", json={"email": "dan@example.org"}, headers=CSRF)
-        unknown = c.post("/api/auth/forgot-password", json={"email": "ghost@example.org"}, headers=CSRF)
+        unknown = c.post(
+            "/api/auth/forgot-password", json={"email": "ghost@example.org"}, headers=CSRF
+        )
 
     assert known.status_code == unknown.status_code == 200
     assert known.json() == unknown.json()
