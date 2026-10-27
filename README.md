@@ -334,7 +334,7 @@ documents every variable; these are the ones that make a deployment a site.
 | `WORKER_URL` | (unset) | Unset or empty = no camera pipeline: live video is the embed, worker routes and alerts are off. The DGX launchers set `http://127.0.0.1:8081`; `make up-gpu` / `up-cpu` set the compose worker |
 | `LIVE_VIDEO_EMBED_URL` | empty | With no worker, the video panel shows this embed |
 | `FEATURE_REVIEW_TOOL` | `false` | The volunteer review tool (routes, pool task, admin link) |
-| `MAIL_BACKEND` | `console` | `console` logs the message, `smtp` sends it (`MAIL_SMTP_*`, `MAIL_FROM`), `manual` holds it |
+| `MAIL_BACKEND` | `console` | `console` (the message, link included, goes to the log), `smtp` (`MAIL_SMTP_*`), `ses` (Amazon SES through the process's own AWS role; `MAIL_FROM` required; what AWS uses), `manual` (held) |
 | `ROBOTS` | `disallow` | `/robots.txt`; `allow` only on the public production site |
 | `ORIGIN_VERIFY_SECRET` | empty | Set behind CloudFront: requests must carry `X-Origin-Verify` |
 | `SENSESTREAM_SYNTHETIC` | `false` | Write synthetic readings when no live source answers (local demos only) |

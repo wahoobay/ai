@@ -1,4 +1,4 @@
-"""Outbound email with two backends.
+"""Outbound email with three backends (smtp, ses, console) and a holding state (manual).
 
 `manual` is the default because this project has no SMTP relay yet: the
 message is not sent at all. `send()` records which backend actually
@@ -88,7 +88,7 @@ def collision_notice() -> tuple[str, str]:
 
 class Mailer:
     def __init__(self, backend: str, smtp: dict | None, from_addr: str, base_url: str) -> None:
-        if backend not in ("smtp", "manual", "console"):
+        if backend not in ("smtp", "ses", "manual", "console"):
             log.warning("mailer: unrecognized backend '%s'; falling back to console", backend)
             self.backend = "console"
         else:
@@ -97,6 +97,11 @@ class Mailer:
         self.from_addr = from_addr
         self.base_url = base_url.rstrip("/")
 
+        # SES sends through the process's own AWS identity (the App Runner role on AWS): no host,
+        # no credentials, but the sender must be configured; never guess one.
+        if self.backend == "ses" and not self.from_addr:
+            log.error("mailer(ses): MAIL_FROM is required; falling back to manual")
+            self.backend = "manual"
         # Validate SMTP config if backend is smtp
         if self.backend == "smtp":
             missing = []
@@ -124,6 +129,8 @@ class Mailer:
             # developer or an operator reads it there (staging, local).
             log.info("mailer(console): to=%s subject=%r\n%s", to, subject, body)
             return "console"
+        if self.backend == "ses":
+            return self._send_ses(to, subject, body)
         if self.backend != "smtp":
             log.info("mailer(manual): message for %s held for out-of-band delivery", to)
             return "manual"
@@ -154,4 +161,25 @@ class Mailer:
             return "smtp"
         except Exception as e:
             log.warning("mailer(smtp): delivery to %s failed (%s); holding for manual", to, e)
+            return "manual"
+
+    def _send_ses(self, to: str, subject: str, body: str) -> str:
+        """Amazon SES v2 with the credentials the environment provides (on AWS, the service's role).
+        A refusal (sandbox, unverified sender, throttling) holds the message like an SMTP failure."""
+        import boto3  # the dashboard image has it for S3; imported here so the other backends need nothing
+
+        try:
+            boto3.client("sesv2").send_email(
+                FromEmailAddress=self.from_addr,
+                Destination={"ToAddresses": [to]},
+                Content={
+                    "Simple": {
+                        "Subject": {"Data": subject, "Charset": "UTF-8"},
+                        "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
+                    }
+                },
+            )
+            return "ses"
+        except Exception as e:  # noqa: BLE001 - any refusal means "held", and the reason goes to the log
+            log.warning("mailer(ses): delivery to %s failed (%s); holding for manual", to, e)
             return "manual"
