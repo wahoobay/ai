@@ -22,6 +22,9 @@ pyarrow==24.0.0
 pandas==3.0.2
 pillow==12.1.1
 
+# The image builds assets/species_manifest.json from the tracked species.xlsx (scripts/build_species_manifest.py)
+openpyxl==3.1.5
+
 # Object storage behind s3:// URLs (FRAMES_URL, SAMPLE_URL on AWS); common.storage imports it lazily
 boto3==1.43.118
 

@@ -359,10 +359,14 @@ class DashboardCfg:
         self.review_taxonomy_csv = Path(
             _env("REVIEW_TAXONOMY_CSV", str(self.review_assets_dir / "taxonomy.csv"))
         )
+        # Where the models live (the bucket on AWS, a directory on the DGX) and where the dashboard keeps the
+        # one file it needs from them, each classifier's classes.json, fetched at start (model_assets).
+        self.models_url = _env("MODELS_URL", "").strip()
+        self.models_dir = Path(_env("MODELS_DIR", str(repo_root / "data" / "models")))
         self.review_classes_json = Path(
             _env(
                 "CLASSIFIER_V2_CLASSES_JSON",
-                str(repo_root / "data" / "models" / "classifier_v2" / "classes.json"),
+                str(self.models_dir / "classifier_v2" / "classes.json"),
             )
         )
         self.review_baseline_manifest = Path(
@@ -545,6 +549,22 @@ def build_app() -> FastAPI:
         # keeps review_items topped up.
         from .review_catalogue import CatalogueStore
         from .review_pool import PoolSettings, ReviewPool
+
+        # The classifier's class list comes from the models bucket (the weights stay there): fetched
+        # before the catalogue first reads it; a failure is logged and the page starts without it.
+        if cfg.feature_review_tool and cfg.models_url:
+            from .model_assets import fetch_class_lists, pinned_versions
+
+            try:
+                fetched = await asyncio.to_thread(
+                    fetch_class_lists, cfg.models_url, cfg.models_dir, pinned_versions(REPO_ROOT)
+                )
+                if fetched:
+                    log.info("model assets: fetched %s", ", ".join(str(f) for f in fetched))
+            except Exception:
+                log.exception(
+                    "model assets: class lists not fetched; the review catalogue goes without"
+                )
 
         state["review_catalogue"] = CatalogueStore(cfg.review_catalogue_paths())
         review_task: asyncio.Task | None = None
