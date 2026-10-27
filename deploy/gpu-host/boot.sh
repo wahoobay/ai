@@ -80,8 +80,13 @@ chmod 600 .env
 echo "wrote .env for ${WB_LOCATION_ID}/${WB_ENV}"
 
 aws ecr get-login-password --region "$WB_REGION" | docker login --username AWS --password-stdin "$WB_ECR_REGISTRY" >/dev/null
+# Each deploy pulls a ~14 GB worker image and left the previous one dangling; four deploys filled the root disk
+# and the fifth pull failed (2026-10-27). Prune before the pull (room for the new image next to the running one)
+# and after the start (the image just replaced). Dangling only: tagged images and the running containers stay.
+docker image prune -f >/dev/null
 docker compose pull -q
 docker compose up -d --remove-orphans
+docker image prune -f >/dev/null
 
 timeout_s="${BOOT_HEALTH_TIMEOUT_S:-600}"
 interval_s="${BOOT_HEALTH_INTERVAL_S:-10}"
