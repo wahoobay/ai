@@ -182,3 +182,8 @@
 .rv-swatch-locked { border-color: #8aa3b5; border-style: dotted; }
 .rv-legend-keys { color: var(--muted); }
 .rv-legend-keys kbd { color: var(--ink); }
+
+/* The reviewer's own date window (header): plain inline pickers. */
+.rv-window { display: inline-flex; gap: .35rem; align-items: center; white-space: nowrap; }
+.rv-window input[type="date"] { font: inherit; padding: .1rem .25rem; }
+.rv-window button { font: inherit; padding: .1rem .5rem; }

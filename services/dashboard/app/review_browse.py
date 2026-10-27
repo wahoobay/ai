@@ -1,4 +1,4 @@
-"""Progress, browse, disputes, agreement, the date window and pool status
+"""Progress, browse, disputes, agreement and pool status
 (spec §9, Browse; §8, Agreement).
 
 Browse follows the same rule as whole-frame mode: a box waiting for a
@@ -11,17 +11,15 @@ makes none, because admins can be served a spot-check themselves.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from .config import site_tz
 from .review_labels import agreement_summary, load_verdicts, outcome_of, resolve
-from .review_pool import read_window, retire_outside_window
 from .review_queue import Invalid, fetch_all, fetch_one
 
 
@@ -71,11 +69,6 @@ class BrowseFilters:
     lane: str = "any"  # any | check | identify
     date_from: date | None = None
     date_to: date | None = None
-
-
-class WindowIn(BaseModel):
-    start: date | None = None
-    end: date | None = None
 
 
 class AdjudicateIn(BaseModel):
@@ -483,60 +476,6 @@ async def agreement(conn) -> dict:
     return agreement_summary({event_id: r for event_id, (r, _v) in (await _resolved(conn)).items()})
 
 
-async def get_window(conn) -> dict:
-    start, end = await read_window(conn)
-    return {"start": start.isoformat() if start else None, "end": end.isoformat() if end else None}
-
-
-async def set_window(conn, *, admin_id: int, start: date | None, end: date | None) -> dict:
-    """Both days are local (the site's TZ) and inclusive: the stored end
-    is local midnight at the start of the day after `end` (Review Focus 4).
-    Both bounds are stored as timezone-aware ISO strings (local_day_start
-    always attaches local_tz()), because read_window feeds them straight to
-    datetime.fromisoformat for the background pool to compare against
-    now(UTC) -- a naive or date-only value would raise TypeError there on
-    every run."""
-    _check_date(start, "start")
-    _check_date(end, "end")
-    if start and end and start > end:
-        raise Invalid("the window starts after it ends")
-    if start and start > datetime.now(local_tz()).date():
-        # The pool never re-adds an event that already has a review_items
-        # row (review_pool.py's _free()/_FREE_EVENTS_SQL), so a future
-        # start would retire every open pass-1 item and none of them
-        # would ever come back, even once the window is corrected (fix
-        # round 1, finding 4).
-        raise Invalid("the window can't start in the future")
-    async with conn.transaction():
-        async with conn.cursor() as cur:
-            if start is None and end is None:
-                await cur.execute("DELETE FROM review_settings WHERE key = 'window'")
-                return {"start": None, "end": None, "retired": 0}
-            value = {
-                "start": local_day_start(start).isoformat() if start else None,
-                "end": local_day_start(end + timedelta(days=1)).isoformat() if end else None,
-            }
-            await cur.execute(
-                """
-                INSERT INTO review_settings (key, value, updated_by, updated_at)
-                VALUES ('window', %s, %s, now())
-                ON CONFLICT (key) DO UPDATE
-                   SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by,
-                       updated_at = now()""",
-                (Jsonb(value), admin_id),
-            )
-        retired = await retire_outside_window(
-            conn,
-            datetime.fromisoformat(value["start"])
-            if value["start"]
-            else datetime.min.replace(tzinfo=UTC),
-            datetime.fromisoformat(value["end"])
-            if value["end"]
-            else datetime.max.replace(tzinfo=UTC),
-        )
-    return {**value, "retired": retired}
-
-
 async def pool_status(conn, *, pool_obj) -> dict:
     items = await fetch_all(
         conn,
@@ -560,5 +499,4 @@ async def pool_status(conn, *, pool_obj) -> dict:
         "unscored": unscored,
         "last_hinted_at": last.isoformat() if last else None,
         "last_run": pool_obj.last_run if pool_obj else None,
-        "window": await get_window(conn),
     }

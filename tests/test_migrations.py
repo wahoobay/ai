@@ -18,7 +18,7 @@ import psycopg
 REPO = Path(__file__).resolve().parents[1]
 ALEMBIC = [sys.executable, "-m", "alembic", "-c", str(REPO / "db" / "alembic.ini")]
 BASELINE_SQL = REPO / "db" / "migrations" / "versions" / "0001_baseline.sql"
-HEAD = "0003"
+HEAD = "0004"
 DATA_TABLES = {
     "detection_events",
     "frame_stats",
@@ -125,3 +125,17 @@ def test_migrate_entry_point_brings_the_database_to_head(pg_url, monkeypatch):
     assert migrate.handler({"job": "migrate"}, None) == {"revision": HEAD}
     assert "review_items" in tables(pg_url)
     assert migrate.main([]) == 0  # the CLI: python -m app.migrate
+
+
+def test_0004_drops_the_shared_review_window(pg_url):
+    """The review date window became each reviewer's own (per session, nothing stored); the
+    setting the old shared window left behind goes, and the items it retired come back (the
+    reopen statement is exercised against real rows in tests/test_review_window.py)."""
+    alembic("upgrade", "0003", url=pg_url)
+    with psycopg.connect(pg_url) as conn:
+        conn.execute(
+            "INSERT INTO review_settings (key, value) VALUES ('window', '{\"start\": \"2026-05-17T00:00:00-04:00\"}'::jsonb)"
+        )
+    alembic("upgrade", "head", url=pg_url)
+    assert query(pg_url, "SELECT count(*) FROM review_settings WHERE key = 'window'") == [(0,)]
+    assert HEAD in alembic("current", url=pg_url).stdout
