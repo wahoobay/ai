@@ -224,6 +224,31 @@ def test_ses_backend_needs_a_from_address():
     assert m.backend == "manual"  # misconfigured: hold the mail, never guess a sender
 
 
+def test_ses_client_gives_up_within_seconds_when_the_endpoint_is_unreachable(monkeypatch):
+    """2026-10-27: the dashboard's VPC had no route to SES; boto3's default timeouts and retries kept the
+    registration request open for five minutes, CloudFront answered 504 at 30 s and the user saw
+    "Registration failed." for an account that had been created. A send must fail fast and hold the mail."""
+    import boto3
+
+    _FakeSes.calls, _FakeSes.fail = [], False
+    created = []
+
+    class _Recording(_FakeSes):
+        def __init__(self, service, **kwargs):
+            super().__init__(service, **kwargs)
+            created.append(self)
+
+    monkeypatch.setattr(boto3, "client", _Recording)
+    m = Mailer(
+        backend="ses", smtp=None, from_addr="no-reply@wahoobay.net", base_url="https://x.org"
+    )
+    assert m.send("someone@example.org", "Hello", "Body") == "ses"
+    (client,) = created
+    config = client.kwargs["config"]
+    assert config.connect_timeout <= 5 and config.read_timeout <= 20
+    assert config.retries["max_attempts"] <= 2
+
+
 def test_smtp_messages_carry_a_date_and_a_message_id(monkeypatch):
     # 2026-09-26: Gmail silently dropped the dashboard's confirmation
     # emails. The relay (Resend) accepted them, but Gmail refuses

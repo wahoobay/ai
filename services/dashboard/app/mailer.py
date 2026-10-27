@@ -167,9 +167,16 @@ class Mailer:
         """Amazon SES v2 with the credentials the environment provides (on AWS, the service's role).
         A refusal (sandbox, unverified sender, throttling) holds the message like an SMTP failure."""
         import boto3  # the dashboard image has it for S3; imported here so the other backends need nothing
+        from botocore.config import Config
 
+        # Fail within seconds, not minutes: boto3's defaults (60 s to connect, several retries) kept a registration
+        # request open for five minutes when the VPC had no route to SES (2026-10-27), long past the 30 s after
+        # which CloudFront answers 504. The request must come back, with the mail held, before that.
+        config = Config(
+            connect_timeout=5, read_timeout=20, retries={"max_attempts": 2, "mode": "standard"}
+        )
         try:
-            boto3.client("sesv2").send_email(
+            boto3.client("sesv2", config=config).send_email(
                 FromEmailAddress=self.from_addr,
                 Destination={"ToAddresses": [to]},
                 Content={
