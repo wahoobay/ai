@@ -1,6 +1,8 @@
 // Where the live stream is fetched from: the page says (data-stream-base on <html>), the
 // dashboard's own /api proxy by default and CloudFront's /stream on AWS.
 const STREAM_BASE = document.documentElement.dataset.streamBase || "/api";
+// When set (data-hls-base on <html>, /hls on AWS) the live panel is an hls.js <video>; empty keeps the MJPEG <img>.
+const HLS_BASE = document.documentElement.dataset.hlsBase || "";
 const fmtMs = (x) => (x == null ? "—" : `${x.toFixed(0)} ms`);
 const fmtPct = (x) => (x == null ? "—" : `${(x * 100).toFixed(1)}%`);
 const short = (s) => (s ? s.slice(0, 40) : "");
@@ -1052,21 +1054,97 @@ async function tickReef() {
   } catch {}
 }
 
+function liveSourceUrl(cam, boxes) {
+  if (HLS_BASE) return `${HLS_BASE}/${cam === "pier_cam" ? "pier" : "seahive"}${boxes ? "_boxes" : ""}/index.m3u8`;
+  const base = cam === "pier_cam" ? `${STREAM_BASE}/stream_pier` : `${STREAM_BASE}/stream`;
+  return boxes ? `${base}.mjpeg` : `${base}_raw.mjpeg`;
+}
+
+let _liveHls = null;
+let _liveRetry = null;
+let _liveUrl = null;
+let _liveOnError = null;
+
+// Point #stream (an <img> for MJPEG, a <video> for HLS) at the camera/variant. The HLS player
+// never gives up: load errors retry forever, fatal errors restart or rebuild the player.
+// `force` rebuilds even when the URL is unchanged (the retry paths).
+function setLiveSource(cam, boxes, force = false) {
+  const el = document.getElementById("stream");
+  if (!el) return;
+  const url = liveSourceUrl(cam, boxes);
+  const isVideo = el.tagName === "VIDEO";
+  if (!force) {
+    if (!isVideo && el.getAttribute("src") === url) return;
+    if (isVideo && _liveUrl === url && (_liveHls || el.getAttribute("src") === url)) return;
+  }
+  if (!isVideo) { el.src = url; return; }
+  _liveUrl = url;
+  if (_liveHls) { _liveHls.destroy(); _liveHls = null; }
+  clearTimeout(_liveRetry);
+  if (_liveOnError) { el.removeEventListener("error", _liveOnError); _liveOnError = null; }
+  const rebuild = (ms) => { _liveRetry = setTimeout(() => setLiveSource(cam, boxes, true), ms); };
+  const play = () => { el.play().catch(() => {}); };
+  if (window.Hls && Hls.isSupported()) {
+    // hls.js never retries a 4xx unless shouldRetry says so; the manifest and playlist must
+    // survive a 404 while the camera is stopped. Fragments keep the default (a segment that
+    // left the live window should not be chased).
+    const retry = {
+      maxNumRetry: 1000000,
+      retryDelayMs: 2000,
+      maxRetryDelayMs: 2000,
+      shouldRetry: (cfg, n) => n < cfg.maxNumRetry,
+    };
+    const fragRetry = { maxNumRetry: 1000000, retryDelayMs: 2000, maxRetryDelayMs: 2000 };
+    const policy = (r) => ({ default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: r, errorRetry: r } });
+    const hls = new Hls({
+      lowLatencyMode: false,
+      liveSyncDurationCount: 3,
+      manifestLoadPolicy: policy(retry),
+      playlistLoadPolicy: policy(retry),
+      fragLoadPolicy: policy(fragRetry),
+    });
+    _liveHls = hls;
+    let parsed = false;
+    let lastRecovery = 0;
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { parsed = true; play(); });
+    hls.on(Hls.Events.ERROR, (_evt, data) => {
+      if (!data.fatal || _liveHls !== hls) return;
+      const manifestError = String(data.details || "").startsWith("manifest");
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && (!parsed || manifestError)) {
+        // startLoad() only works after the manifest parsed; before that, rebuild.
+        hls.destroy();
+        _liveHls = null;
+        rebuild(3000);
+      } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        _liveRetry = setTimeout(() => { if (_liveHls === hls) hls.startLoad(); }, 3000);
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && Date.now() - lastRecovery > 5000) {
+        lastRecovery = Date.now();
+        hls.recoverMediaError();
+      } else {
+        // other fatal errors, or a media error that recurs right after a recovery
+        hls.destroy();
+        _liveHls = null;
+        rebuild(5000);
+      }
+    });
+    hls.loadSource(url);
+    hls.attachMedia(el);
+  } else if (el.canPlayType("application/vnd.apple.mpegurl")) {
+    // Native HLS (Safari): no hls.js to retry for us, so rebuild when the element errors.
+    _liveOnError = () => rebuild(5000);
+    el.addEventListener("error", _liveOnError);
+    el.src = url;
+    play();
+  }
+}
+
 function initBboxToggle() {
   const btn = document.getElementById("bbox-toggle");
-  const img = document.getElementById("stream");
-  if (!btn || !img) return;
-
-  function streamSrc(camId, showing) {
-    if (camId === "pier_cam") {
-      return showing ? `${STREAM_BASE}/stream_pier.mjpeg` : `${STREAM_BASE}/stream_pier_raw.mjpeg`;
-    }
-    return showing ? `${STREAM_BASE}/stream.mjpeg` : `${STREAM_BASE}/stream_raw.mjpeg`;
-  }
+  if (!btn) return;
 
   function apply(showing) {
     const cam = window._wbActiveCamera || localStorage.getItem("wb_camera") || "seahivecam";
-    img.src = streamSrc(cam, showing);
+    setLiveSource(cam, showing);
     btn.textContent = showing ? "🟦 boxes: on" : "🟦 boxes: off";
     btn.classList.toggle("off", !showing);
     localStorage.setItem("wb_bboxes_off", showing ? "0" : "1");
@@ -2664,13 +2742,9 @@ function _setActiveCamera(camId) {
     b.classList.toggle("active", b.dataset.cam === camId);
   });
   // Swap stream src + bbox-toggle target endpoints
-  const img = document.getElementById("stream");
   const bboxBtn = document.getElementById("bbox-toggle");
   const bboxesOn = !bboxBtn?.classList.contains("off");
-  const streamPath = camId === "pier_cam"
-    ? (bboxesOn ? `${STREAM_BASE}/stream_pier.mjpeg` : `${STREAM_BASE}/stream_pier_raw.mjpeg`)
-    : (bboxesOn ? `${STREAM_BASE}/stream.mjpeg` : `${STREAM_BASE}/stream_raw.mjpeg`);
-  if (img) img.src = streamPath;
+  setLiveSource(camId, bboxesOn);
   window._wbActiveCamera = camId;
   localStorage.setItem("wb_camera", camId);
 }

@@ -1,9 +1,13 @@
-# The stream proxy on the GPU host. CloudFront's VPC origin reaches this on 8080 and adds the
-# X-Origin-Verify header only it knows (the same one the dashboard requires). The header is part of
-# the stream route's own matcher (Caddy orders directives globally, so a separate "not header" rule
-# would run after the proxy), it is stripped before the worker sees it, and it is filtered out of
-# every log line. /stream/* goes to the worker with the prefix stripped, unbuffered, so an MJPEG
-# stream flows frame by frame for as long as the viewer watches. Anything else: 403.
+# The stream proxy on the GPU host. CloudFront's origin on the host (a public origin on the host's
+# address, authenticated by the header) reaches this on 8080 and adds the X-Origin-Verify header only
+# it knows (the same one the dashboard requires). The header is part of the stream route's own matcher
+# (Caddy orders directives globally, so a separate "not header" rule would run after the proxy), it is
+# stripped before the worker sees it, and it is filtered out of every log line. /stream/* goes to the
+# worker with the prefix stripped, unbuffered, so an MJPEG stream flows frame by frame for as long as
+# the viewer watches. /hls/* goes to MediaMTX the same way (/hls/<path>/index.m3u8 becomes
+# /<path>/index.m3u8), and the HLS route adds the bearer that puts MediaMTX in CDN mode (HLS_CDN_SECRET,
+# its hlsCDNSecret): one cacheable session per path instead of per-viewer cookie sessions and redirects,
+# which CloudFront cannot carry. Any Cookie is dropped on the way. Anything else: 403.
 {
 	auto_https off
 	log default {
@@ -24,6 +28,18 @@
 		request_header -X-Origin-Verify
 		reverse_proxy worker:8081 {
 			flush_interval -1
+		}
+	}
+	@hls {
+		path /hls/*
+		header X-Origin-Verify {$ORIGIN_VERIFY_SECRET}
+	}
+	handle @hls {
+		uri strip_prefix /hls
+		request_header -X-Origin-Verify
+		reverse_proxy mediamtx:8888 {
+			header_up Authorization "Bearer {$HLS_CDN_SECRET}"
+			header_up -Cookie
 		}
 	}
 	handle {

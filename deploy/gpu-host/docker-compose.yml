@@ -1,11 +1,32 @@
-# The GPU host's stack (infra spec 2026-10-25 §4.1, Plan 4a): the camera worker on the host's GPU and
-# Caddy as the stream proxy CloudFront reaches. boot.sh writes .env next to this file from the stack's
-# /etc/wahoobay/host.env and the environment's secrets, then runs `docker compose up -d` here; compose
-# reads the same .env for the ${...} values below.
+# The GPU host's stack (infra spec 2026-10-25 §4.1, Plans 4a and 4b), four services: MediaMTX, which pulls
+# the camera once and serves it over RTSP and HLS; the camera worker on the host's GPU, reading MediaMTX; the
+# encoder, which publishes the worker's boxed stream back to MediaMTX with NVENC; and Caddy, the stream proxy
+# CloudFront reaches. boot.sh writes .env next to this file from the stack's /etc/wahoobay/host.env and the
+# environment's secrets, then runs `docker compose up -d` here; compose reads the same .env for the ${...}
+# values below.
 services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.3
+    # No ports: reached on the compose network only, by the worker (RTSP 8554), the encoder and Caddy (HLS 8888).
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    environment:
+      MTX_PATHS_SEAHIVE_SOURCE: ${CAMERA_SEAHIVE_URL}   # the camera, pulled once; from the .env boot.sh writes
+      MTX_HLSCDNSECRET: ${HLS_CDN_SECRET}   # CDN mode: requests with this bearer (Caddy adds it) share one session
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: mediamtx
+        awslogs-create-group: "true"
+
   worker:
     image: ${WB_ECR_REGISTRY}/ai-wahoobay-worker:${WB_IMAGE_TAG}
     env_file: .env
+    depends_on:
+      - mediamtx
     ports:
       - "8081:8081"   # the worker's API and MJPEG; the security group admits the dashboard, the Lambdas and Caddy only
     volumes:
@@ -27,13 +48,41 @@ services:
         awslogs-stream: worker
         awslogs-create-group: "true"
 
+  encoder:
+    image: jrottenberg/ffmpeg:7.1.2-nvidia2404
+    entrypoint: ["/bin/sh", "/encoder.sh"]   # the worker's annotated MJPEG, encoded once with NVENC, published to MediaMTX
+    volumes:
+      - ./encoder.sh:/encoder.sh:ro
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    depends_on:
+      - worker
+      - mediamtx
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: encoder
+        awslogs-create-group: "true"
+
   caddy:
     image: caddy:2.8.4
     ports:
-      - "8080:8080"   # CloudFront's VPC origin; refuses anything without the X-Origin-Verify header
+      - "8080:8080"   # CloudFront's origin on the host; refuses anything without the X-Origin-Verify header
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    env_file: .env    # ORIGIN_VERIFY_SECRET
+    environment:      # only its own secrets: .env also holds the camera URL and the database URL
+      ORIGIN_VERIFY_SECRET: ${ORIGIN_VERIFY_SECRET}
+      HLS_CDN_SECRET: ${HLS_CDN_SECRET}   # the bearer it adds on /hls/*
     depends_on:
       - worker
     restart: unless-stopped

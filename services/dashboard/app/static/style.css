@@ -55,7 +55,7 @@ main {
   position: relative;
 }
 
-.stream-wrap img { width: 100%; height: 100%; object-fit: contain; }
+.stream-wrap img, .stream-wrap .live-video { width: 100%; height: 100%; object-fit: contain; }
 
 .stream-overlay-btn {
   position: absolute;

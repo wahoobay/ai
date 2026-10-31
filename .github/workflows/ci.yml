@@ -96,7 +96,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://ai:ai@localhost:5432/ai_test
         run: |
-          pip install pytest
+          pip install pytest pyyaml
           pytest -q
 
   # -------------------------------------------------------------------
