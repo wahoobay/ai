@@ -240,6 +240,10 @@ async def rdb():
     await pool.open()
     async with pool.connection() as conn:
         await conn.execute(TRUNCATE_SQL)
+        # TRUNCATE leaves the materialized views as they were: refresh them (in the jobs
+        # runner's order) so no test reads another's sightings.
+        await conn.execute("REFRESH MATERIALIZED VIEW species_sightings_mat")
+        await conn.execute("REFRESH MATERIALIZED VIEW species_sightings_hourly_mat")
     yield pool
     await pool.close()
 

@@ -93,6 +93,7 @@ SPECIES_KEYS = {
     "order",
     "aphia_id",
     "photo",
+    "latest_crop",
     "sightings_total",
     "sightings_7d",
     "first_seen",
@@ -142,7 +143,9 @@ def fake_workers(client, monkeypatch, answers: dict) -> list[httpx.Request]:
     return sent
 
 
-async def test_public_routes_answer_signed_out_with_cache_control(rclient):
+async def test_public_routes_answer_signed_out_with_cache_control(rdb, rclient):
+    await seed_track(rdb, "Seriola zonata", 1, datetime.now(UTC) - timedelta(minutes=30))
+    await refresh_sightings(rdb)
     for path in ["/api/public/cameras", *PUBLIC_JSON_PATHS]:
         r = rclient.get(path)
         assert r.status_code == 200, path
@@ -410,7 +413,7 @@ async def test_recent_detections_carry_no_reviewer_fields_and_link_crops(
 
 
 async def test_recent_detections_filter_by_window_confidence_camera_and_limit(
-    rdb, rclient, tmp_path
+    rdb, public_client, tmp_path
 ):
     now = datetime.now(UTC)
 
@@ -429,21 +432,27 @@ async def test_recent_detections_filter_by_window_confidence_camera_and_limit(
     unsure = await one(3, 2, p=0.3)
     pier = await one(2, 3, source="pier_cam")
     reef = await one(1, 4)
+    # Without a pier worker the site has no pier camera, here as on /live.
+    with public_client(WORKER_URL_PIER="") as client:
+        r = client.get("/api/public/detections/recent?camera=pier_cam")
+        assert r.status_code == 404 and r.json() == {"error": "unknown camera"}
+        assert client.get("/api/public/live?camera=pier_cam").status_code == 404
+    with public_client(WORKER_URL_PIER=PIER) as client:
 
-    def ids(query=""):
-        r = rclient.get(f"/api/public/detections/recent{query}")
-        assert r.status_code == 200, r.text
-        return [d["id"] for d in r.json()["detections"]]
+        def ids(query=""):
+            r = client.get(f"/api/public/detections/recent{query}")
+            assert r.status_code == 200, r.text
+            return [d["id"] for d in r.json()["detections"]]
 
-    assert ids() == [reef, pier]  # the last 24 hours, confidence 0.5 and up, newest first
-    assert ids("?hours=48") == [reef, pier, old]
-    assert ids("?min_confidence=0.2") == [reef, pier, unsure]
-    assert ids("?limit=1") == [reef]
-    assert ids("?camera=pier_cam") == [pier]
-    assert ids("?camera=seahivecam") == [reef]
-    r = rclient.get("/api/public/detections/recent?camera=pier_cam")
-    assert [d["camera"] for d in r.json()["detections"]] == ["pier_cam"]
-    r = rclient.get("/api/public/detections/recent?camera=nope")
+        assert ids() == [reef, pier]  # the last 24 hours, confidence 0.5 and up, newest first
+        assert ids("?hours=48") == [reef, pier, old]
+        assert ids("?min_confidence=0.2") == [reef, pier, unsure]
+        assert ids("?limit=1") == [reef]
+        assert ids("?camera=pier_cam") == [pier]
+        assert ids("?camera=seahivecam") == [reef]
+        r = client.get("/api/public/detections/recent?camera=pier_cam")
+        assert [d["camera"] for d in r.json()["detections"]] == ["pier_cam"]
+        r = client.get("/api/public/detections/recent?camera=nope")
     assert r.status_code == 404 and r.json() == {"error": "unknown camera"}
     assert r.headers["cache-control"] == "public, max-age=10"
 
@@ -548,7 +557,7 @@ async def test_crop_is_immutable_cached_and_404_without_a_saved_frame(rdb, rclie
     assert max(sizes["crop"]) < 384 and sizes["frame"] == (1280, 720)
 
 
-async def test_summary_counts_tracks_in_the_window(rdb, rclient):
+async def test_summary_counts_tracks_in_the_window(rdb, public_client):
     now = datetime.now(UTC)
     await seed_track(rdb, "Seriola zonata", 1, now - timedelta(minutes=30))
     await seed_track(rdb, "Seriola zonata", 2, now - timedelta(minutes=20))
@@ -557,39 +566,40 @@ async def test_summary_counts_tracks_in_the_window(rdb, rclient):
     await seed_track(rdb, "Acanthurus coeruleus", 5, now - timedelta(minutes=5), frames=2)
     await seed_track(rdb, "Acanthurus coeruleus", 6, now - timedelta(hours=3))
     await refresh_sightings(rdb)
+    with public_client(WORKER_URL_PIER=PIER) as client:
 
-    def summary(query=""):
-        r = rclient.get(f"/api/public/detections/summary{query}")
-        assert r.status_code == 200, r.text
-        assert r.headers["cache-control"] == "public, max-age=30"
-        return r.json()
+        def summary(query=""):
+            r = client.get(f"/api/public/detections/summary{query}")
+            assert r.status_code == 200, r.text
+            assert r.headers["cache-control"] == "public, max-age=30"
+            return r.json()
 
-    body = summary()  # the last hour; a two-frame flicker is not a sighting
-    assert body["hours"] == 1 and body["total"] == 4
-    assert [(s["species_id"], s["count"]) for s in body["species"]] == [
-        ("Seriola zonata", 3),
-        ("Acanthurus coeruleus", 1),
-    ]
-    seriola, acanthurus = body["species"]
-    assert set(seriola) == {"species_id", "latin", "common", "count", "last_seen"}
-    assert seriola["latin"] == "Seriola zonata" and seriola["common"] == "Banded Rudderfish"
-    last = now - timedelta(minutes=15) + timedelta(seconds=2)  # the pier track's last frame
-    assert datetime.fromisoformat(seriola["last_seen"]) == last
-    assert acanthurus["common"] == "Blue Tang"
-    assert summary("?hours=6")["species"][1] == {**acanthurus, "count": 2}
-    assert summary("?hours=6")["total"] == 5
-    by_camera = summary("?camera=seahivecam")
-    assert by_camera["total"] == 3
-    assert [(s["species_id"], s["count"]) for s in by_camera["species"]] == [
-        ("Seriola zonata", 2),
-        ("Acanthurus coeruleus", 1),
-    ]
-    assert summary("?camera=pier_cam")["total"] == 1
-    r = rclient.get("/api/public/detections/summary?camera=nope")
-    assert r.status_code == 404 and r.json() == {"error": "unknown camera"}
+        body = summary()  # the last hour; a two-frame flicker is not a sighting
+        assert body["hours"] == 1 and body["total"] == 4
+        assert [(s["species_id"], s["count"]) for s in body["species"]] == [
+            ("Seriola zonata", 3),
+            ("Acanthurus coeruleus", 1),
+        ]
+        seriola, acanthurus = body["species"]
+        assert set(seriola) == {"species_id", "latin", "common", "count", "last_seen"}
+        assert seriola["latin"] == "Seriola zonata" and seriola["common"] == "Banded Rudderfish"
+        last = now - timedelta(minutes=15) + timedelta(seconds=2)  # the pier track's last frame
+        assert datetime.fromisoformat(seriola["last_seen"]) == last
+        assert acanthurus["common"] == "Blue Tang"
+        assert summary("?hours=6")["species"][1] == {**acanthurus, "count": 2}
+        assert summary("?hours=6")["total"] == 5
+        by_camera = summary("?camera=seahivecam")
+        assert by_camera["total"] == 3
+        assert [(s["species_id"], s["count"]) for s in by_camera["species"]] == [
+            ("Seriola zonata", 2),
+            ("Acanthurus coeruleus", 1),
+        ]
+        assert summary("?camera=pier_cam")["total"] == 1
+        r = client.get("/api/public/detections/summary?camera=nope")
+        assert r.status_code == 404 and r.json() == {"error": "unknown camera"}
 
 
-async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, review_assets):
+async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, review_assets, tmp_path):
     with_orders(review_assets, {"Carangidae": "Carangiformes", "Pomatomidae": "Scombriformes"})
     now = datetime.now(UTC)
     await seed_track(rdb, "Seriola zonata", 1, now - timedelta(hours=1))
@@ -597,6 +607,18 @@ async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, revie
     await seed_track(rdb, "Seriola zonata", 3, now - timedelta(minutes=5), frames=2)
     await seed_track(rdb, "Pomatomus saltarix", 4, now - timedelta(hours=2))
     await seed_track(rdb, "Testfish innominatus", 5, now - timedelta(days=30))
+    # The latest crop: the newest saved box of the species that no verdict calls not a fish.
+    shown, hidden = [
+        await seed_frame(
+            rdb,
+            tmp_path,
+            ts=now - timedelta(minutes=minutes),
+            frame_id=60 + minutes,
+            boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata", "p": 0.9}],
+        )
+        for minutes in (20, 10)
+    ]
+    await add_verdict(rdb, hidden["event_ids"][0], await make_user(rdb, "alice"), not_a_fish=True)
     await refresh_sightings(rdb)
     r = rclient.get("/api/public/species")
     assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=3600"
@@ -622,9 +644,11 @@ async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, revie
             "url": "/api/public/species/Seriola%20zonata/photo.jpg",
             "attribution": "(c) tester, some rights reserved (CC BY-NC)",
         },
+        "latest_crop": f"/api/public/detections/{shown['event_ids'][0]}/crop.jpg",
         "sightings_total": 2,
         "sightings_7d": 1,
     }
+    assert pomatomus["latest_crop"] is None and testfish["latest_crop"] is None
     # The classifier's misspelling, under its WoRMS accepted name; no reference photo.
     assert (pomatomus["latin"], pomatomus["common"], pomatomus["aphia_id"]) == (
         "Pomatomus saltatrix",
@@ -704,6 +728,7 @@ async def test_species_profile_has_24_hours_12_months_and_recent(rdb, public_cli
     assert [d["id"] for d in recent] == [f["event_ids"][0] for f in frames[1:13]]
     assert all(set(d) == DETECTION_KEYS for d in recent)
     assert all(d["crop"] and d["latin"] == "Seriola zonata" for d in recent)
+    assert body["latest_crop"] == recent[0]["crop"]
     assert unknown.status_code == 404 and unknown.json() == {"error": "unknown species"}
     assert unknown.headers["cache-control"] == "public, max-age=60"
 
@@ -858,3 +883,106 @@ async def test_live_and_recent_name_a_species_by_its_accepted_name(
         "Pomatomus saltatrix",
         "Bluefish",
     )
+
+
+async def seed_saved_track(rdb, tmp_path, species, track_id, start, frame_id):
+    """A track of three boxes a second apart, each in a saved frame (seed_frame's dicts)."""
+    box = {"bbox": [10, 10, 90, 90], "species": species, "p": 0.9, "track_id": track_id}
+    return [
+        await seed_frame(
+            rdb,
+            tmp_path,
+            ts=start + timedelta(seconds=i),
+            frame_id=frame_id + i,
+            boxes=[box],
+        )
+        for i in range(3)
+    ]
+
+
+async def test_a_not_a_fish_verdict_takes_its_track_out_of_every_sighting(
+    rdb, public_client, tmp_path
+):
+    """A track whose latest visible verdict calls it not a fish is no sighting: not in the
+    summary, the species list, the profile or the counts, and none of its boxes is a recent
+    detection; the box called so has no crop or frame. A verdict under a pending spot-check
+    does not count until the spot-check is answered."""
+    now = datetime.now(UTC)
+    tracks = {
+        "kept": await seed_saved_track(
+            rdb, tmp_path, "Seriola zonata", 1, now - timedelta(minutes=40), 100
+        ),
+        "gone": await seed_saved_track(
+            rdb, tmp_path, "Seriola zonata", 2, now - timedelta(minutes=30), 200
+        ),
+        "spotted": await seed_saved_track(
+            rdb, tmp_path, "Seriola zonata", 3, now - timedelta(minutes=20), 300
+        ),
+    }
+    gone, spotted = tracks["gone"], tracks["spotted"]
+    alice = await make_user(rdb, "alice")
+    # A fish on one box, then not a fish on another: the track's latest verdict counts.
+    await add_verdict(
+        rdb,
+        gone[0]["event_ids"][0],
+        alice,
+        name="Seriola zonata",
+        created_at=now - timedelta(minutes=5),
+    )
+    await add_verdict(rdb, gone[1]["event_ids"][0], alice, not_a_fish=True)
+    first = await add_verdict(rdb, spotted[1]["event_ids"][0], alice, not_a_fish=True)
+    spot = await add_item(
+        rdb, spotted[1], 0, pass_=2, exclude_user_id=alice, first_correction_id=first
+    )
+    await refresh_sightings(rdb)
+
+    def among(ids: set[int]) -> set[str]:
+        return {
+            name for name, frames in tracks.items() if ids & {f["event_ids"][0] for f in frames}
+        }
+
+    def seen(client) -> dict:
+        [entry] = client.get("/api/public/species").json()["species"]
+        profile = client.get("/api/public/species/Seriola%20zonata").json()
+        [series] = client.get("/api/public/species/counts?days=2").json()["series"]
+        recent = client.get("/api/public/detections/recent").json()["detections"]
+        return {
+            "summary": client.get("/api/public/detections/summary").json()["total"],
+            "list": (entry["sightings_total"], entry["sightings_7d"]),
+            "by_hour": sum(profile["by_hour"]),
+            "by_month": sum(m["sightings"] for m in profile["by_month"]),
+            "counts": sum(series["counts"]),
+            "recent": among({d["id"] for d in recent}),
+            "species recent": among({d["id"] for d in profile["recent"]}),
+        }
+
+    def image(client, frame, kind) -> int:
+        r = client.get(f"/api/public/detections/{frame['event_ids'][0]}/{kind}.jpg")
+        assert r.status_code == 200 or r.headers["cache-control"] == "public, max-age=60"
+        return r.status_code
+
+    with public_client() as client:
+        assert seen(client) == {
+            "summary": 2,
+            "list": (2, 2),
+            "by_hour": 2,
+            "by_month": 2,
+            "counts": 2,
+            "recent": {"kept", "spotted"},
+            "species recent": {"kept", "spotted"},
+        }
+        for kind in ("crop", "frame"):
+            assert image(client, gone[1], kind) == 404, kind
+            assert image(client, spotted[1], kind) == 200, kind  # its spot-check is pending
+        async with rdb.connection() as conn:
+            await conn.execute("UPDATE review_items SET status = 'done' WHERE id = %s", (spot,))
+        assert seen(client) == {
+            "summary": 1,
+            "list": (1, 1),
+            "by_hour": 1,
+            "by_month": 1,
+            "counts": 1,
+            "recent": {"kept"},
+            "species recent": {"kept"},
+        }
+        assert image(client, spotted[1], "crop") == 404

@@ -50,11 +50,11 @@ def _is_detection(d) -> bool:
     return isinstance(d, dict) and isinstance(d.get("bbox"), list) and len(d["bbox"]) == 4
 
 
-# The site's cameras by the id the dashboard and this API use. A worker stamps its
-# SOURCE_LABEL_PRIMARY on every detection (detection_events.source_name), and the launchers
-# set it to the camera's id (deploy/gpu-host/boot.sh: seahivecam; scripts/dev/
-# run_worker_pier.sh: pier_cam), so a camera's id is its source name. Any other source (an
-# unlabelled worker stamps its video URL's host) has no public name.
+# The ids of the reef camera and the pier camera, as the dashboard and this API name them. A
+# worker stamps its SOURCE_LABEL_PRIMARY on every detection (detection_events.source_name),
+# and the launchers set it to the camera's id (deploy/gpu-host/boot.sh: seahivecam;
+# scripts/dev/run_worker_pier.sh: pier_cam), so a camera's id is its source name. Any other
+# source (an unlabelled worker stamps its video URL's host) has no public name.
 CAMERAS = ("seahivecam", "pier_cam")
 # A track of fewer frames is a flicker, not a sighting (/api/species_counts' default).
 MIN_FRAMES = 3
@@ -64,12 +64,6 @@ SPECIES_RECENT = 12
 RECENT_HOURS_MAX = 168
 MIN_CONFIDENCE = 0.5
 IMMUTABLE = "public, max-age=86400, immutable"
-
-
-def _camera(name: str | None) -> str | None:
-    """A camera id for a detection's source_name, and the source_name for a camera id (they
-    are the same name): None for a name the site's cameras do not have."""
-    return name if name in CAMERAS else None
 
 
 def _iso(ts: datetime | None) -> str | None:
@@ -87,10 +81,10 @@ def _names(catalogue, raw: str | None) -> tuple[str | None, str | None]:
     return latin, common_name(latin) or catalogue.common_name(latin)
 
 
-def _detection(row: dict, catalogue) -> dict:
-    """A detection as the public sees it: the latest verdict's species when there is one (the
-    model's own species_id when the verdict agrees with it), the model's score, and links to
-    its crop and frame when its own frame was saved."""
+def _detection(row: dict, catalogue, camera: str | None) -> dict:
+    """A detection as the public sees it, on the camera named `camera`: the latest verdict's
+    species when there is one (the model's own species_id when the verdict agrees with it),
+    the model's score, and links to its crop and frame when its own frame was saved."""
     raw, species_id = row["best_name"], row["best_species_id"]
     if row["reviewed"]:
         raw = row["corrected_name"]
@@ -102,7 +96,7 @@ def _detection(row: dict, catalogue) -> dict:
     return {
         "id": row["id"],
         "ts": _iso(row["ts"]),
-        "camera": _camera(row["source_name"]),
+        "camera": camera,
         "species_id": species_id,
         "latin": latin,
         "common": common,
@@ -134,6 +128,7 @@ def _species(row: dict, week: int, catalogue) -> dict:
         }
         if photo
         else None,
+        "latest_crop": None,  # the caller's: it takes a query
         "sightings_total": row["sightings"],
         "sightings_7d": week,
         "first_seen": _iso(row["first_seen"]),
@@ -178,9 +173,18 @@ def build_public_router(cfg, state) -> APIRouter:
     # Each camera of the site: (worker URL, whether the stream origin serves it, its embed).
     # The reef camera is always listed and is the site's one embed; the pier camera exists
     # only where it has a worker, and no stream origin serves it yet.
-    cameras = {"seahivecam": (cfg.worker_url, stream_base is not None, embed_url)}
+    reef, pier = CAMERAS
+    cameras = {reef: (cfg.worker_url, stream_base is not None, embed_url)}
     if cfg.worker_url_pier:
-        cameras["pier_cam"] = (cfg.worker_url_pier, False, None)
+        cameras[pier] = (cfg.worker_url_pier, False, None)
+
+    def _camera(name: str | None) -> str | None:
+        """A camera id for a detection's source_name, and the source_name for a camera id
+        (they are the same name): None for a name that is not one of the site's cameras."""
+        return name if name in cameras else None
+
+    def _unknown_camera() -> JSONResponse:
+        return cached({"error": "unknown camera"}, 10, status=404)
 
     async def _catalogue():
         return await state["review_catalogue"].aget()
@@ -227,13 +231,13 @@ def build_public_router(cfg, state) -> APIRouter:
         return cached({"cameras": list(entries)}, 10)
 
     @router.get("/live")
-    async def public_live(camera: str = "seahivecam") -> JSONResponse:
+    async def public_live(camera: str = reef) -> JSONResponse:
         """The camera's current frame and its identified fish, for drawing boxes over the
         stream. bbox is [x1, y1, x2, y2] in frame pixels, the worker's own order. 404 for a
         camera the site does not have; 503 when there is no camera pipeline or its worker
         does not answer with a frame of the worker's shape."""
-        if camera not in cameras:
-            return cached({"error": "unknown camera"}, 10, status=404)
+        if _camera(camera) is None:
+            return _unknown_camera()
         worker = cameras[camera][0]
         if not worker:
             return cached({"error": "no camera pipeline"}, 10, status=503)
@@ -271,9 +275,6 @@ def build_public_router(cfg, state) -> APIRouter:
     def _no_database() -> JSONResponse:
         return cached({"error": "database unavailable"}, 10, status=503)
 
-    def _unknown_camera() -> JSONResponse:
-        return cached({"error": "unknown camera"}, 10, status=404)
-
     @router.get("/detections/recent")
     async def public_recent_detections(
         camera_id: str = Query("", alias="camera"),
@@ -298,7 +299,9 @@ def build_public_router(cfg, state) -> APIRouter:
                 source_name=source,
             )
         catalogue = await _catalogue()
-        return cached({"detections": [_detection(r, catalogue) for r in rows]}, 15)
+        return cached(
+            {"detections": [_detection(r, catalogue, _camera(r["source_name"])) for r in rows]}, 15
+        )
 
     @router.get("/detections/summary")
     async def public_detections_summary(
@@ -306,7 +309,8 @@ def build_public_router(cfg, state) -> APIRouter:
         camera_id: str = Query("", alias="camera"),
     ) -> JSONResponse:
         """Sightings per species in the last `hours`, most first: tracks of at least
-        MIN_FRAMES frames whose last frame falls in the window."""
+        MIN_FRAMES frames whose last frame falls in the window, and that no volunteer's
+        latest verdict calls not a fish."""
         source = _camera(camera_id)
         if camera_id and source is None:
             return _unknown_camera()
@@ -314,7 +318,9 @@ def build_public_router(cfg, state) -> APIRouter:
         if pool is None:
             return _no_database()
         async with pool.connection() as conn:
-            rows = await q.sighting_counts(conn, hours, MIN_FRAMES, source_name=source, limit=None)
+            rows = await q.sighting_counts(
+                conn, hours, MIN_FRAMES, source_name=source, limit=None, hide_not_a_fish=True
+            )
         catalogue = await _catalogue()
         species = []
         for r in sorted(rows, key=lambda r: (-r["n"], r["species_id"])):
@@ -333,13 +339,14 @@ def build_public_router(cfg, state) -> APIRouter:
 
     async def _saved_image(event_id: int, draw, quality: int) -> Response:
         """The detection's image drawn from the frame saved at its own timestamp (the private
-        routes' rule); a cached 404 when that frame was never saved or is gone."""
+        routes' rule); a cached 404 when that frame was never saved or is gone, or when the
+        detection's latest visible verdict calls it not a fish."""
         pool = _pool()
         if pool is None:
             return _no_database()
         async with pool.connection() as conn:
-            row = await q.detection_with_frame(conn, event_id)
-        image_path = row["image_path"] if row else None
+            row = await q.detection_with_frame(conn, event_id, verdict=True)
+        image_path = row["image_path"] if row and not row["not_a_fish"] else None
         bbox = (row["bbox"] if row else None) or []
         data = None
         if image_path and len(bbox) == 4:
@@ -359,15 +366,32 @@ def build_public_router(cfg, state) -> APIRouter:
     async def public_detection_frame(event_id: int) -> Response:
         return await _saved_image(event_id, _frame, 82)
 
+    async def _species_recent(conn, entry: dict, limit: int) -> list[dict]:
+        """The species' newest detections with a saved frame (in the last RECENT_HOURS_MAX
+        hours, scored at least MIN_CONFIDENCE, not called not a fish nor renamed)."""
+        return await q.recent_detections(
+            conn,
+            hours=RECENT_HOURS_MAX,
+            limit=limit,
+            min_confidence=MIN_CONFIDENCE,
+            species_id=entry["species_id"],
+            species_names=[n for n in (entry["latin"], entry["species_id"]) if n],
+            saved_only=True,
+        )
+
     async def _species_entries(conn, catalogue, species_id: str | None = None) -> list[dict]:
         """Every species seen (or `species_id` alone), with lifetime and last-week sightings
-        and its catalogue taxonomy; most seen first, then by name."""
-        lifetime = await q.species_sightings(conn, min_frames=MIN_FRAMES, species_id=species_id)
-        week = await q.species_sightings(
-            conn, min_frames=MIN_FRAMES, hours=7 * 24, species_id=species_id
-        )
+        (not counting tracks a volunteer's latest verdict calls not a fish), its catalogue
+        taxonomy and its latest crop; most seen first, then by name."""
+        seen = {"min_frames": MIN_FRAMES, "species_id": species_id, "hide_not_a_fish": True}
+        lifetime = await q.species_sightings(conn, **seen)
+        week = await q.species_sightings(conn, hours=7 * 24, **seen)
         in_week = {r["species_id"]: r["sightings"] for r in week}
         entries = [_species(r, in_week.get(r["species_id"], 0), catalogue) for r in lifetime]
+        for entry in entries:
+            latest = await _species_recent(conn, entry, 1)
+            if latest:
+                entry["latest_crop"] = f"/api/public/detections/{latest[0]['id']}/crop.jpg"
         return sorted(
             entries, key=lambda e: (-e["sightings_total"], e["latin"] or "", e["species_id"])
         )
@@ -471,25 +495,17 @@ def build_public_router(cfg, state) -> APIRouter:
                 return cached({"error": "unknown species"}, 60, status=404)
             [entry] = found
             by_hour = await q.sightings_by_hour_of_day(
-                conn, species_id, cfg.tz, min_frames=MIN_FRAMES
+                conn, species_id, cfg.tz, min_frames=MIN_FRAMES, hide_not_a_fish=True
             )
             by_month = await q.sightings_by_month(conn, species_id, months[0], cfg.tz, MIN_FRAMES)
-            recent = await q.recent_detections(
-                conn,
-                hours=RECENT_HOURS_MAX,
-                limit=SPECIES_RECENT,
-                min_confidence=MIN_CONFIDENCE,
-                species_id=species_id,
-                species_names=[n for n in (entry["latin"], species_id) if n],
-                saved_only=True,
-            )
+            recent = await _species_recent(conn, entry, SPECIES_RECENT)
         labels = [m.strftime("%Y-%m") for m in months]
         return cached(
             {
                 **entry,
                 "by_hour": by_hour,
                 "by_month": [{"month": m, "sightings": by_month.get(m, 0)} for m in labels],
-                "recent": [_detection(r, catalogue) for r in recent],
+                "recent": [_detection(r, catalogue, _camera(r["source_name"])) for r in recent],
             },
             3600,
         )
