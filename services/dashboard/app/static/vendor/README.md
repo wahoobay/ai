@@ -19,4 +19,4 @@
    ```
 
 2. Compare with cdnjs's published value: `curl -fsSL 'https://api.cdnjs.com/libraries/hls.js/<version>?fields=sri'` (the `hls.min.js` entry, without the `sha512-` prefix).
-3. Update the version, URL and hash above, and the version pinned in `tests/test_live_player.py`.
+3. Update the version, URL and hash above, the `?v=` on the hls.js script tag in `templates/index.html`, and the version pinned in `tests/test_live_player.py`.

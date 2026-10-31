@@ -56,6 +56,7 @@ def test_the_player_retries_forever_and_falls_back_to_native_hls():
     assert "Hls.isSupported()" in js and 'canPlayType("application/vnd.apple.mpegurl")' in js
     assert "Hls.Events.ERROR" in js and "startLoad(" in js and "recoverMediaError(" in js
     assert "liveSourceUrl(" in js and "setLiveSource(" in js
+    assert "shouldRetry" in js
 
 
 def test_hls_js_is_vendored_and_pinned():

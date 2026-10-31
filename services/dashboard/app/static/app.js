@@ -1062,44 +1062,77 @@ function liveSourceUrl(cam, boxes) {
 
 let _liveHls = null;
 let _liveRetry = null;
+let _liveUrl = null;
+let _liveOnError = null;
 
 // Point #stream (an <img> for MJPEG, a <video> for HLS) at the camera/variant. The HLS player
 // never gives up: load errors retry forever, fatal errors restart or rebuild the player.
-function setLiveSource(cam, boxes) {
+// `force` rebuilds even when the URL is unchanged (the retry paths).
+function setLiveSource(cam, boxes, force = false) {
   const el = document.getElementById("stream");
   if (!el) return;
   const url = liveSourceUrl(cam, boxes);
-  if (el.tagName !== "VIDEO") { el.src = url; return; }
+  const isVideo = el.tagName === "VIDEO";
+  if (!force) {
+    if (!isVideo && el.getAttribute("src") === url) return;
+    if (isVideo && _liveUrl === url && (_liveHls || el.getAttribute("src") === url)) return;
+  }
+  if (!isVideo) { el.src = url; return; }
+  _liveUrl = url;
   if (_liveHls) { _liveHls.destroy(); _liveHls = null; }
   clearTimeout(_liveRetry);
+  if (_liveOnError) { el.removeEventListener("error", _liveOnError); _liveOnError = null; }
+  const rebuild = (ms) => { _liveRetry = setTimeout(() => setLiveSource(cam, boxes, true), ms); };
   const play = () => { el.play().catch(() => {}); };
   if (window.Hls && Hls.isSupported()) {
-    const retry = { maxNumRetry: 1000000, retryDelayMs: 2000, maxRetryDelayMs: 2000 };
-    const policy = { default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: retry, errorRetry: retry } };
+    // hls.js never retries a 4xx unless shouldRetry says so; the manifest and playlist must
+    // survive a 404 while the camera is stopped. Fragments keep the default (a segment that
+    // left the live window should not be chased).
+    const retry = {
+      maxNumRetry: 1000000,
+      retryDelayMs: 2000,
+      maxRetryDelayMs: 2000,
+      shouldRetry: (cfg, n) => n < cfg.maxNumRetry,
+    };
+    const fragRetry = { maxNumRetry: 1000000, retryDelayMs: 2000, maxRetryDelayMs: 2000 };
+    const policy = (r) => ({ default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: r, errorRetry: r } });
     const hls = new Hls({
       lowLatencyMode: false,
       liveSyncDurationCount: 3,
-      manifestLoadPolicy: policy,
-      playlistLoadPolicy: policy,
-      fragLoadPolicy: policy,
+      manifestLoadPolicy: policy(retry),
+      playlistLoadPolicy: policy(retry),
+      fragLoadPolicy: policy(fragRetry),
     });
     _liveHls = hls;
-    hls.on(Hls.Events.MANIFEST_PARSED, play);
+    let parsed = false;
+    let lastRecovery = 0;
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { parsed = true; play(); });
     hls.on(Hls.Events.ERROR, (_evt, data) => {
-      if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+      if (!data.fatal || _liveHls !== hls) return;
+      const manifestError = String(data.details || "").startsWith("manifest");
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && (!parsed || manifestError)) {
+        // startLoad() only works after the manifest parsed; before that, rebuild.
+        hls.destroy();
+        _liveHls = null;
+        rebuild(3000);
+      } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
         _liveRetry = setTimeout(() => { if (_liveHls === hls) hls.startLoad(); }, 3000);
-      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && Date.now() - lastRecovery > 5000) {
+        lastRecovery = Date.now();
         hls.recoverMediaError();
       } else {
+        // other fatal errors, or a media error that recurs right after a recovery
         hls.destroy();
-        if (_liveHls === hls) _liveHls = null;
-        _liveRetry = setTimeout(() => setLiveSource(cam, boxes), 5000);
+        _liveHls = null;
+        rebuild(5000);
       }
     });
     hls.loadSource(url);
     hls.attachMedia(el);
   } else if (el.canPlayType("application/vnd.apple.mpegurl")) {
+    // Native HLS (Safari): no hls.js to retry for us, so rebuild when the element errors.
+    _liveOnError = () => rebuild(5000);
+    el.addEventListener("error", _liveOnError);
     el.src = url;
     play();
   }
