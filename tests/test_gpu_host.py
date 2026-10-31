@@ -288,6 +288,10 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
     assert "${WB_ECR_REGISTRY}/ai-wahoobay-worker:${WB_IMAGE_TAG}" in text
     assert "capabilities: [gpu]" in text and "awslogs" in text and "restart: unless-stopped" in text
     assert "caddy:2" in text and '"8080:8080"' in text and "8081" in text
+    assert "jrottenberg/ffmpeg:7.1.2-nvidia2404" in text
+    assert "NVIDIA_DRIVER_CAPABILITIES: compute,video,utility" in text
+    assert "capabilities: [gpu, video]" in text and "encoder:" in text
+    assert "./encoder.sh:/encoder.sh:ro" in text and "awslogs-stream: encoder" in text
     if shutil.which("docker"):
         shutil.copytree(GPU_HOST, tmp_path / "gpu-host")
         (tmp_path / "gpu-host" / ".env").write_text("WB_LOG_GROUP=g\nWB_REGION=us-east-1\n")
@@ -397,3 +401,68 @@ def test_boot_reports_the_hls_playlists_without_failing_or_printing_the_secret(t
     assert "origin-secret" not in log.read_text()  # the header goes in a file, never an argument
     hdr = Path(Path(f"{log}.hdr").read_text().strip())
     assert not hdr.exists()  # removed once the report is done
+
+
+def _fake_bin(tmp_path: Path, ffmpeg: str) -> Path:
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "ffmpeg").write_text(ffmpeg)
+    (fake / "ffmpeg").chmod(0o755)
+    (fake / "sleep").write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$SLEEP_LOG"\n')
+    (fake / "sleep").chmod(0o755)
+    return fake
+
+
+def _encoder_env(**extra: str) -> dict[str, str]:
+    # conftest points WORKER_URL at a dead port for every test; the encoder's defaults are what is under test
+    env = {k: v for k, v in os.environ.items() if k not in ("WORKER_URL", "MEDIAMTX_RTSP")}
+    return {**env, **extra}
+
+
+def test_the_encoder_publishes_the_annotated_stream_through_nvenc(tmp_path):
+    """One encode on the L4 for every viewer (spec §2): the worker's boxed MJPEG in, h264 out to MediaMTX."""
+    script = GPU_HOST / "encoder.sh"
+    subprocess.run(["sh", "-n", str(script)], check=True)
+    fake = _fake_bin(tmp_path, '#!/bin/sh\nprintf "%s\\n" "$@" > "$FFMPEG_ARGS"\nexit 0\n')
+    args_file = tmp_path / "args"
+    proc = subprocess.run(
+        ["sh", str(script)],
+        env=_encoder_env(
+            PATH=f"{fake}:{os.environ['PATH']}",
+            FFMPEG_ARGS=str(args_file),
+            SLEEP_LOG=str(tmp_path / "sleeps"),
+            ENCODER_ONCE="1",
+        ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    args = args_file.read_text().split("\n")
+    assert "http://worker:8081/stream.mjpeg" in args
+    assert "rtsp://mediamtx:8554/seahive_boxes" in args
+    assert "h264_nvenc" in args and "tcp" in args[args.index("-rtsp_transport") + 1]
+    assert args[args.index("-b:v") + 1] == "3000k"
+    assert args[args.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*1)"
+    assert "-an" in args and args[args.index("-pix_fmt") + 1] == "yuv420p"
+
+
+def test_the_encoder_restarts_ffmpeg_when_the_input_ends(tmp_path):
+    """A camera gap or a worker restart ends ffmpeg's input (exit 1); the loop waits 5 s and tries again."""
+    fake = _fake_bin(tmp_path, "#!/bin/sh\nexit 1\n")
+    sleep_log = tmp_path / "sleeps"
+    proc = subprocess.run(
+        ["sh", str(GPU_HOST / "encoder.sh")],
+        env=_encoder_env(
+            PATH=f"{fake}:{os.environ['PATH']}",
+            SLEEP_LOG=str(sleep_log),
+            ENCODER_ONCE="1",
+        ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr  # a failed run is not the script's failure
+    assert sleep_log.read_text().split() == [
+        "5"
+    ]  # the pause before the next attempt, even after a failure

@@ -45,6 +45,32 @@ services:
         awslogs-stream: worker
         awslogs-create-group: "true"
 
+  encoder:
+    image: jrottenberg/ffmpeg:7.1.2-nvidia2404
+    entrypoint: ["/bin/sh", "/encoder.sh"]   # the worker's annotated MJPEG, encoded once with NVENC, published to MediaMTX
+    volumes:
+      - ./encoder.sh:/encoder.sh:ro
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    depends_on:
+      - worker
+      - mediamtx
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: encoder
+        awslogs-create-group: "true"
+
   caddy:
     image: caddy:2.8.4
     ports:
