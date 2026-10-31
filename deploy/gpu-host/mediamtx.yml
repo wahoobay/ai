@@ -1,0 +1,27 @@
+# MediaMTX on the GPU host (spec 2026-10-25 §4.2): one pull from the camera, served to the worker over local RTSP and
+# to viewers as HLS through Caddy and CloudFront. The camera URL never appears here: compose passes it as
+# MTX_PATHS_SEAHIVE_SOURCE from the .env boot.sh writes. The boxed variant is published by the encoder container.
+logLevel: info
+api: no
+metrics: no
+pprof: no
+playback: no
+rtmp: no
+srt: no
+webrtc: no
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+hls: yes
+hlsAddress: :8888
+hlsVariant: fmp4          # plain HLS, cacheable by CloudFront; low-latency parts would need a cache key per part
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsAlwaysRemux: yes       # the muxers run with no viewer: the first viewer and boot's check start at once
+hlsAllowOrigins: []       # same origin through CloudFront; no CORS header
+pathDefaults:
+  rtspTransport: tcp
+  sourceOnDemand: no
+paths:
+  seahive: {}             # source: the camera, from MTX_PATHS_SEAHIVE_SOURCE
+  seahive_boxes: {}       # source: publisher (the encoder)

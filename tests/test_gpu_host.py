@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 GPU_HOST = REPO / "deploy" / "gpu-host"
+FAKE_CAMERA_URL = "rtsp://u:p@cam/x"  # what the fake cameras secret returns for seahivecam
 
 FAKE_AWS = r"""#!/usr/bin/env bash
 echo "aws $*" >> "$FAKE_LOG"
@@ -20,7 +21,7 @@ case "$1 $2" in
     id=""; while [ $# -gt 0 ]; do [ "$1" = "--secret-id" ] && id="$2"; shift; done
     case "$id" in
       arn:db) echo '{"username":"ai","password":"pw","host":"db.local","port":5432,"dbname":"ai"}' ;;
-      */cameras) echo '{"seahivecam":"rtsp://u:p@cam/x","pier":""}' ;;
+      */cameras) echo '{"seahivecam":"rtsp://u:p@cam/x","pier":""}' ;;  # FAKE_CAMERA_URL
       arn:origin) echo 'origin-secret' ;;
       */stream-origin-verify) if [ "${FAKE_STREAM_SECRET:-0}" = "1" ]; then echo 'stream-secret'; else echo "ResourceNotFoundException" >&2; exit 254; fi ;;
       *) echo "unknown secret $id" >&2; exit 1 ;;
@@ -37,6 +38,7 @@ FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_LOG"
 url="${@: -1}"
 case "$url" in
+  */hls/*/index.m3u8) [ "${FAKE_HLS:-0}" = "1" ] && exit 0; exit 22 ;;
   */readyz) [ "${FAKE_READYZ_FAILS:-0}" != "1" ] && echo '{"ready": true, "frame_id": 42}'; [ "${FAKE_READYZ_FAILS:-0}" != "1" ] ;;
   *)
     [ "${FAKE_CURL_FAILS:-0}" = "1" ] && exit 7
@@ -124,7 +126,7 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     assert proc.returncode == 0, proc.stderr
     text = env_file.read_text()
     assert (
-        "VIDEO_SOURCE='rtsp://u:p@cam/x'" in text
+        f"CAMERA_SEAHIVE_URL='{FAKE_CAMERA_URL}'" in text
     )  # single-quoted: compose must not interpolate a $ in a password
     env = dict(
         (k, v.strip("'"))
@@ -141,7 +143,10 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     assert (
         env["CLASSIFIER_V2_COMPILE"] == "false"
     )  # the cuda image has no compiler for triton; Phase 0 measures without it
-    assert env["VIDEO_SOURCE"] == "rtsp://u:p@cam/x" and env["SOURCE_LABEL_PRIMARY"] == "seahivecam"
+    assert (
+        env["VIDEO_SOURCE"] == "rtsp://mediamtx:8554/seahive"
+        and env["SOURCE_LABEL_PRIMARY"] == "seahivecam"
+    )
     assert env["FRAMES_URL"] == "s3://frames-bucket/" and env["MODELS_URL"] == "s3://models-bucket/"
     assert (
         env["DEVICE"] == "cuda:0"
@@ -152,7 +157,7 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     assert env["ORIGIN_VERIFY_SECRET"] == "origin-secret" and env["WB_IMAGE_TAG"] == "staging"
     assert oct(env_file.stat().st_mode)[-3:] == "600"
     out = proc.stdout + proc.stderr
-    assert "pw" not in out and "rtsp://u:p" not in out and "origin-secret" not in out
+    assert "pw" not in out and FAKE_CAMERA_URL not in out and "origin-secret" not in out
     calls = log.read_text()
     assert "docker login" in calls and "compose pull" in calls and "compose up -d" in calls
     assert calls.index("docker login") < calls.index("compose pull") < calls.index("compose up -d")
@@ -233,6 +238,7 @@ def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it(
         and "flush_interval -1" in caddy
         and "respond 403" in caddy
     )
+    assert "path /hls/*" in caddy and "reverse_proxy mediamtx:8888" in caddy
     if shutil.which("docker"):
         import json
 
@@ -264,6 +270,12 @@ def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it(
         assert (
             "X-Origin-Verify" in matcher and "s3cret" in matcher
         )  # the header is part of the stream match itself
+        hls_route = next(
+            r for srv in servers.values() for r in srv["routes"] if "/hls/*" in json.dumps(r)
+        )
+        hls_matcher = json.dumps(hls_route["match"])
+        assert "X-Origin-Verify" in hls_matcher and "s3cret" in hls_matcher
+        assert "mediamtx:8888" in json.dumps(hls_route)
         compact = json.dumps(servers).replace(" ", "")
         assert '"delete":["X-Origin-Verify"]' in compact  # stripped before the worker sees it
         assert '"filter":"delete"' in json.dumps(json.loads(adapted)).replace(
@@ -295,6 +307,7 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
                 "WB_IMAGE_TAG": "staging",
                 "WB_LOG_GROUP": "g",
                 "WB_REGION": "us-east-1",
+                "CAMERA_SEAHIVE_URL": "rtsp://x",
             },
             timeout=120,
         )
@@ -307,3 +320,73 @@ def test_the_systemd_unit_boots_the_host_after_docker():
         "ExecStart=/opt/wahoobay/deploy/gpu-host/boot.sh" in unit
         and "WantedBy=multi-user.target" in unit
     )
+
+
+def test_mediamtx_pulls_the_camera_once_and_serves_plain_hls():
+    import yaml
+
+    cfg = yaml.safe_load((GPU_HOST / "mediamtx.yml").read_text())
+    assert (
+        cfg["rtsp"] is True and cfg["rtspAddress"] == ":8554" and cfg["rtspTransports"] == ["tcp"]
+    )
+    assert cfg["hls"] is True and cfg["hlsAddress"] == ":8888"
+    assert cfg["hlsVariant"] == "fmp4" and cfg["hlsSegmentDuration"] == "1s"
+    assert cfg["hlsSegmentCount"] == 7
+    assert (
+        cfg["hlsAlwaysRemux"] is True
+    )  # the muxers run without viewers: the first viewer and boot's check start at once
+    assert cfg["api"] is False and cfg["metrics"] is False and cfg["rtmp"] is False
+    assert cfg["webrtc"] is False
+    assert cfg["pathDefaults"]["rtspTransport"] == "tcp"
+    assert cfg["pathDefaults"]["sourceOnDemand"] is False
+    assert set(cfg["paths"]) == {"seahive", "seahive_boxes"}
+    assert "source" not in (
+        cfg["paths"]["seahive"] or {}
+    )  # the camera URL arrives as MTX_PATHS_SEAHIVE_SOURCE, never in the file
+
+
+def test_no_file_on_the_host_carries_the_camera_url():
+    for name in (
+        "mediamtx.yml",
+        "docker-compose.yml",
+        "Caddyfile",
+        "encoder.sh",
+        "boot.sh",
+        "README.md",
+    ):
+        path = GPU_HOST / name
+        if path.exists():
+            assert "rtsp://" not in path.read_text().replace("rtsp://mediamtx:8554", ""), name
+
+
+def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env():
+    text = (GPU_HOST / "docker-compose.yml").read_text()
+    assert "bluenviron/mediamtx:1.21.3" in text
+    assert "MTX_PATHS_SEAHIVE_SOURCE: ${CAMERA_SEAHIVE_URL}" in text
+    assert (
+        '"8554:' not in text and '"8888:' not in text
+    )  # reached only by the worker, the encoder and Caddy
+    assert "./mediamtx.yml:/mediamtx.yml:ro" in text
+
+
+def test_boot_points_the_worker_at_mediamtx_and_reads_only_from_it(tmp_path):
+    proc, env_file, _log = _boot(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    env = env_file.read_text()
+    assert "VIDEO_SOURCE='rtsp://mediamtx:8554/seahive'" in env
+    assert (
+        f"CAMERA_SEAHIVE_URL='{FAKE_CAMERA_URL}'" in env
+    )  # consumed only by compose, for MediaMTX
+    assert "FALLBACK_VIDEO_SOURCE=''" in env  # the worker never opens a second pull of the camera
+    assert env.count(FAKE_CAMERA_URL) == 1
+
+
+def test_boot_reports_the_hls_playlists_without_failing_or_printing_the_secret(tmp_path):
+    proc, _env, _log = _boot(tmp_path, FAKE_HLS="1")
+    assert proc.returncode == 0 and "hls: seahive ready" in proc.stdout
+    assert "hls: seahive_boxes ready" in proc.stdout
+    out = proc.stdout + proc.stderr
+    assert "origin-secret" not in out and "stream-secret" not in out
+    proc, _env, log = _boot(tmp_path, reuse=True)
+    assert proc.returncode == 0 and "hls: seahive not yet" in proc.stdout
+    assert "origin-secret" not in log.read_text()  # the header goes in a file, never an argument

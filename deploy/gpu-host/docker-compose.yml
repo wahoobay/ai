@@ -3,9 +3,27 @@
 # /etc/wahoobay/host.env and the environment's secrets, then runs `docker compose up -d` here; compose
 # reads the same .env for the ${...} values below.
 services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.3
+    # No ports: reached on the compose network only, by the worker (RTSP 8554), the encoder and Caddy (HLS 8888).
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    environment:
+      MTX_PATHS_SEAHIVE_SOURCE: ${CAMERA_SEAHIVE_URL}   # the camera, pulled once; from the .env boot.sh writes
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: mediamtx
+        awslogs-create-group: "true"
+
   worker:
     image: ${WB_ECR_REGISTRY}/ai-wahoobay-worker:${WB_IMAGE_TAG}
     env_file: .env
+    depends_on:
+      - mediamtx
     ports:
       - "8081:8081"   # the worker's API and MJPEG; the security group admits the dashboard, the Lambdas and Caddy only
     volumes:

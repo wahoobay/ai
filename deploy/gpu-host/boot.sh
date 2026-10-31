@@ -7,7 +7,9 @@
 #   2. read the three secrets with the instance role and write the worker's .env next to this file
 #      (mode 600, rewritten every time, never printed);
 #   3. log in to ECR, pull the environment's worker image, `docker compose up -d`;
-#   4. wait for the worker's /healthz (the first start fetches weights and compiles the classifier).
+#   4. wait for the worker's /healthz (the first start fetches weights and compiles the classifier);
+#   5. report whether the camera streams and whether MediaMTX serves its HLS playlists.
+# The camera is pulled once, by MediaMTX; the worker reads rtsp://mediamtx:8554/seahive and nothing else.
 set -euo pipefail
 
 HOST_ENV="${WB_HOST_ENV:-/etc/wahoobay/host.env}"
@@ -56,7 +58,8 @@ LOCATION_ID=$(q "$WB_LOCATION_ID")
 TZ=$(q "$WB_TZ")
 SENSESTREAM_DEPLOYMENT_URI=$(q "$WB_DEPLOYMENT_URI")
 DATABASE_URL=$(q "$database_url")
-VIDEO_SOURCE=$(q "$video_source")
+CAMERA_SEAHIVE_URL=$(q "$video_source")
+VIDEO_SOURCE='rtsp://mediamtx:8554/seahive'
 SOURCE_LABEL_PRIMARY='seahivecam'
 FALLBACK_VIDEO_SOURCE=''
 FRAMES_URL=$(q "s3://${WB_FRAMES_BUCKET}/")
@@ -122,3 +125,28 @@ while :; do
   fi
   sleep "$interval_s"
 done
+
+# MediaMTX serves HLS through Caddy: ask for each playlist the way CloudFront does. The header goes in a mode-600
+# file (curl -H @file), so the secret is never a command argument. Informational, never fatal.
+hls_timeout_s="${BOOT_HLS_TIMEOUT_S:-60}"
+hls_attempts=$(( hls_timeout_s / step ))
+[ "$hls_attempts" -ge 1 ] || hls_attempts=1
+hdr="$(mktemp)"
+chmod 600 "$hdr"
+printf 'X-Origin-Verify: %s\n' "$origin_secret" > "$hdr"
+for path in seahive seahive_boxes; do
+  n=0
+  while :; do
+    if curl -sf -m 5 -H @"$hdr" "http://127.0.0.1:8080/hls/${path}/index.m3u8" >/dev/null 2>&1; then
+      echo "hls: ${path} ready"
+      break
+    fi
+    n=$((n + 1))
+    if [ "$n" -ge "$hls_attempts" ]; then
+      echo "hls: ${path} not yet after ${hls_timeout_s}s; see: docker compose logs mediamtx encoder"
+      break
+    fi
+    sleep "$interval_s"
+  done
+done
+rm -f "$hdr"

@@ -3,7 +3,8 @@
 # the stream route's own matcher (Caddy orders directives globally, so a separate "not header" rule
 # would run after the proxy), it is stripped before the worker sees it, and it is filtered out of
 # every log line. /stream/* goes to the worker with the prefix stripped, unbuffered, so an MJPEG
-# stream flows frame by frame for as long as the viewer watches. Anything else: 403.
+# stream flows frame by frame for as long as the viewer watches. /hls/* goes to MediaMTX the same way
+# (/hls/<path>/index.m3u8 becomes /<path>/index.m3u8). Anything else: 403.
 {
 	auto_https off
 	log default {
@@ -25,6 +26,15 @@
 		reverse_proxy worker:8081 {
 			flush_interval -1
 		}
+	}
+	@hls {
+		path /hls/*
+		header X-Origin-Verify {$ORIGIN_VERIFY_SECRET}
+	}
+	handle @hls {
+		uri strip_prefix /hls
+		request_header -X-Origin-Verify
+		reverse_proxy mediamtx:8888
 	}
 	handle {
 		respond 403
