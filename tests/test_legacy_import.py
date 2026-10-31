@@ -482,6 +482,49 @@ def test_a_driver_error_is_reported_without_the_url(monkeypatch):
     assert refused.value.__cause__ is None and refused.value.__suppress_context__
 
 
+@pytest.mark.parametrize("mode", ["--inspect", "--out"])
+def test_a_query_error_is_reported_without_the_url(monkeypatch, capsys, tmp_path, mode):
+    """A refused SELECT or a lost connection: the driver's message names the user and host."""
+    import export_legacy_sensors
+
+    class Error(Exception):
+        def __init__(self, msg: str, errno: int | None) -> None:
+            super().__init__(msg)
+            self.msg, self.errno = msg, errno
+
+    class Conn:
+        def cursor(self):
+            class Cursor:
+                def execute(self, sql, params=()):
+                    raise Error("SELECT command denied to user 'reader'@'db.example'", 1142)
+
+                def close(self):
+                    pass
+
+            return Cursor()
+
+        def close(self):
+            pass
+
+    connector = types.ModuleType("mysql.connector")
+    connector.Error = Error
+    mysql = types.ModuleType("mysql")
+    mysql.connector = connector
+    monkeypatch.setitem(sys.modules, "mysql", mysql)
+    monkeypatch.setitem(sys.modules, "mysql.connector", connector)
+    monkeypatch.setenv("LEGACY_MYSQL_URL", "mysql://reader:pw@db.example/legacy")
+    monkeypatch.setattr(export_legacy_sensors, "connect", lambda url: Conn())
+    argv = [mode] if mode == "--inspect" else [mode, str(tmp_path)]
+    with pytest.raises(SystemExit) as refused:
+        export_legacy_sensors.main(argv)
+    message = str(refused.value)
+    assert message == "the Java database refused a query (MySQL error 1142)"
+    assert not any(part in message for part in ("reader", "db.example", "pw", "mysql://"))
+    captured = capsys.readouterr()
+    assert not any(part in captured.out + captured.err for part in ("reader", "db.example", "pw"))
+    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+
+
 def test_the_export_wants_the_url_from_the_environment(monkeypatch, tmp_path):
     from export_legacy_sensors import main
 

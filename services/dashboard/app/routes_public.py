@@ -737,7 +737,12 @@ def build_public_router(cfg, state) -> APIRouter:
         text = _public_readme()
         if text is None:
             return cached({"error": "no README"}, 60, status=404)
-        return Response(text, media_type="text/markdown", headers=_download("README.md"))
+        # Inline: the website's "see the README" link shows it; the data files are attachments.
+        return Response(
+            text,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": "inline", "Cache-Control": DOWNLOAD_CACHE},
+        )
 
     # A source in the public files is a camera's id, or empty: a worker without a camera label
     # stamps its video URL's host as its source.

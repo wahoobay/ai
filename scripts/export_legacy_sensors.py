@@ -273,6 +273,20 @@ def connect(url: str) -> Any:
     return conn
 
 
+def _driver_error() -> type[BaseException]:
+    """The driver's error class (no exception can match when the driver is missing: connect
+    reports that)."""
+    try:
+        import mysql.connector
+    except ImportError:
+        return _NoDriver
+    return mysql.connector.Error
+
+
+class _NoDriver(Exception):
+    pass
+
+
 def _select(conn: Any, sql: str, params: Sequence[Any] = ()) -> Iterator[tuple]:
     cur = conn.cursor()
     try:
@@ -343,14 +357,21 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             "set LEGACY_MYSQL_URL in the environment: read -rs LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL"
         )
-    conn = connect(url)
     try:
-        if args.inspect:
-            inspect(conn, args.weather_datasource)
-        else:
-            export(conn, args.out, args.weather_datasource, args.water_datasource)
-    finally:
-        conn.close()
+        conn = connect(url)
+        try:
+            if args.inspect:
+                inspect(conn, args.weather_datasource)
+            else:
+                export(conn, args.out, args.weather_datasource, args.water_datasource)
+        finally:
+            conn.close()
+    except _driver_error() as e:
+        # The driver's message names the host or the user: the error number only.
+        errno = getattr(e, "errno", None)
+        raise SystemExit(
+            f"the Java database refused a query (MySQL error {errno if errno is not None else 'unknown'})"
+        ) from None
     return 0
 
 

@@ -1452,8 +1452,8 @@ async def test_the_exports_readme_is_public_without_addresses(rclient, monkeypat
     source only by its camera id."""
     r = rclient.get("/api/public/exports/README.md")
     assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/markdown")
-    assert r.headers["content-disposition"] == 'attachment; filename="README.md"'
+    assert r.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert r.headers["content-disposition"] == "inline"
     assert r.headers["cache-control"] == "public, max-age=3600"
     assert not EMAIL.search(r.text)
     _, note = public_readme_parts(r.text, EXPORTS_README.read_text())
