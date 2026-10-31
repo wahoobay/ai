@@ -1,6 +1,6 @@
 """Periodic work, run from an event rather than inside the web process.
 
-    python -m app.jobs refresh_matviews|alert_rules|migrate|seed|status|all
+    python -m app.jobs refresh_matviews|alert_rules|migrate|seed|import_legacy|status|all
     app.lambda_entry.handler({"job": "..."})   the jobs and migrate Lambdas
 
 The dashboard holds no loops: the materialized-view refresh and the alert rules
@@ -89,6 +89,21 @@ async def reseed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
     return await seed_sample(pool, force=True)
 
 
+async def import_legacy(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Bring the Java backend's sensor history in from LEGACY_URL (default <MODELS_URL>/legacy/):
+    only rows older than the first live reading; a second run inserts nothing. Within a time
+    budget: partial: true means it stopped early, and the next run carries on."""
+    from . import legacy_import
+
+    site = settings()
+    return await legacy_import.import_legacy(
+        pool,
+        legacy_url=legacy_import.default_legacy_url(),
+        deployment_uri=site.deployment_uri,
+        location_id=site.location_id,
+    )
+
+
 async def status(pool: AsyncConnectionPool) -> dict[str, Any]:
     """What is going on inside: the schema revision, the last job runs, the pollers,
     row counts. A read for the platform's verify script; not recorded as a run."""
@@ -125,6 +140,7 @@ JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "alert_rules": alert_rules,
     "seed": seed_sample,
     "reseed": reseed_sample,
+    "import_legacy": import_legacy,
     "status": status,
 }
 READ_ONLY = {"status"}  # not recorded in job_runs

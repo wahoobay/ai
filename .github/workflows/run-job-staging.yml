@@ -1,0 +1,55 @@
+name: run-job-staging
+
+# Run one job by name on staging, never production: hands staging's jobs Lambda
+# {"job": "<job>"} asynchronously and says where its result appears. import_legacy loads
+# the Java database's sensor history from the models bucket's legacy/ prefix (README:
+# "Importing the Java database's sensor history"); status reports the schema revision,
+# the last job runs and the row counts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "The job to run on staging"
+        type: choice
+        required: true
+        options:
+          - status
+          - import_legacy
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # No GitHub environment on purpose: the deploy role in infra trusts the ref:refs/heads/main OIDC
+    # subject, and a job that names an environment gets environment:<name> as its subject instead.
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.STAGING_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Dispatch the job
+        env:
+          FUNCTIONS: ${{ vars.STAGING_FUNCTIONS }}
+          JOB: ${{ inputs.job }}
+          AWS_MAX_ATTEMPTS: "1" # a dispatch is never repeated behind our back
+        run: |
+          fn="$(tr ',' '\n' <<<"$FUNCTIONS" | grep -- '-jobs$')"
+          # Asynchronous (Event): the import runs for up to 840 s, past the CLI's 60 s read
+          # timeout, and a synchronous call's retry would start a second import beside the first.
+          response="$(aws lambda invoke --function-name "$fn" --invocation-type Event \
+            --payload "{\"job\":\"$JOB\"}" --cli-binary-format raw-in-base64-out /dev/null)"
+          echo "$response"
+          if ! grep -q '"StatusCode": 202' <<<"$response"; then
+            echo "::error::staging's jobs Lambda did not take the $JOB job; see the response above"
+            exit 1
+          fi
+          echo "::notice::$JOB handed to $fn; it runs on its own, for up to 15 minutes"
+          cat <<EOF
+          The result is the line {"job": "$JOB", "ok": ..., "detail": {...}} in the jobs Lambda's log
+          group (import_legacy's detail: read, inserted, partial; if partial is true, dispatch it again):
+            AWS_PROFILE=cdk aws logs tail /aws/lambda/$fn --region us-east-1 --since 30m --follow
+          EOF

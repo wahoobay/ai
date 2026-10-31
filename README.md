@@ -372,6 +372,44 @@ worker stamps on its rows.
   service ARN, hostname, service URL) come from the `AiStack` outputs; the
   infra repository's README ("AI stacks") says how to set them. The DGX is not
   deployed this way: see `docs/operations.md`.
+- **Running one job on staging:** Actions → `run-job-staging` → the job
+  (`status`, `import_legacy`) hands staging's jobs Lambda `{"job": "<job>"}`
+  asynchronously (the import outlasts a synchronous call). The result is a JSON
+  line in the Lambda's log group, `/aws/lambda/<jobs function>`; the workflow
+  prints the `aws logs tail` command that follows it.
+
+### Importing the Java database's sensor history
+
+The old site's backend (MySQL, `wahoobay-db`) holds the sonde's and the weather
+station's readings since 2025; this database has them only since its poller
+started. Only measured readings come across: the sonde's `water_quality` and the
+weather station's `sitedata`, never Tomorrow.io's modelled `weatherdata`. Once,
+from a shell that has the Java database's read-only URL, in this checkout
+(`pip install '.[legacy]'` first: the MySQL driver):
+
+```bash
+# the Java database's read-only URL from a hidden prompt: mysql://user:password@host:3306/database,
+# with any : / ? # @ in the password percent-encoded (%3A %2F %3F %23 %40); -r keeps backslashes
+read -rs LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL
+python scripts/export_legacy_sensors.py --inspect    # first: the JSON keys (never values) against WEATHER_FIELDS
+python scripts/export_legacy_sensors.py --out legacy/
+AWS_PROFILE=cdk aws s3 cp legacy/ s3://platform-wahoobay-models/legacy/ --recursive
+gh workflow run run-job-staging.yml --repo wahoobay/ai -f job=import_legacy
+```
+
+`--inspect` prints `water_quality`'s row count per `datasource_id` (the export
+takes the sonde's, `--water-datasource`, default 3) and, for the weather
+station's `sitedata` rows and for `weatherdata`, the keys and array lengths of
+the newest 50 rows (counts, keys and lengths only); if they differ from the
+`WEATHER_FIELDS` table in the script, the table changes before the export
+(`docs/data_pipeline.md`, "Legacy history"). The export prints each file's row
+count and first and last `ts`; `legacy/` is git-ignored. The job inserts only
+rows older than each table's first non-legacy reading for the site's deployment,
+tagged `source = 'legacy'`; running it again inserts nothing. It works within a
+time budget (840 s, inside the Lambda's timeout). Its result (`read`, `inserted`,
+`partial`) is the line the workflow tells you to follow in the jobs Lambda's log
+group: if the job reports `partial: true`, dispatch it again, and it carries on
+where it stopped.
 
 ---
 
