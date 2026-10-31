@@ -1,0 +1,45 @@
+name: run-job-staging
+
+# Run one job by name on staging, never production: invokes staging's jobs Lambda with
+# {"job": "<job>"}. import_legacy loads the Java database's sensor history from the
+# models bucket's legacy/ prefix (README: "Importing the Java database's sensor
+# history"); status reports the schema revision, the last job runs and the row counts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "The job to run on staging"
+        type: choice
+        required: true
+        options:
+          - status
+          - import_legacy
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # No GitHub environment on purpose: the deploy role in infra trusts the ref:refs/heads/main OIDC
+    # subject, and a job that names an environment gets environment:<name> as its subject instead.
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.STAGING_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Invoke the job
+        env:
+          FUNCTIONS: ${{ vars.STAGING_FUNCTIONS }}
+          JOB: ${{ inputs.job }}
+        run: |
+          fn="$(tr ',' '\n' <<<"$FUNCTIONS" | grep -- '-jobs$')"
+          response="$(aws lambda invoke --function-name "$fn" --payload "{\"job\":\"$JOB\"}" \
+            --cli-binary-format raw-in-base64-out out.json)"
+          cat out.json; echo
+          if grep -q FunctionError <<<"$response" || ! grep -q '"ok": true' out.json; then
+            echo "::error::the $JOB job failed; see the output above"
+            exit 1
+          fi

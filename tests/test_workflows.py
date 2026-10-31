@@ -19,3 +19,18 @@ def test_no_job_names_a_github_environment():
         if re.match(r"^\s+environment:\s*\S", line)
     }
     assert offenders == set(), sorted(offenders)
+
+
+def test_run_job_staging_offers_known_jobs_and_never_production():
+    """The dispatch that runs one job by name (import_legacy, status) reaches staging's
+    jobs Lambda only, and offers only jobs the Lambda knows."""
+    import yaml
+    from app.jobs import JOBS
+
+    text = (WORKFLOWS / "run-job-staging.yml").read_text()
+    workflow = yaml.safe_load(text)
+    triggers = workflow.get("on", workflow.get(True))  # YAML 1.1 reads a bare `on` as True
+    job = triggers["workflow_dispatch"]["inputs"]["job"]
+    assert job["type"] == "choice" and job["required"] is True
+    assert {"import_legacy", "status"} <= set(job["options"]) <= set(JOBS)
+    assert "STAGING_ROLE_ARN" in text and "PROD_" not in text

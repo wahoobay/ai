@@ -70,6 +70,10 @@ __pycache__/
 .superpowers/
 .remember/
 
+# The Java backend's sensor history (scripts/export_legacy_sensors.py --out legacy/),
+# uploaded to the models bucket's legacy/ prefix, never committed.
+/legacy/
+
 # Contest / frame-selection exports (8 GB of frames, CLIP embeddings, score
 # tables). Scripts live in scripts/contest/, entry text in docs/contest/.
 exports/

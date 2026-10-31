@@ -227,7 +227,7 @@ Indexes: `(event_id)`, `(reviewer, created_at DESC)`,
 ```
 ts                  TIMESTAMPTZ
 deployment_uri      TEXT          -- 'wahoo_2' for the EXO2 sonde co-located with SEAHIVECAM
-source              TEXT          -- 'live' | 'synthetic' (banner trigger when synthetic)
+source              TEXT          -- 'live' | 'synthetic' (banner trigger when synthetic) | 'legacy' (see Legacy history)
 water_temp_c        REAL
 ph                  REAL
 do_pct              REAL          -- dissolved oxygen, % saturation
@@ -247,7 +247,7 @@ doesn't have a column):
 ```
 ts                       TIMESTAMPTZ
 deployment_uri           TEXT             -- 'wahoo_2'
-source                   TEXT             -- 'live' | 'synthetic'
+source                   TEXT             -- 'live' | 'synthetic' | 'legacy' (see Legacy history)
 
 -- Vaisala WXT-536 station feed (from Wahoo Bay API)
 bar_press_hpa            REAL
@@ -319,6 +319,101 @@ Currently empty — PTZ poller dormant (no PTZ credentials yet).
 | `species_counts_hourly` (view) | Hourly rollup of `detection_events` by species | Cheap rollup for the species-counts panel. |
 | `frame_stats_hourly` (view) | Hourly rollup of `frame_stats` | Drives the drift dashboard. |
 | `frame_stats_drift` (view) | 1 h vs 7 d vs 28 d baseline | Source for `drift_*` SLO rules. |
+
+---
+
+## Legacy history (the Java backend's MySQL)
+
+The old site's backend (`wahoobay-net-api`, MySQL `wahoobay-db`) has polled the
+same sonde and weather station since 2025; `sensor_readings` and
+`weather_readings` start when this system's poller did. The older readings are
+brought across once (the runbook is the README's "Importing the Java database's
+sensor history"):
+
+```
+MySQL ──scripts/export_legacy_sensors.py──▶ legacy/water_quality.csv, legacy/weather.csv
+      ──aws s3 cp──▶ <MODELS_URL>/legacy/ ──import_legacy job──▶ sensor_readings, weather_readings
+```
+
+The export runs where the database's credentials are (`LEGACY_MYSQL_URL` from a
+hidden prompt; a read-only session, SELECTs only). The job (`app/legacy_import.py`,
+`LEGACY_URL`, default `<MODELS_URL>/legacy/`) inserts only the rows older than a
+table's first non-legacy reading for the site's deployment, with `source =
+'legacy'`; `ON CONFLICT (deployment_uri, ts) DO NOTHING`, so a second run inserts
+nothing. Both files hold one row per distinct `ts` (ISO 8601 UTC), ascending.
+
+### The source tables
+
+| MySQL table | What it holds | Used for |
+|---|---|---|
+| `water_quality` | The sonde's readings, typed: `time` (epoch ms), `water_temperature_f`, `ph`, `do_percent`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu`, `no3_n_mg_l`, `spcond_mscm` | `water_quality.csv` |
+| `sitedata` | Each datasource's raw SenseStream result, JSON `{"time": <epoch ms>, "readings": [...]}`; the weather station is datasource 1 (`--weather-datasource`), 24 positional readings | `weather.csv` |
+| `weatherdata` | Tomorrow.io's current values, JSON `{"time": <epoch ms>, "readings": [...]}`, positional in the order Tomorrow.io returned them | nothing (below) |
+| `weather_station` | A typed copy of the station's `sitedata`, converted to inHg and °F | nothing: `sitedata` holds the same readings unconverted |
+
+### `water_quality.csv`
+
+`ts` = `time`; `water_temp_c` = (`water_temperature_f` − 32) × 5 / 9, two
+places; `ph`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu` as they
+are; `do_pct` = `do_percent`; `spcond_ms_cm` = `spcond_mscm`. Left out:
+`no3_n_mg_l` (the nitrate sensor is gone), `date_eastern` (derived from `time`),
+`id`, `datasource_id`.
+
+### `weather.csv` and `WEATHER_FIELDS`
+
+The JSON blobs have no field names: a value's meaning is its position in
+`readings`. `WEATHER_FIELDS`, a table in the script, says which value fills
+which column: for each column a list of candidates `(source, key, converter)`,
+the first present in a row wins, where a key is a top-level JSON key or
+`name[i]`, the i-th value of an array. A column with no candidate found is
+written empty; a row with nothing mapped is not written. The station's
+positions are the ones the Java backend's own converter
+(`SiteDataConversionService`) and the live poller
+(`parse_wahoobay_weather_station`) read, already in the columns' units, so no
+conversion:
+
+| Column | `sitedata` (station) |
+|---|---|
+| `bar_press_hpa` | `readings[0]` (hPa) |
+| `wind_dir_min_deg`, `wind_dir_avg_deg`, `wind_dir_max_deg` | `readings[1]`, `readings[2]`, `readings[3]` |
+| `wind_speed_min_ms`, `wind_speed_avg_ms`, `wind_speed_max_ms` | `readings[4]`, `readings[5]`, `readings[6]` (m/s) |
+| `air_temp_c` | `readings[7]` (°C) |
+| `rel_humidity_pct` | `readings[9]` (%) |
+| `rain_accum_mm` | `readings[10]` (mm) |
+
+Not mapped:
+
+- the station's `readings[8]` (internal temperature) and `readings[20]`–`[23]`
+  (heating temperature and voltages): diagnostics, which `weather_readings`
+  does not keep either;
+- the station's `readings[11]`–`[19]` (rain duration and intensities, hail,
+  water level, solar radiation): `weather_readings` has columns for them, but
+  `weather.csv`'s header does not;
+- all of `weatherdata` (Tomorrow.io: cloud cover, dew point, humidity,
+  precipitation intensity and probability, sea-level and surface pressure,
+  temperature, apparent temperature, UV index, weather code, wind direction and
+  speed, in that order in the live poller's reading of the same feed). Its
+  forecast fields have no column in `weather.csv`, and its temperature,
+  humidity, wind and pressure are modelled, not measured: the live poller keeps
+  them out of the station's columns, and so does the import;
+- `sitedata`'s `lastrequesttime`, and its `{}` placeholder rows (written when
+  SenseStream had nothing for a period).
+
+**Inspect first.** `export_legacy_sensors.py --inspect` prints, for the
+station's `sitedata` and for `weatherdata`, the keys of the newest 50 rows and
+each array's length, never a value. The station's line should read:
+
+```
+sitedata (datasource 1), newest 50 rows: readings[0..23], time
+```
+
+(`weatherdata`'s length does not matter while it maps nothing.) If the
+station's array is not 24 long, or the blobs carry named keys, the table gains
+the matching candidates before the export: another key or source, with a
+converter to the column's unit (`as_is`, `f_to_c`; mph or km/h→m/s, inHg→hPa,
+in→mm are one-line functions beside them, should a key say so). A `weatherdata`
+candidate makes the export read that table too; its value never overwrites one
+the station already gave for the same `ts`.
 
 ---
 

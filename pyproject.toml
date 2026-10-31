@@ -8,6 +8,15 @@ requires-python = ">=3.11"
 # individually with their own requirements.txt. The pyproject.toml
 # exists to host shared tooling config (ruff, pytest) for CI.
 
+[project.optional-dependencies]
+# scripts/export_legacy_sensors.py (the Java backend's sensor history, exported once):
+# pip install '.[legacy]'
+legacy = ["mysql-connector-python==26.7.0"]
+
+# Nothing to package: installing the project only brings an extra's dependencies.
+[tool.setuptools]
+packages = []
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
