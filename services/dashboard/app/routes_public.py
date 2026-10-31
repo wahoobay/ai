@@ -236,6 +236,8 @@ def _species(row: dict, week: int, catalogue) -> dict:
         "common": common,
         "family": taxon.family if taxon else None,
         "order": taxon.order if taxon else None,
+        "class": taxon.class_ if taxon else None,
+        "phylum": taxon.phylum if taxon else None,
         "aphia_id": taxon.aphia_id if taxon else None,
         "photo": {
             "url": f"/api/public/species/{quote(row['species_id'], safe='')}/photo.jpg",

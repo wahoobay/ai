@@ -96,6 +96,8 @@ SPECIES_KEYS = {
     "common",
     "family",
     "order",
+    "class",
+    "phylum",
     "aphia_id",
     "photo",
     "latest_crop",
@@ -363,6 +365,19 @@ def with_orders(review_assets, orders: dict[str, str]) -> None:
     path.write_text(out.getvalue())
 
 
+def with_classes(review_assets, classes: dict[str, str], phylum: str = "Chordata") -> None:
+    """Give the fixture taxonomy its class (by family) and phylum; the catalogue rebuilds."""
+    path = review_assets["assets"] / "taxonomy.csv"
+    rows = list(csv.DictReader(path.open(newline="")))
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=[*rows[0], "class", "phylum"])
+    w.writeheader()
+    for row in rows:
+        cls = classes.get(row["family"], "")
+        w.writerow({**row, "class": cls, "phylum": phylum if cls else ""})
+    path.write_text(out.getvalue())
+
+
 def when(d: dict) -> datetime:
     return datetime.fromisoformat(d["ts"])
 
@@ -606,6 +621,8 @@ async def test_summary_counts_tracks_in_the_window(rdb, public_client):
 
 async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, review_assets, tmp_path):
     with_orders(review_assets, {"Carangidae": "Carangiformes", "Pomatomidae": "Scombriformes"})
+    # Fixture values: the class of a bony fish and (for Pomatomidae) of a shark.
+    with_classes(review_assets, {"Carangidae": "Actinopterygii", "Pomatomidae": "Elasmobranchii"})
     now = datetime.now(UTC)
     await seed_track(rdb, "Seriola zonata", 1, now - timedelta(hours=1))
     await seed_track(rdb, "Seriola zonata", 2, now - timedelta(days=10))
@@ -644,6 +661,8 @@ async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, revie
         "common": "Banded Rudderfish",
         "family": "Carangidae",
         "order": "Carangiformes",
+        "class": "Actinopterygii",
+        "phylum": "Chordata",
         "aphia_id": 900005,
         "photo": {
             "url": "/api/public/species/Seriola%20zonata/photo.jpg",
@@ -665,11 +684,17 @@ async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, revie
         "Scombriformes",
         None,
     )
+    assert (pomatomus["class"], pomatomus["phylum"]) == ("Elasmobranchii", "Chordata")
     # Nothing in the catalogue knows this one.
-    assert {k: testfish[k] for k in ("common", "family", "order", "aphia_id", "photo")} == {
+    assert {
+        k: testfish[k]
+        for k in ("common", "family", "order", "class", "phylum", "aphia_id", "photo")
+    } == {
         "common": None,
         "family": None,
         "order": None,
+        "class": None,
+        "phylum": None,
         "aphia_id": None,
         "photo": None,
     }

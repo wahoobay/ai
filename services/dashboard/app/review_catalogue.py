@@ -70,6 +70,8 @@ class CatalogueEntry:
     rank: str | None = None
     family: str | None = None
     order: str | None = None
+    class_: str | None = None
+    phylum: str | None = None
     resolved: bool = False
     raw_names: set[str] = field(default_factory=set)
     class_dir: str | None = None
@@ -206,6 +208,8 @@ def load_catalogue(paths: CataloguePaths) -> Catalogue:
                 e.rank = row.get("rank") or None
                 e.family = row.get("family") or None
                 e.order = row.get("order") or None
+                e.class_ = row.get("class") or None
+                e.phylum = row.get("phylum") or None
         e.raw_names.add(raw_n)
         return e
 
