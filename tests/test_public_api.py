@@ -16,7 +16,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from review_fixtures import T0, TEST_DSN, add_item, add_verdict, make_user, seed_frame
+from review_fixtures import T0, TEST_DSN, add_item, add_verdict, login, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
 EMBED = "https://www.youtube.com/embed/abc123"
@@ -1305,24 +1305,95 @@ async def test_an_export_covers_the_last_days_asked_for(rdb, rclient):
     assert temperatures("?days=400") == ["20.0", "24.0", "26.0"]
 
 
+def public_readme_parts(text: str, source: str) -> tuple[str, str]:
+    """The public README split into the dashboard's README (less its address lines) and what
+    follows it."""
+    kept = "".join(line for line in source.splitlines(keepends=True) if not EMAIL.search(line))
+    assert text.startswith(kept)
+    return kept, text[len(kept) :]
+
+
 async def test_the_exports_readme_is_public_without_addresses(rclient, monkeypatch, tmp_path):
     """The README the dashboard's own downloads carry, less any line that names an e-mail
-    address: the public API names no one's address."""
+    address (the public API names no one's address), and a note that the public files name a
+    source only by its camera id."""
     r = rclient.get("/api/public/exports/README.md")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/markdown")
     assert r.headers["content-disposition"] == 'attachment; filename="README.md"'
     assert r.headers["cache-control"] == "public, max-age=3600"
-    source = EXPORTS_README.read_text().splitlines()
-    assert r.text.splitlines() == [line for line in source if not EMAIL.search(line)]
     assert not EMAIL.search(r.text)
+    _, note = public_readme_parts(r.text, EXPORTS_README.read_text())
+    assert "`source_name`" in note and "camera" in note
 
     import app.routes_public as routes_public
 
     readme = tmp_path / "README.md"
     readme.write_text("# Data\n\nCite it.\nCorrections: contact someone@example.org.\nThanks.\n")
     monkeypatch.setattr(routes_public, "EXPORTS_README", readme)
-    assert rclient.get("/api/public/exports/README.md").text == "# Data\n\nCite it.\nThanks.\n"
+    text = rclient.get("/api/public/exports/README.md").text
+    assert public_readme_parts(text, readme.read_text())[0] == "# Data\n\nCite it.\nThanks.\n"
     monkeypatch.setattr(routes_public, "EXPORTS_README", tmp_path / "missing.md")
     gone = rclient.get("/api/public/exports/README.md")
     assert gone.status_code == 404 and gone.headers["cache-control"] == "public, max-age=60"
+
+
+# A source that is not a camera id: what a worker without a camera label stamps (its video URL's
+# host).
+HOST = "cam.example.net"
+
+
+async def test_public_exports_name_a_source_only_by_its_camera_id(rdb, public_client, tmp_path):
+    """The public files carry a configured camera's id in `source_name`, and nothing for any
+    other source, in CSV and Parquet alike; the dashboard's own export keeps the raw source."""
+    import pandas as pd
+
+    await clear_readings(rdb)
+    now = datetime.now(UTC)
+    for track, source in ((1, "seahivecam"), (2, HOST), (3, "pier_cam")):
+        start = now - timedelta(minutes=10 * track)
+        for i in range(3):
+            await seed_frame(
+                rdb,
+                tmp_path,
+                ts=start + timedelta(seconds=i),
+                frame_id=100 * track + i,
+                source=source,
+                save=False,
+                boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata", "track_id": track}],
+            )
+        async with rdb.connection() as conn:
+            await conn.execute(
+                "INSERT INTO frame_stats (ts, source_name, frame_id, num_detections) "
+                "VALUES (%s, %s, %s, 1)",
+                (start, source, track),
+            )
+    await refresh_sightings(rdb)
+
+    def sources(client) -> dict[str, tuple[set, set]]:
+        """Each public export's source_name values, in its CSV and in its Parquet."""
+        out = {}
+        for name in PUBLIC_EXPORTS:
+            r = client.get(f"/api/public/exports/{name}.csv")
+            assert r.status_code == 200 and HOST not in r.text, name
+            rows = list(csv.DictReader(io.StringIO(r.text)))
+            if rows and "source_name" in rows[0]:
+                p = client.get(f"/api/public/exports/{name}.parquet")
+                # Parquet keeps a missing value as null ("" in an all-empty column: the
+                # writer's rule); either is the empty value here.
+                column = pd.read_parquet(io.BytesIO(p.content))["source_name"]
+                parquet = {value if isinstance(value, str) else "" for value in column}
+                out[name] = ({row["source_name"] for row in rows}, parquet)
+        return out
+
+    named = ["events", "sightings", "hourly_summary", "frame_stats", "tracks_timeline", "topk_long"]
+    with public_client() as client:  # the reef camera alone: the pier has no worker here
+        assert sources(client) == {name: ({"seahivecam", ""},) * 2 for name in named}
+    with public_client(WORKER_URL_PIER=PIER) as client:
+        everyone = {"seahivecam", "pier_cam", ""}
+        assert sources(client) == {name: (everyone,) * 2 for name in named}
+        await make_user(rdb, "vic", role="viewer")
+        login(client, "vic")
+        private = client.get("/api/export/events.csv?hours=24")
+        assert private.status_code == 200
+        assert HOST in {row["source_name"] for row in csv.DictReader(io.StringIO(private.text))}

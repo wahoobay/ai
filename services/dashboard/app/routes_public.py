@@ -97,6 +97,12 @@ LICENCES = (
     / "LICENSES_AND_CREDITS.md"
 )
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+# What the public copy of the README adds: how its files name a source.
+README_NOTE = (
+    "\n---\n\n## Files from the public API\n\n"
+    "In the files downloaded from the public API, `source_name` is the id of one of the site's "
+    "cameras, or empty for any other source.\n"
+)
 
 
 def _iso(ts: datetime | None) -> str | None:
@@ -140,13 +146,14 @@ def data_licence(path: Path) -> str | None:
 
 
 def _public_readme() -> str | None:
-    """The exports' README without the lines that name an e-mail address; None when the file
-    is missing."""
+    """The exports' README without the lines that name an e-mail address, and with
+    README_NOTE; None when the file is missing."""
     try:
         text = EXPORTS_README.read_text()
     except OSError:
         return None
-    return "".join(line for line in text.splitlines(keepends=True) if not EMAIL.search(line))
+    kept = "".join(line for line in text.splitlines(keepends=True) if not EMAIL.search(line))
+    return kept + README_NOTE
 
 
 def _names(catalogue, raw: str | None) -> tuple[str | None, str | None]:
@@ -675,18 +682,23 @@ def build_public_router(cfg, state) -> APIRouter:
             return cached({"error": "no README"}, 60, status=404)
         return Response(text, media_type="text/markdown", headers=_download("README.md"))
 
+    # A source in the public files is a camera's id, or nothing: a worker without a camera
+    # label stamps its video URL's host as its source.
+    public_values = {"source_name": _camera}
     # Each public export's CSV from the function the dashboard's own /api/export/<name>.csv
-    # calls, with that route's defaults for every filter but the window.
+    # calls, with that route's defaults for every filter but the window, its rows passed
+    # through public_values (`v`).
+    v = {"values": public_values}
     csv_exports = {
-        "events": lambda pool, hours: export_events(pool, hours, None, 0.0),
-        "species_counts": export_species_counts,
-        "sightings": lambda pool, hours: export_sightings(pool, hours, MIN_FRAMES),
-        "hourly_summary": lambda pool, hours: export_hourly_summary(pool, hours, deployment),
-        "water_quality": lambda pool, hours: export_water_quality(pool, hours, deployment),
-        "weather": lambda pool, hours: export_weather(pool, hours, deployment),
-        "frame_stats": export_frame_stats,
-        "tracks_timeline": lambda pool, hours: export_tracks_timeline(pool, hours, MIN_FRAMES),
-        "topk_long": lambda pool, hours: export_topk_long(pool, hours, 0.0),
+        "events": lambda pool, hours: export_events(pool, hours, None, 0.0, **v),
+        "species_counts": lambda pool, hours: export_species_counts(pool, hours, **v),
+        "sightings": lambda pool, hours: export_sightings(pool, hours, MIN_FRAMES, **v),
+        "hourly_summary": lambda pool, hours: export_hourly_summary(pool, hours, deployment, **v),
+        "water_quality": lambda pool, hours: export_water_quality(pool, hours, deployment, **v),
+        "weather": lambda pool, hours: export_weather(pool, hours, deployment, **v),
+        "frame_stats": lambda pool, hours: export_frame_stats(pool, hours, **v),
+        "tracks_timeline": lambda pool, hours: export_tracks_timeline(pool, hours, MIN_FRAMES, **v),
+        "topk_long": lambda pool, hours: export_topk_long(pool, hours, 0.0, **v),
     }
 
     @router.get("/exports/{name}.csv")
@@ -720,7 +732,7 @@ def build_public_router(cfg, state) -> APIRouter:
             name, hours=days * 24, deployment=deployment, min_frames=MIN_FRAMES, min_accuracy=0.0
         )
         return Response(
-            await fetch_parquet_bytes(pool, sql, params, cols),
+            await fetch_parquet_bytes(pool, sql, params, cols, public_values),
             media_type="application/vnd.apache.parquet",
             headers=_download(f"{name}.parquet"),
         )
