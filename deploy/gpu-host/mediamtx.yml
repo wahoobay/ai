@@ -9,6 +9,7 @@ playback: no
 rtmp: no
 srt: no
 webrtc: no
+moq: no                  # 1.21 otherwise opens an unauthenticated MoQ listener and generates a certificate
 rtsp: yes
 rtspAddress: :8554
 rtspTransports: [tcp]

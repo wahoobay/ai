@@ -132,6 +132,7 @@ hls_timeout_s="${BOOT_HLS_TIMEOUT_S:-60}"
 hls_attempts=$(( hls_timeout_s / step ))
 [ "$hls_attempts" -ge 1 ] || hls_attempts=1
 hdr="$(mktemp)"
+trap 'rm -f "$hdr"' EXIT   # an interrupted boot must not leave the secret behind
 chmod 600 "$hdr"
 printf 'X-Origin-Verify: %s\n' "$origin_secret" > "$hdr"
 for path in seahive seahive_boxes; do

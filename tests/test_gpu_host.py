@@ -38,7 +38,7 @@ FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_LOG"
 url="${@: -1}"
 case "$url" in
-  */hls/*/index.m3u8) [ "${FAKE_HLS:-0}" = "1" ] && exit 0; exit 22 ;;
+  */hls/*/index.m3u8) for a in "$@"; do case "$a" in @*) echo "${a#@}" > "$FAKE_LOG.hdr"; cat "${a#@}" >> "$FAKE_LOG.hdrs" ;; esac; done; [ "${FAKE_HLS:-0}" = "1" ] && exit 0; exit 22 ;;
   */readyz) [ "${FAKE_READYZ_FAILS:-0}" != "1" ] && echo '{"ready": true, "frame_id": 42}'; [ "${FAKE_READYZ_FAILS:-0}" != "1" ] ;;
   *)
     [ "${FAKE_CURL_FAILS:-0}" = "1" ] && exit 7
@@ -336,7 +336,7 @@ def test_mediamtx_pulls_the_camera_once_and_serves_plain_hls():
         cfg["hlsAlwaysRemux"] is True
     )  # the muxers run without viewers: the first viewer and boot's check start at once
     assert cfg["api"] is False and cfg["metrics"] is False and cfg["rtmp"] is False
-    assert cfg["webrtc"] is False
+    assert cfg["webrtc"] is False and cfg["moq"] is False
     assert cfg["pathDefaults"]["rtspTransport"] == "tcp"
     assert cfg["pathDefaults"]["sourceOnDemand"] is False
     assert set(cfg["paths"]) == {"seahive", "seahive_boxes"}
@@ -367,6 +367,11 @@ def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env(
         '"8554:' not in text and '"8888:' not in text
     )  # reached only by the worker, the encoder and Caddy
     assert "./mediamtx.yml:/mediamtx.yml:ro" in text
+    import yaml
+
+    caddy = yaml.safe_load(text)["services"]["caddy"]
+    assert "env_file" not in caddy  # .env also holds the camera URL and the database URL
+    assert caddy["environment"] == {"ORIGIN_VERIFY_SECRET": "${ORIGIN_VERIFY_SECRET}"}
 
 
 def test_boot_points_the_worker_at_mediamtx_and_reads_only_from_it(tmp_path):
@@ -390,3 +395,5 @@ def test_boot_reports_the_hls_playlists_without_failing_or_printing_the_secret(t
     proc, _env, log = _boot(tmp_path, reuse=True)
     assert proc.returncode == 0 and "hls: seahive not yet" in proc.stdout
     assert "origin-secret" not in log.read_text()  # the header goes in a file, never an argument
+    hdr = Path(Path(f"{log}.hdr").read_text().strip())
+    assert not hdr.exists()  # removed once the report is done

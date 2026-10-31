@@ -51,7 +51,8 @@ services:
       - "8080:8080"   # CloudFront's VPC origin; refuses anything without the X-Origin-Verify header
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    env_file: .env    # ORIGIN_VERIFY_SECRET
+    environment:      # only its own secret: .env also holds the camera URL and the database URL
+      ORIGIN_VERIFY_SECRET: ${ORIGIN_VERIFY_SECRET}
     depends_on:
       - worker
     restart: unless-stopped
