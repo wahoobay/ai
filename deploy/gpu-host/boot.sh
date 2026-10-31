@@ -35,6 +35,11 @@ stream_secret_name="${WB_STREAM_SECRET_NAME:-/ai/${WB_LOCATION_ID}/${WB_ENV}/str
 if ! origin_secret="$(secret "$stream_secret_name" 2>/dev/null)"; then
   origin_secret="$(secret "$WB_ORIGIN_SECRET_ARN")"
 fi
+# MediaMTX's HLS CDN bearer (hlsCDNSecret): Caddy adds it on /hls/*, so MediaMTX serves one shared, cacheable
+# session per path instead of per-viewer cookie sessions CloudFront cannot carry. Derived here from the origin
+# secret (nothing new in Secrets Manager; the origin secret itself never reaches MediaMTX), stable across boots.
+# printf is a builtin: the secret is never a command argument.
+hls_cdn_secret="$(printf '%s' "$origin_secret" | sha256sum | cut -c1-64)"
 
 database_url="$(DB_JSON="$db_json" python3 -c '
 import json, os, urllib.parse
@@ -73,6 +78,7 @@ CLASSIFIER_V2_COMPILE='false'
 WORKER_HTTP_HOST='0.0.0.0'
 WORKER_HTTP_PORT='8081'
 ORIGIN_VERIFY_SECRET=$(q "$origin_secret")
+HLS_CDN_SECRET=$(q "$hls_cdn_secret")
 WB_IMAGE_TAG=$(q "$WB_ENV")
 WB_ECR_REGISTRY=$(q "$WB_ECR_REGISTRY")
 WB_LOG_GROUP=$(q "$WB_LOG_GROUP")
@@ -127,7 +133,9 @@ while :; do
 done
 
 # MediaMTX serves HLS through Caddy: ask for each playlist the way CloudFront does. The header goes in a mode-600
-# file (curl -H @file), so the secret is never a command argument. Informational, never fatal.
+# file (curl -H @file), so the secret is never a command argument. Ready means a 200: without the CDN bearer
+# MediaMTX answers 302 (its per-viewer cookie check), which `curl -f` would take for success. Informational,
+# never fatal; each failed attempt costs up to 5 s plus the interval, so the message reports the time it took.
 hls_timeout_s="${BOOT_HLS_TIMEOUT_S:-60}"
 hls_attempts=$(( hls_timeout_s / step ))
 [ "$hls_attempts" -ge 1 ] || hls_attempts=1
@@ -135,19 +143,27 @@ hdr="$(mktemp)"
 trap 'rm -f "$hdr"' EXIT   # an interrupted boot must not leave the secret behind
 chmod 600 "$hdr"
 printf 'X-Origin-Verify: %s\n' "$origin_secret" > "$hdr"
-for path in seahive seahive_boxes; do
-  n=0
+hls_ready() {  # $1: the MediaMTX path; prints the report line, true once the playlist answers 200
+  local path="$1" n=0 code started="$SECONDS"
   while :; do
-    if curl -sf -m 5 -H @"$hdr" "http://127.0.0.1:8080/hls/${path}/index.m3u8" >/dev/null 2>&1; then
+    code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H @"$hdr" "http://127.0.0.1:8080/hls/${path}/index.m3u8" 2>/dev/null)" || true
+    if [ "$code" = 200 ]; then
       echo "hls: ${path} ready"
-      break
+      return 0
     fi
     n=$((n + 1))
     if [ "$n" -ge "$hls_attempts" ]; then
-      echo "hls: ${path} not yet after ${hls_timeout_s}s; see: docker compose logs mediamtx encoder"
-      break
+      echo "hls: ${path} not yet after $(( SECONDS - started ))s; see: docker compose logs mediamtx encoder"
+      return 1
     fi
     sleep "$interval_s"
   done
-done
+}
+# No camera, nothing to box: the boxed variant is not waited for, which keeps a boot during a camera outage
+# (up to 600 s for /healthz, then the camera's and seahive's waits) well inside the deploy's 900 s.
+if hls_ready seahive; then
+  hls_ready seahive_boxes || true
+else
+  echo "hls: seahive_boxes skipped: seahive not ready"
+fi
 rm -f "$hdr"

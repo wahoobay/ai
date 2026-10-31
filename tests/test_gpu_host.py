@@ -5,25 +5,32 @@ ref and boots. Fake aws/docker/curl/git on PATH stand in for the machine."""
 
 from __future__ import annotations
 
+import hashlib
+import http.client
 import os
 import shutil
+import socket
 import subprocess
+import time
 from pathlib import Path
+
+import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 GPU_HOST = REPO / "deploy" / "gpu-host"
 FAKE_CAMERA_URL = "rtsp://u:p@cam/x"  # what the fake cameras secret returns for seahivecam
 
-FAKE_AWS = r"""#!/usr/bin/env bash
+FAKE_AWS = rf"""#!/usr/bin/env bash
 echo "aws $*" >> "$FAKE_LOG"
 case "$1 $2" in
   "secretsmanager get-secret-value")
     id=""; while [ $# -gt 0 ]; do [ "$1" = "--secret-id" ] && id="$2"; shift; done
     case "$id" in
-      arn:db) echo '{"username":"ai","password":"pw","host":"db.local","port":5432,"dbname":"ai"}' ;;
-      */cameras) echo '{"seahivecam":"rtsp://u:p@cam/x","pier":""}' ;;  # FAKE_CAMERA_URL
+      arn:db) echo '{{"username":"ai","password":"pw","host":"db.local","port":5432,"dbname":"ai"}}' ;;
+      */cameras) echo '{{"seahivecam":"{FAKE_CAMERA_URL}","pier":""}}' ;;
       arn:origin) echo 'origin-secret' ;;
-      */stream-origin-verify) if [ "${FAKE_STREAM_SECRET:-0}" = "1" ]; then echo 'stream-secret'; else echo "ResourceNotFoundException" >&2; exit 254; fi ;;
+      */stream-origin-verify) if [ "${{FAKE_STREAM_SECRET:-0}}" = "1" ]; then echo 'stream-secret'; else echo "ResourceNotFoundException" >&2; exit 254; fi ;;
       *) echo "unknown secret $id" >&2; exit 1 ;;
     esac ;;
   "ecr get-login-password") echo token ;;
@@ -38,7 +45,15 @@ FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_LOG"
 url="${@: -1}"
 case "$url" in
-  */hls/*/index.m3u8) for a in "$@"; do case "$a" in @*) echo "${a#@}" > "$FAKE_LOG.hdr"; cat "${a#@}" >> "$FAKE_LOG.hdrs" ;; esac; done; [ "${FAKE_HLS:-0}" = "1" ] && exit 0; exit 22 ;;
+  */hls/*/index.m3u8)
+    for a in "$@"; do case "$a" in @*) echo "${a#@}" > "$FAKE_LOG.hdr"; cat "${a#@}" >> "$FAKE_LOG.hdrs" ;; esac; done
+    # FAKE_HLS=1: the playlist; 302: MediaMTX's per-viewer cookie redirect (no CDN bearer); otherwise 404.
+    case "${FAKE_HLS:-0}" in 1) code=200 ;; 302) code=302 ;; *) code=404 ;; esac
+    write=0; fail=0
+    for a in "$@"; do case "$a" in -w) write=1 ;; -f|--fail|-[!-]*f*) fail=1 ;; esac; done
+    [ "$write" = 1 ] && printf '%s' "$code"
+    [ "$fail" = 1 ] && [ "$code" -ge 400 ] && exit 22  # like curl: -f fails on >= 400 only, so a 302 exits 0
+    exit 0 ;;
   */readyz) [ "${FAKE_READYZ_FAILS:-0}" != "1" ] && echo '{"ready": true, "frame_id": 42}'; [ "${FAKE_READYZ_FAILS:-0}" != "1" ] ;;
   *)
     [ "${FAKE_CURL_FAILS:-0}" = "1" ] && exit 7
@@ -182,6 +197,23 @@ def test_boot_prefers_the_stream_origins_own_secret_when_it_exists(tmp_path):
     assert "stream-secret" not in proc.stdout + proc.stderr
 
 
+def test_boot_derives_mediamtxs_cdn_bearer_from_the_origin_secret_and_never_prints_it(tmp_path):
+    """MediaMTX (>= 1.21.1) gives each HLS viewer its own session (a cookie and a redirect) unless the request
+    carries its CDN bearer; CloudFront forwards no cookie or query string, so Caddy adds the bearer. It is
+    derived on the host from the origin secret (nothing new in Secrets Manager, the origin secret never reaches
+    MediaMTX) and is stable across boots, so `compose up -d` does not recreate mediamtx and caddy every time."""
+    for extra, origin in (({}, b"origin-secret"), ({"FAKE_STREAM_SECRET": "1"}, b"stream-secret")):
+        proc, env_file, log = _boot(tmp_path / origin.decode(), FAKE_HLS="1", **extra)
+        assert proc.returncode == 0, proc.stderr
+        bearer = hashlib.sha256(origin).hexdigest()
+        text = env_file.read_text()
+        assert f"HLS_CDN_SECRET='{bearer}'" in text
+        assert text.index("ORIGIN_VERIFY_SECRET=") < text.index("HLS_CDN_SECRET=")  # next to it
+        assert bearer not in proc.stdout + proc.stderr
+        assert bearer not in log.read_text()  # never a command argument
+        assert bearer not in Path(f"{log}.hdrs").read_text()  # Caddy adds it, not boot
+
+
 def test_boot_prunes_dangling_images_before_the_pull_and_after_the_start(tmp_path):
     """Every deploy pulls a ~14 GB worker image and left the previous one dangling: after four deploys the
     100 GB root disk was 96% full and the next pull failed, taking the SSM document worker down with it
@@ -226,6 +258,20 @@ def test_update_deepens_a_shallow_clone_so_older_commits_can_be_checked_out(tmp_
     )
 
 
+def _find_handler(node, name: str) -> dict:
+    """The first handler called `name` anywhere in an adapted Caddy JSON route."""
+    if isinstance(node, dict):
+        if node.get("handler") == name:
+            return node
+        node = list(node.values())
+    if isinstance(node, list):
+        for child in node:
+            found = _find_handler(child, name)
+            if found:
+                return found
+    return {}
+
+
 def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it():
     """The review found the first version proxied /stream/* before checking the header (Caddy
     orders directives globally) and logged the header's value on every 502. The header is now
@@ -239,6 +285,8 @@ def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it(
         and "respond 403" in caddy
     )
     assert "path /hls/*" in caddy and "reverse_proxy mediamtx:8888" in caddy
+    assert 'header_up Authorization "Bearer {$HLS_CDN_SECRET}"' in caddy  # MediaMTX's CDN mode
+    assert "header_up -Cookie" in caddy  # the dashboard's session cookie never reaches MediaMTX
     if shutil.which("docker"):
         import json
 
@@ -251,6 +299,8 @@ def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it(
                 f"{GPU_HOST / 'Caddyfile'}:/etc/caddy/Caddyfile:ro",
                 "-e",
                 "ORIGIN_VERIFY_SECRET=s3cret",
+                "-e",
+                "HLS_CDN_SECRET=cdn",
                 "caddy:2.8.4",
                 "caddy",
                 "adapt",
@@ -276,6 +326,9 @@ def test_caddy_verifies_the_origin_header_on_the_stream_route_and_never_logs_it(
         hls_matcher = json.dumps(hls_route["match"])
         assert "X-Origin-Verify" in hls_matcher and "s3cret" in hls_matcher
         assert "mediamtx:8888" in json.dumps(hls_route)
+        proxy = _find_handler(hls_route, "reverse_proxy")
+        assert proxy["headers"]["request"]["set"]["Authorization"] == ["Bearer cdn"]
+        assert proxy["headers"]["request"]["delete"] == ["Cookie"]
         compact = json.dumps(servers).replace(" ", "")
         assert '"delete":["X-Origin-Verify"]' in compact  # stripped before the worker sees it
         assert '"filter":"delete"' in json.dumps(json.loads(adapted)).replace(
@@ -312,6 +365,7 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
                 "WB_LOG_GROUP": "g",
                 "WB_REGION": "us-east-1",
                 "CAMERA_SEAHIVE_URL": "rtsp://x",
+                "HLS_CDN_SECRET": "cdn",
             },
             timeout=120,
         )
@@ -327,8 +381,6 @@ def test_the_systemd_unit_boots_the_host_after_docker():
 
 
 def test_mediamtx_pulls_the_camera_once_and_serves_plain_hls():
-    import yaml
-
     cfg = yaml.safe_load((GPU_HOST / "mediamtx.yml").read_text())
     assert (
         cfg["rtsp"] is True and cfg["rtspAddress"] == ":8554" and cfg["rtspTransports"] == ["tcp"]
@@ -347,6 +399,67 @@ def test_mediamtx_pulls_the_camera_once_and_serves_plain_hls():
     assert "source" not in (
         cfg["paths"]["seahive"] or {}
     )  # the camera URL arrives as MTX_PATHS_SEAHIVE_SOURCE, never in the file
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not on the PATH")
+def test_mediamtx_serves_hls_as_a_cdn_session_only_with_the_bearer():
+    """MediaMTX 1.21.3 with this mediamtx.yml: with the CDN bearer a playlist request proceeds (404: the
+    camera is unreachable here) with no cookie and no redirect; without it, the per-viewer cookie redirect
+    (302) that CloudFront cannot carry. Pins the mode Caddy relies on."""
+    port = _free_port()
+    name = f"wb-test-mediamtx-cdn-{os.getpid()}-{port}"
+
+    def status(headers: dict[str, str]) -> int:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)  # never follows redirects
+        try:
+            conn.request("GET", "/seahive/index.m3u8", headers=headers)
+            return conn.getresponse().status
+        finally:
+            conn.close()
+
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-v",
+                f"{GPU_HOST / 'mediamtx.yml'}:/mediamtx.yml:ro",
+                "-e",
+                "MTX_PATHS_SEAHIVE_SOURCE=rtsp://127.0.0.1:1/x",
+                "-e",
+                "MTX_HLSCDNSECRET=cdn",
+                "-p",
+                f"127.0.0.1:{port}:8888",
+                "bluenviron/mediamtx:1.21.3",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,  # the first run pulls the image
+            check=True,
+        )
+        deadline = time.monotonic() + 30
+        while True:  # Docker's port proxy accepts before MediaMTX listens: wait for an HTTP answer
+            try:
+                with_bearer = status({"Authorization": "Bearer cdn"})
+                break
+            except (OSError, http.client.HTTPException):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.2)
+        assert with_bearer == 404  # the CDN session proceeded; the path has no source
+        assert status({}) == 302  # per-viewer session: the cookie-check redirect
+        assert status({"Authorization": "Bearer wrong"}) == 302
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
 
 
 def test_no_file_on_the_host_carries_the_camera_url():
@@ -371,11 +484,23 @@ def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env(
         '"8554:' not in text and '"8888:' not in text
     )  # reached only by the worker, the encoder and Caddy
     assert "./mediamtx.yml:/mediamtx.yml:ro" in text
-    import yaml
-
-    caddy = yaml.safe_load(text)["services"]["caddy"]
+    services = yaml.safe_load(text)["services"]
+    assert services["mediamtx"]["environment"] == {
+        "MTX_PATHS_SEAHIVE_SOURCE": "${CAMERA_SEAHIVE_URL}",
+        "MTX_HLSCDNSECRET": "${HLS_CDN_SECRET}",  # CDN mode: the bearer Caddy adds on /hls/*
+    }
+    assert "hlsCDNSecret" not in yaml.safe_load((GPU_HOST / "mediamtx.yml").read_text())
+    caddy = services["caddy"]
     assert "env_file" not in caddy  # .env also holds the camera URL and the database URL
-    assert caddy["environment"] == {"ORIGIN_VERIFY_SECRET": "${ORIGIN_VERIFY_SECRET}"}
+    assert caddy["environment"] == {
+        "ORIGIN_VERIFY_SECRET": "${ORIGIN_VERIFY_SECRET}",
+        "HLS_CDN_SECRET": "${HLS_CDN_SECRET}",
+    }
+    encoder = services["encoder"]
+    assert "env_file" not in encoder
+    secrets = {"CAMERA_SEAHIVE_URL", "HLS_CDN_SECRET", "ORIGIN_VERIFY_SECRET", "DATABASE_URL"}
+    assert not secrets & set(encoder["environment"])
+    assert encoder["environment"] == {"NVIDIA_DRIVER_CAPABILITIES": "compute,video,utility"}
 
 
 def test_boot_points_the_worker_at_mediamtx_and_reads_only_from_it(tmp_path):
@@ -401,6 +526,21 @@ def test_boot_reports_the_hls_playlists_without_failing_or_printing_the_secret(t
     assert "origin-secret" not in log.read_text()  # the header goes in a file, never an argument
     hdr = Path(Path(f"{log}.hdr").read_text().strip())
     assert not hdr.exists()  # removed once the report is done
+
+
+def test_boot_decides_hls_readiness_on_the_status_and_skips_the_boxes_without_the_camera(tmp_path):
+    """Without the CDN bearer MediaMTX answers a playlist with a 302 to a cookie check, which `curl -sf` takes
+    for success: readiness is a 200 and nothing else. With no camera there is nothing to box, so the boxed
+    variant is not waited for, keeping a boot during a camera outage well inside the deploy's 900 s."""
+    proc, _env, log = _boot(tmp_path, FAKE_HLS="302")
+    assert proc.returncode == 0, proc.stderr
+    assert "hls: seahive not yet after " in proc.stdout and "hls: seahive ready" not in proc.stdout
+    assert "-w %{http_code}" in log.read_text()
+    proc, _env, log = _boot(tmp_path, reuse=True)  # 404: no camera, so seahive has no source
+    assert proc.returncode == 0, proc.stderr
+    assert "hls: seahive not yet after " in proc.stdout
+    assert "hls: seahive_boxes skipped: seahive not ready" in proc.stdout
+    assert "/hls/seahive_boxes/" not in log.read_text()  # not asked for at all
 
 
 def _fake_bin(tmp_path: Path, ffmpeg: str) -> Path:

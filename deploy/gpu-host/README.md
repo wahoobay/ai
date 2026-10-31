@@ -7,8 +7,8 @@ proxy CloudFront reaches. The design is the infra repository's
 
 | File | Role |
 |---|---|
-| `docker-compose.yml` | The worker (image `ai-wahoobay-worker:<env>` from ECR, the one CI builds) MediaMTX, the encoder and Caddy; logs to CloudWatch `/ai/<location>/<env>/gpu-host` |
-| `Caddyfile` | Port 8080 for CloudFront's VPC origin: 403 without the `X-Origin-Verify` header, `/stream/*` to the worker unbuffered, `/hls/*` to MediaMTX (prefix stripped) |
+| `docker-compose.yml` | The worker (image `ai-wahoobay-worker:<env>` from ECR, the one CI builds), MediaMTX, the encoder and Caddy; logs to CloudWatch `/ai/<location>/<env>/gpu-host` |
+| `Caddyfile` | Port 8080 for CloudFront's origin on the host (a public origin on the host's address, authenticated by the header): 403 without the `X-Origin-Verify` header, `/stream/*` to the worker unbuffered, `/hls/*` to MediaMTX (prefix stripped) |
 | `encoder.sh` | The encoder's loop: ffmpeg reads the worker's `/stream.mjpeg`, encodes with `h264_nvenc`, publishes `seahive_boxes`; restarts 5 s after ffmpeg ends |
 | `mediamtx.yml` | MediaMTX: RTSP and HLS settings and the two paths (below) |
 | `boot.sh` | Reads `/etc/wahoobay/host.env` (written by the stack) and three secrets, writes `.env` (mode 600), ECR login, `compose up`, waits for `/healthz` |
@@ -20,12 +20,20 @@ proxy CloudFront reaches. The design is the infra repository's
 | `mediamtx` | 8554 RTSP, 8888 HLS | compose network only (the worker, the encoder, Caddy); no host ports |
 | `worker` | 8081 | the dashboard, the Lambdas and Caddy (security group) |
 | `encoder` | none | publishes to `mediamtx` (RTSP over TCP); reads the worker on 8081 |
-| `caddy` | 8080 | CloudFront's VPC origin |
+| `caddy` | 8080 | CloudFront's origin on the host |
 
 The camera is pulled once, by MediaMTX (path `seahive`, source from `CAMERA_SEAHIVE_URL` in `.env`). The worker
 reads `rtsp://mediamtx:8554/seahive` and nothing else. The path `seahive_boxes` is published by the encoder.
 Viewers fetch plain HLS at `/hls/<path>/index.m3u8` (through CloudFront and Caddy). `boot.sh` ends with an
-`hls: <path> ready` or `hls: <path> not yet` line per path; it is a report, never a failure.
+`hls: <path> ready` or `hls: <path> not yet` line per path (ready means a 200), and `hls: seahive_boxes
+skipped` when `seahive` is not ready; it is a report, never a failure.
+
+MediaMTX serves HLS in CDN mode. Since 1.21.1 it gives each viewer its own HLS session, carried by a cookie
+and a redirect, and those cannot cross a cache that forwards no cookies or query strings, as CloudFront's
+policies here do. A request with `Authorization: Bearer <hlsCDNSecret>` instead shares one session per path,
+with plain cacheable responses; Caddy adds that bearer on `/hls/*`. The secret (`HLS_CDN_SECRET`) is derived
+on the host by `boot.sh` from the origin secret (its SHA-256) and lives only in `.env` and the environments of
+the `mediamtx` (`MTX_HLSCDNSECRET`) and `caddy` containers.
 
 Nothing here holds a secret at rest except `.env`, which `boot.sh` rewrites at every run from Secrets
 Manager (the database secret the stack generated, `/ai/<location>/<env>/cameras` that Dan created, the
@@ -45,9 +53,8 @@ Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_B
 
 Measure at bring-up, with the dashboard watching the boxed variant:
 
-- `docker stats encoder` for its CPU and memory;
+- `docker compose stats encoder` for its CPU and memory;
 - `nvidia-smi dmon -s u` for encoder (`enc`) utilisation next to the worker's `sm`;
-- the bitrate of each variant (`seahive`, `seahive_boxes`), from the MediaMTX logs or by sizing the segments
-  fetched from `/hls/<path>/`.
+- the bitrate of each variant (`seahive`, `seahive_boxes`): size the segments fetched from `/hls/<path>/`.
 
 Record the numbers in the plan's close-out before changing the knobs.
