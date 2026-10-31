@@ -12,6 +12,7 @@ import asyncio
 import json
 import shutil
 import sys
+import types
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -212,6 +213,18 @@ def test_a_spent_budget_stops_after_the_batch_and_the_next_run_finishes(pg_url, 
     assert query(pg_url, "SELECT count(*) FROM weather_readings") == [(5,)]
 
 
+def test_a_file_not_reached_is_left_out(pg_url):
+    alembic("upgrade", "head", url=pg_url)
+    # The water file in one batch spends the budget: the weather file is not read.
+    assert _import(pg_url, budget_s=0) == {"water": {"read": 5, "inserted": 5}, "partial": True}
+    assert query(pg_url, "SELECT count(*) FROM weather_readings") == [(0,)]
+    assert _import(pg_url, budget_s=0) == {
+        "water": {"read": 5, "inserted": 0},
+        "weather": {"read": 5, "inserted": 5},
+        "partial": False,
+    }
+
+
 def test_every_run_makes_progress_however_small_the_budget(pg_url, monkeypatch):
     from app import legacy_import
 
@@ -231,6 +244,17 @@ def test_a_file_with_another_header_is_refused(pg_url, tmp_path):
     alembic("upgrade", "head", url=pg_url)
     (tmp_path / "water_quality.csv").write_text("ts,temp\n2025-01-01T00:00:00Z,20\n")
     with pytest.raises(ValueError, match="water_quality.csv"):
+        _import(pg_url, f"file://{tmp_path}/")
+
+
+def test_a_bad_value_names_the_file_and_the_line(pg_url, tmp_path):
+    alembic("upgrade", "head", url=pg_url)
+    header = (FIXTURES / "water_quality.csv").read_text().splitlines()[0]
+    (tmp_path / "water_quality.csv").write_text(f"{header}\n2025-01-01T00:00:00Z,1,2,3,4,5,six,7\n")
+    with pytest.raises(ValueError, match=r"water_quality\.csv:2: "):
+        _import(pg_url, f"file://{tmp_path}/")
+    (tmp_path / "water_quality.csv").write_text(f"{header}\n\n2025-13-01,1,2,3,4,5,6,7\n")
+    with pytest.raises(ValueError, match=r"water_quality\.csv:3: "):
         _import(pg_url, f"file://{tmp_path}/")
 
 
@@ -425,6 +449,37 @@ def test_the_mysql_url_is_read_without_echoing_it():
     with pytest.raises(SystemExit) as refused:
         mysql_params("mysql://reader:s3cr#et@db.example/legacy")
     assert "s3cr" not in str(refused.value) and "LEGACY_MYSQL_URL" in str(refused.value)
+    # A raw password 'ab@cd/ef' would read as host 'cd' and database 'ef@db.example/legacy',
+    # and the driver's "unknown host 'cd'" would then print a piece of it: refused here.
+    with pytest.raises(SystemExit) as refused:
+        mysql_params("mysql://reader:ab@cd/ef@db.example/legacy")
+    message = str(refused.value)
+    assert "LEGACY_MYSQL_URL" in message
+    assert not any(part in message for part in ("reader", "cd", "ef@", "db.example"))
+
+
+def test_a_driver_error_is_reported_without_the_url(monkeypatch):
+    """The driver's own messages name the host (refused) or the user (access denied)."""
+    from export_legacy_sensors import connect
+
+    class Error(Exception):
+        def __init__(self, msg: str, errno: int) -> None:
+            super().__init__(msg)
+            self.msg, self.errno = msg, errno
+
+    def refuse(**params):
+        raise Error(f"Unknown MySQL server host '{params['host']}' as {params['user']}", 2005)
+
+    connector = types.ModuleType("mysql.connector")
+    connector.Error, connector.connect = Error, refuse
+    mysql = types.ModuleType("mysql")
+    mysql.connector = connector
+    monkeypatch.setitem(sys.modules, "mysql", mysql)
+    monkeypatch.setitem(sys.modules, "mysql.connector", connector)
+    with pytest.raises(SystemExit) as refused:
+        connect("mysql://reader:pw@db.example/legacy")
+    assert str(refused.value) == "could not connect to the Java database (MySQL error 2005)"
+    assert refused.value.__cause__ is None and refused.value.__suppress_context__
 
 
 def test_the_export_wants_the_url_from_the_environment(monkeypatch, tmp_path):
@@ -434,3 +489,84 @@ def test_the_export_wants_the_url_from_the_environment(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as refused:
         main(["--out", str(tmp_path)])
     assert "LEGACY_MYSQL_URL" in str(refused.value)
+
+
+class _FakeMySQL:
+    """A connection whose cursors answer by SQL (the first matching key) and record each
+    (sql, params): the export's queries without a MySQL server."""
+
+    def __init__(self, answers: list[tuple[str, list[tuple]]]) -> None:
+        self.answers, self.queries = answers, []
+
+    def cursor(self):
+        conn = self
+
+        class Cursor:
+            def execute(self, sql, params=()):
+                conn.queries.append((sql, tuple(params)))
+                self.rows = next(rows for key, rows in conn.answers if key in sql)
+
+            def __iter__(self):
+                return iter(self.rows)
+
+            def close(self):
+                pass
+
+        return Cursor()
+
+    def close(self):
+        pass
+
+
+def _main_with(monkeypatch, conn, *argv):
+    import export_legacy_sensors
+
+    monkeypatch.setenv("LEGACY_MYSQL_URL", "mysql://reader:pw@db.example/legacy")
+    monkeypatch.setattr(export_legacy_sensors, "connect", lambda url: conn)
+    return export_legacy_sensors.main(list(argv))
+
+
+def test_inspect_counts_the_water_rows_per_datasource(monkeypatch, capsys):
+    conn = _FakeMySQL(
+        [
+            ("GROUP BY", [(3, 70123), (4, 12)]),
+            ("FROM sitedata", [(json.dumps(STATION),), ("{}",)]),
+            ("FROM weatherdata", [(json.dumps(FORECAST),)]),
+        ]
+    )
+    assert _main_with(monkeypatch, conn, "--inspect") == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert printed == [
+        "water_quality, rows per datasource_id: 3=70123, 4=12",
+        "sitedata (datasource 1), newest 2 rows: readings[0..23], time",
+        "weatherdata, newest 1 rows: readings[0..12], time",
+    ]
+    assert ("FROM sitedata" in conn.queries[1][0]) and conn.queries[1][1] == (1,)
+
+
+def test_the_export_reads_the_sondes_datasource_and_the_stations(monkeypatch, capsys, tmp_path):
+    t0 = 1735689600000
+    water = (t0, Decimal("82.40"), Decimal("8.05"), None, None, None, None, None)
+    conn = _FakeMySQL(
+        [("FROM water_quality", [water]), ("FROM sitedata", [(t0, json.dumps(STATION))])]
+    )
+    assert _main_with(monkeypatch, conn, "--out", str(tmp_path)) == 0
+    (water_sql, water_params), (site_sql, site_params) = conn.queries
+    assert "WHERE datasource_id = %s" in water_sql and water_params == (3,)
+    assert "FROM sitedata" in site_sql and site_params == (1,)  # measured only: no weatherdata
+    assert capsys.readouterr().out.splitlines() == [
+        "water_quality.csv: 1 rows, 2025-01-01T00:00:00Z .. 2025-01-01T00:00:00Z",
+        "weather.csv: 1 rows, 2025-01-01T00:00:00Z .. 2025-01-01T00:00:00Z",
+    ]
+    conn = _FakeMySQL([("FROM water_quality", []), ("FROM sitedata", [])])
+    _main_with(
+        monkeypatch,
+        conn,
+        "--out",
+        str(tmp_path),
+        "--water-datasource",
+        "7",
+        "--weather-datasource",
+        "5",
+    )
+    assert [params for _, params in conn.queries] == [(7,), (5,)]

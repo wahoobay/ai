@@ -97,9 +97,12 @@ def _parse(name: str, text: str, columns: tuple[str, ...]) -> list[tuple]:
             continue
         if len(line) != len(expected):
             raise ValueError(f"{name}:{line_no}: {len(line)} fields, expected {len(expected)}")
-        ts = datetime.fromisoformat(line[0].replace("Z", "+00:00"))
-        ts = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
-        rows.append((ts, *(float(v) if v.strip() else None for v in line[1:])))
+        try:
+            ts = datetime.fromisoformat(line[0].replace("Z", "+00:00"))
+            values = tuple(float(v) if v.strip() else None for v in line[1:])
+        except ValueError as e:
+            raise ValueError(f"{name}:{line_no}: {e}") from None
+        rows.append((ts if ts.tzinfo else ts.replace(tzinfo=UTC), *values))
     return rows
 
 
@@ -172,10 +175,13 @@ async def import_legacy(
     """Load water_quality.csv and weather.csv from legacy_url within budget_s seconds:
     {"water": {"read", "inserted"}, "weather": {...}, "partial": bool}, with "missing" for
     a file not there. partial: true means the budget ran out (a file not reached is left
-    out); the next run carries on."""
+    out, not even read); the next run carries on."""
     budget = _Budget(budget_s)
     out: dict[str, Any] = {}
     for key, table, name, columns in FILES:
+        if budget.spent():
+            out["partial"] = True
+            return out
         url = join(legacy_url, name)
         try:
             data = await asyncio.to_thread(open_read, url)

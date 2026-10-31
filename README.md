@@ -388,16 +388,19 @@ from a shell that has the Java database's read-only URL, in this checkout
 (`pip install '.[legacy]'` first: the MySQL driver):
 
 ```bash
-# the Java database's read-only URL (mysql://user:password@host:3306/database) from a hidden prompt
-read -s LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL
+# the Java database's read-only URL from a hidden prompt: mysql://user:password@host:3306/database,
+# with any : / ? # @ in the password percent-encoded (%3A %2F %3F %23 %40); -r keeps backslashes
+read -rs LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL
 python scripts/export_legacy_sensors.py --inspect    # first: the JSON keys (never values) against WEATHER_FIELDS
 python scripts/export_legacy_sensors.py --out legacy/
 AWS_PROFILE=cdk aws s3 cp legacy/ s3://platform-wahoobay-models/legacy/ --recursive
 gh workflow run run-job-staging.yml --repo wahoobay/ai -f job=import_legacy
 ```
 
-`--inspect` prints, for the weather station's `sitedata` rows and for `weatherdata`,
-the keys and array lengths of the newest 50 rows; if they differ from the
+`--inspect` prints `water_quality`'s row count per `datasource_id` (the export
+takes the sonde's, `--water-datasource`, default 3) and, for the weather
+station's `sitedata` rows and for `weatherdata`, the keys and array lengths of
+the newest 50 rows (counts, keys and lengths only); if they differ from the
 `WEATHER_FIELDS` table in the script, the table changes before the export
 (`docs/data_pipeline.md`, "Legacy history"). The export prints each file's row
 count and first and last `ts`; `legacy/` is git-ignored. The job inserts only

@@ -348,7 +348,7 @@ distinct `ts` (ISO 8601 UTC), ascending.
 
 | MySQL table | What it holds | Used for |
 |---|---|---|
-| `water_quality` | The sonde's readings, typed: `time` (epoch ms), `water_temperature_f`, `ph`, `do_percent`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu`, `no3_n_mg_l`, `spcond_mscm` | `water_quality.csv` |
+| `water_quality` | The sonde's readings, typed: `datasource_id`, `time` (epoch ms), `water_temperature_f`, `ph`, `do_percent`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu`, `no3_n_mg_l`, `spcond_mscm` | `water_quality.csv`: the sonde's datasource, 3 (`--water-datasource`) |
 | `sitedata` | Each datasource's raw SenseStream result, JSON `{"time": <epoch ms>, "readings": [...]}`; the weather station is datasource 1 (`--weather-datasource`), 24 positional readings | `weather.csv` |
 | `weatherdata` | Tomorrow.io's current values, JSON `{"time": <epoch ms>, "readings": [...]}`, positional in the order Tomorrow.io returned them | nothing (below) |
 | `weather_station` | A typed copy of the station's `sitedata`, converted to inHg and °F | nothing: `sitedata` holds the same readings unconverted |
@@ -359,7 +359,10 @@ distinct `ts` (ISO 8601 UTC), ascending.
 places; `ph`, `chlorophyll_rfu`, `phycoerythrin_rfu`, `turbidity_fnu` as they
 are; `do_pct` = `do_percent`; `spcond_ms_cm` = `spcond_mscm`. Left out:
 `no3_n_mg_l` (the nitrate sensor is gone), `date_eastern` (derived from `time`),
-`id`, `datasource_id`.
+`id`, and `datasource_id`, which selects the rows instead: only the sonde's,
+`--water-datasource` (default 3), as the weather side takes only the station's
+(`--weather-datasource`, default 1). `--inspect` prints the row count per
+`datasource_id`, so rows under another id are seen before the export.
 
 ### `weather.csv` and `WEATHER_FIELDS`
 
@@ -403,9 +406,11 @@ Not mapped:
 
 **Inspect first.** `export_legacy_sensors.py --inspect` prints, for the
 station's `sitedata` and for `weatherdata`, the keys of the newest 50 rows and
-each array's length, never a value. The station's line should read:
+each array's length, never a value, after `water_quality`'s row count per
+`datasource_id`. The first two lines should read:
 
 ```
+water_quality, rows per datasource_id: 3=<count>
 sitedata (datasource 1), newest 50 rows: readings[0..23], time
 ```
 
@@ -413,7 +418,7 @@ sitedata (datasource 1), newest 50 rows: readings[0..23], time
 station's array is not 24 long, or the blobs carry named keys, the table gains
 the matching candidates before the export: another key or source, with a
 converter to the column's unit (`as_is`, `f_to_c`; mph or km/h→m/s, inHg→hPa,
-in→mm are one-line functions beside them, should a key say so). A `weatherdata`
+in→mm would be one-line functions beside them, should a key say so). A `weatherdata`
 candidate makes the export read that table too; its value never overwrites one
 the station already gave for the same `ts`.
 

@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Export the Java backend's sensor history to the two CSV files the import_legacy job reads.
 
-    read -s LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL   # mysql://user:password@host[:port]/database
+    read -rs LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL  # mysql://user:password@host[:port]/database
     python scripts/export_legacy_sensors.py --inspect     # first: the JSON blobs' keys, never values
     python scripts/export_legacy_sensors.py --out legacy/
 
 The old site's backend keeps the water-quality sonde's readings in the typed table
-water_quality (temperature in °F) and the weather station's in sitedata, as JSON, under
-the station's datasource id (--weather-datasource); Tomorrow.io's forecast is in
-weatherdata. Both JSON blobs are {"time": <epoch ms>, "readings": [positional values]}.
+water_quality (temperature in °F), under the sonde's datasource id (--water-datasource),
+and the weather station's in sitedata, as JSON, under the station's (--weather-datasource);
+Tomorrow.io's forecast is in weatherdata. Both JSON blobs are {"time": <epoch ms>, "readings": [positional values]}.
 WEATHER_FIELDS says which value fills which column of weather.csv; --inspect shows the
-keys and array lengths of the newest 50 rows of each, so a layout that differs from the
-table is seen before anything is exported (docs/data_pipeline.md, "Legacy history").
+keys and array lengths of the newest 50 rows of each, and water_quality's row count per
+datasource id, so a layout that differs from the table is seen before anything is
+exported (docs/data_pipeline.md, "Legacy history").
 
-LEGACY_MYSQL_URL comes from the environment only and is never printed; the session is
-read-only and runs SELECTs only. --out writes water_quality.csv and weather.csv, one row
+LEGACY_MYSQL_URL comes from the environment only and is never printed, nor is any part of
+it (a connection failure reports the MySQL error number alone); the session is read-only
+and runs SELECTs only. --out writes water_quality.csv and weather.csv, one row
 per distinct ts, ascending, and prints each file's row count and first and last ts.
 The MySQL driver is the `legacy` extra: pip install '.[legacy]'.
 """
@@ -60,13 +62,14 @@ WEATHER_COLUMNS = (
 # (the nitrate sensor is gone), and water_temperature_f becomes °C.
 WATER_SQL = (
     "SELECT `time`, water_temperature_f, ph, do_percent, chlorophyll_rfu, phycoerythrin_rfu, "
-    "turbidity_fnu, spcond_mscm FROM water_quality ORDER BY `time`, id"
+    "turbidity_fnu, spcond_mscm FROM water_quality WHERE datasource_id = %s ORDER BY `time`, id"
 )
 # The JSON sources of weather.csv, in the order their values win: (time, JSON) per row.
 WEATHER_SOURCES = {
     "sitedata": "SELECT `time`, sitedata FROM sitedata WHERE datasourceid = %s ORDER BY `time`, id",
     "weatherdata": "SELECT `time`, weatherdata FROM weatherdata ORDER BY `time`, id",
 }
+WATER_COUNTS_SQL = "SELECT datasource_id, count(*) FROM water_quality GROUP BY 1 ORDER BY 1"
 INSPECT_SQL = {
     "sitedata": "SELECT sitedata FROM sitedata WHERE datasourceid = %s ORDER BY `time` DESC LIMIT 50",
     "weatherdata": "SELECT weatherdata FROM weatherdata ORDER BY `time` DESC LIMIT 50",
@@ -239,6 +242,11 @@ def mysql_params(url: str) -> dict[str, Any]:
         raise SystemExit(BAD_URL)
     if not (params["host"] and params["user"] and params["database"]):
         raise SystemExit(BAD_URL)
+    # A database name is one path segment: '/' or '@' there means a raw one in the password
+    # moved the host (mysql://u:ab@cd/ef@host/db reads as host 'cd'), which the driver's
+    # error would then print.
+    if "/" in params["database"] or "@" in params["database"]:
+        raise SystemExit(BAD_URL)
     return params
 
 
@@ -251,10 +259,17 @@ def connect(url: str) -> Any:
         import mysql.connector  # the `legacy` extra
     except ImportError:
         raise SystemExit("the MySQL driver is missing: pip install '.[legacy]'") from None
-    conn = mysql.connector.connect(**mysql_params(url), connection_timeout=30)
-    cur = conn.cursor()
-    cur.execute("SET SESSION TRANSACTION READ ONLY")
-    cur.close()
+    params = mysql_params(url)
+    try:
+        conn = mysql.connector.connect(**params, connection_timeout=30)
+        cur = conn.cursor()
+        cur.execute("SET SESSION TRANSACTION READ ONLY")
+        cur.close()
+    except mysql.connector.Error as e:
+        # The driver's message names the host or the user: the error number only.
+        raise SystemExit(
+            f"could not connect to the Java database (MySQL error {e.errno})"
+        ) from None
     return conn
 
 
@@ -272,6 +287,8 @@ def _params(source: str, weather_datasource: int) -> tuple:
 
 
 def inspect(conn: Any, weather_datasource: int) -> None:
+    counts = ", ".join(f"{ds}={n}" for ds, n in _select(conn, WATER_COUNTS_SQL)) or "(none)"
+    print(f"water_quality, rows per datasource_id: {counts}")
     for source, sql in INSPECT_SQL.items():
         blobs = [_json(text) for (text,) in _select(conn, sql, _params(source, weather_datasource))]
         label = f"sitedata (datasource {weather_datasource})" if source == "sitedata" else source
@@ -281,8 +298,8 @@ def inspect(conn: Any, weather_datasource: int) -> None:
         print(f"{label}, newest {len(blobs)} rows: {keys}{note}")
 
 
-def export(conn: Any, out: Path, weather_datasource: int) -> None:
-    water = water_rows(_select(conn, WATER_SQL))
+def export(conn: Any, out: Path, weather_datasource: int, water_datasource: int) -> None:
+    water = water_rows(_select(conn, WATER_SQL, (water_datasource,)))
     used = {source for candidates in WEATHER_FIELDS.values() for source, _, _ in candidates}
     weather = weather_rows(
         {
@@ -309,6 +326,12 @@ def main(argv: list[str] | None = None) -> int:
         "--inspect", action="store_true", help="print the JSON blobs' keys (never values)"
     )
     ap.add_argument(
+        "--water-datasource",
+        type=int,
+        default=3,
+        help="the water-quality sonde's datasource id in the Java database (default: 3)",
+    )
+    ap.add_argument(
         "--weather-datasource",
         type=int,
         default=1,
@@ -318,14 +341,14 @@ def main(argv: list[str] | None = None) -> int:
     url = os.environ.get("LEGACY_MYSQL_URL", "").strip()
     if not url:
         raise SystemExit(
-            "set LEGACY_MYSQL_URL in the environment: read -s LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL"
+            "set LEGACY_MYSQL_URL in the environment: read -rs LEGACY_MYSQL_URL && export LEGACY_MYSQL_URL"
         )
     conn = connect(url)
     try:
         if args.inspect:
             inspect(conn, args.weather_datasource)
         else:
-            export(conn, args.out, args.weather_datasource)
+            export(conn, args.out, args.weather_datasource, args.water_datasource)
     finally:
         conn.close()
     return 0
