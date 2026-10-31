@@ -1,6 +1,8 @@
 // Where the live stream is fetched from: the page says (data-stream-base on <html>), the
 // dashboard's own /api proxy by default and CloudFront's /stream on AWS.
 const STREAM_BASE = document.documentElement.dataset.streamBase || "/api";
+// When set (data-hls-base on <html>, /hls on AWS) the live panel is an hls.js <video>; empty keeps the MJPEG <img>.
+const HLS_BASE = document.documentElement.dataset.hlsBase || "";
 const fmtMs = (x) => (x == null ? "—" : `${x.toFixed(0)} ms`);
 const fmtPct = (x) => (x == null ? "—" : `${(x * 100).toFixed(1)}%`);
 const short = (s) => (s ? s.slice(0, 40) : "");
@@ -1052,21 +1054,64 @@ async function tickReef() {
   } catch {}
 }
 
+function liveSourceUrl(cam, boxes) {
+  if (HLS_BASE) return `${HLS_BASE}/${cam === "pier_cam" ? "pier" : "seahive"}${boxes ? "_boxes" : ""}/index.m3u8`;
+  const base = cam === "pier_cam" ? `${STREAM_BASE}/stream_pier` : `${STREAM_BASE}/stream`;
+  return boxes ? `${base}.mjpeg` : `${base}_raw.mjpeg`;
+}
+
+let _liveHls = null;
+let _liveRetry = null;
+
+// Point #stream (an <img> for MJPEG, a <video> for HLS) at the camera/variant. The HLS player
+// never gives up: load errors retry forever, fatal errors restart or rebuild the player.
+function setLiveSource(cam, boxes) {
+  const el = document.getElementById("stream");
+  if (!el) return;
+  const url = liveSourceUrl(cam, boxes);
+  if (el.tagName !== "VIDEO") { el.src = url; return; }
+  if (_liveHls) { _liveHls.destroy(); _liveHls = null; }
+  clearTimeout(_liveRetry);
+  const play = () => { el.play().catch(() => {}); };
+  if (window.Hls && Hls.isSupported()) {
+    const retry = { maxNumRetry: 1000000, retryDelayMs: 2000, maxRetryDelayMs: 2000 };
+    const policy = { default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: retry, errorRetry: retry } };
+    const hls = new Hls({
+      lowLatencyMode: false,
+      liveSyncDurationCount: 3,
+      manifestLoadPolicy: policy,
+      playlistLoadPolicy: policy,
+      fragLoadPolicy: policy,
+    });
+    _liveHls = hls;
+    hls.on(Hls.Events.MANIFEST_PARSED, play);
+    hls.on(Hls.Events.ERROR, (_evt, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        _liveRetry = setTimeout(() => { if (_liveHls === hls) hls.startLoad(); }, 3000);
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError();
+      } else {
+        hls.destroy();
+        if (_liveHls === hls) _liveHls = null;
+        _liveRetry = setTimeout(() => setLiveSource(cam, boxes), 5000);
+      }
+    });
+    hls.loadSource(url);
+    hls.attachMedia(el);
+  } else if (el.canPlayType("application/vnd.apple.mpegurl")) {
+    el.src = url;
+    play();
+  }
+}
+
 function initBboxToggle() {
   const btn = document.getElementById("bbox-toggle");
-  const img = document.getElementById("stream");
-  if (!btn || !img) return;
-
-  function streamSrc(camId, showing) {
-    if (camId === "pier_cam") {
-      return showing ? `${STREAM_BASE}/stream_pier.mjpeg` : `${STREAM_BASE}/stream_pier_raw.mjpeg`;
-    }
-    return showing ? `${STREAM_BASE}/stream.mjpeg` : `${STREAM_BASE}/stream_raw.mjpeg`;
-  }
+  if (!btn) return;
 
   function apply(showing) {
     const cam = window._wbActiveCamera || localStorage.getItem("wb_camera") || "seahivecam";
-    img.src = streamSrc(cam, showing);
+    setLiveSource(cam, showing);
     btn.textContent = showing ? "🟦 boxes: on" : "🟦 boxes: off";
     btn.classList.toggle("off", !showing);
     localStorage.setItem("wb_bboxes_off", showing ? "0" : "1");
@@ -2664,13 +2709,9 @@ function _setActiveCamera(camId) {
     b.classList.toggle("active", b.dataset.cam === camId);
   });
   // Swap stream src + bbox-toggle target endpoints
-  const img = document.getElementById("stream");
   const bboxBtn = document.getElementById("bbox-toggle");
   const bboxesOn = !bboxBtn?.classList.contains("off");
-  const streamPath = camId === "pier_cam"
-    ? (bboxesOn ? `${STREAM_BASE}/stream_pier.mjpeg` : `${STREAM_BASE}/stream_pier_raw.mjpeg`)
-    : (bboxesOn ? `${STREAM_BASE}/stream.mjpeg` : `${STREAM_BASE}/stream_raw.mjpeg`);
-  if (img) img.src = streamPath;
+  setLiveSource(camId, bboxesOn);
   window._wbActiveCamera = camId;
   localStorage.setItem("wb_camera", camId);
 }

@@ -154,6 +154,8 @@ class DashboardCfg:
         # Where the browser fetches the MJPEG stream: the dashboard's own proxy (/api) by default; /stream on AWS,
         # where CloudFront reaches the GPU host directly because App Runner cuts requests at 120 s.
         self.stream_base_url = _env("STREAM_BASE_URL", "/api").rstrip("/") or "/api"
+        # Empty = the MJPEG <img> above; set (e.g. /hls on AWS) and the page plays HLS through hls.js.
+        self.live_hls_base_url = _env("LIVE_HLS_BASE_URL", "").rstrip("/")
         # Pier-cam worker — same code, different camera + GPU. Optional; if
         # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
         # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
@@ -699,6 +701,7 @@ def build_app() -> FastAPI:
                 "worker_url": cfg.worker_url,
                 "live_video_embed_url": autoplay_embed(cfg.live_video_embed_url),
                 "stream_base": cfg.stream_base_url,
+                "hls_base": cfg.live_hls_base_url,
                 "asset_version": _asset_version(),
                 "deployment": cfg.deployment_uri,
             },

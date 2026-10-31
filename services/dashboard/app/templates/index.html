@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-tz="{{ tz }}" data-review-tool="{{ 'true' if feature_review_tool else 'false' }}" data-stream-base="{{ stream_base }}">
+<html lang="en" data-tz="{{ tz }}" data-review-tool="{{ 'true' if feature_review_tool else 'false' }}" data-stream-base="{{ stream_base }}" data-hls-base="{{ hls_base }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,7 +28,11 @@
     <section class="stream-col">
       <div class="stream-wrap">
         {% if worker_url %}
+        {% if hls_base %}
+        <video id="stream" class="live-video" autoplay muted playsinline></video>
+        {% else %}
         <img id="stream" src="{{ stream_base }}/stream.mjpeg" alt="live stream">
+        {% endif %}
         <div id="camera-toggle" class="camera-toggle" title="Switch camera">
           <button class="cam-btn active" data-cam="seahivecam">🪸 SeaHIVE</button>
           <button class="cam-btn"        data-cam="pier_cam">🌊 Pier</button>
@@ -604,6 +608,7 @@
   </div>
 
   <script src="/static/time-et.js?v={{ asset_version }}" defer></script>
+  {% if hls_base %}<script src="/static/vendor/hls.min.js"></script>{% endif %}
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
   <script src="/static/auth.js?v={{ asset_version }}"></script>
 </body>
