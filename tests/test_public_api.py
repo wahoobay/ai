@@ -111,6 +111,7 @@ IDENTITY_RE = re.compile(
     r"reviewer|notes|user_id|session_id|acknowledged_by|alice|secret note|@", re.IGNORECASE
 )
 NEW_YORK = "America/New_York"
+CAMERA_KEYS = {"id", "status", "stream_mjpeg", "snapshot", "embed_url", "live", "dark"}
 
 
 @pytest.fixture
@@ -129,14 +130,48 @@ def public_client(rdb, review_assets, monkeypatch):
     return build
 
 
-def fake_workers(client, monkeypatch, answers: dict) -> list[httpx.Request]:
+def worker_stats(is_dark: bool | None = None, *, autoswitch: bool = True) -> dict:
+    """A worker's GET /stats body as services/worker/app/main.py sends it: the source's
+    state under "autoswitch" (None when the source is not an AutoswitchSource)."""
+    if not autoswitch:
+        return {"running": True, "frames_seen": 10, "autoswitch": None, "ptz": None}
+    return {
+        "running": True,
+        "frames_seen": 10,
+        "autoswitch": {
+            "active": True,
+            "is_dark": is_dark,
+            "last_luma": 3.5,
+            "last_avg_luma": 4.0,
+            "switches": 2,
+            "dark_threshold": 8.0,
+            "light_threshold": 14.0,
+        },
+        "ptz": None,
+    }
+
+
+def fake_workers(
+    client, monkeypatch, answers: dict, stats: dict | None = None
+) -> list[httpx.Request]:
     """Point the app's shared httpx client at canned worker answers (host -> status code,
-    exception or a whole httpx.Response) and return the requests it sends. build_app keeps its state in a closure, as
+    exception or a whole httpx.Response) and return the requests it sends. `stats` answers
+    GET /stats the same way (host -> status code, exception or httpx.Response); a host it
+    leaves out answers 200 with a source that has no darkness state. build_app keeps its state in a closure, as
     test_privacy_exports notes; the public routes read the client from it."""
     sent: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(request)
+        if request.url.path == "/stats":
+            answer = (stats or {}).get(
+                request.url.host, httpx.Response(200, json=worker_stats(autoswitch=False))
+            )
+            if isinstance(answer, Exception):
+                raise answer
+            if isinstance(answer, int):
+                return httpx.Response(answer, json={"error": "x"})
+            return answer
         answer = answers[request.url.host]
         if isinstance(answer, Exception):
             raise answer
@@ -174,9 +209,9 @@ async def test_cameras_say_embed_without_a_worker(public_client):
     [cam] = r.json()["cameras"]
     assert cam["id"] == "seahivecam" and cam["status"] == "embed"
     assert cam["embed_url"] and "autoplay=1" in cam["embed_url"]
-    assert set(cam) == {"id", "status", "stream_mjpeg", "snapshot", "embed_url", "live"}
-    # No worker, nothing to fetch.
-    assert cam["stream_mjpeg"] is None and cam["snapshot"] is None
+    assert set(cam) == CAMERA_KEYS
+    # No worker, nothing to fetch, nothing known about the light.
+    assert cam["stream_mjpeg"] is None and cam["snapshot"] is None and cam["dark"] is None
     assert cam["live"] == "/api/public/live?camera=seahivecam"
 
 
@@ -189,13 +224,50 @@ async def test_on_the_stream_origin_a_worker_that_answers_is_live(public_client,
         assert cam["status"] == "live" and cam["embed_url"] is None
         assert cam["stream_mjpeg"] == "/stream/stream_raw.mjpeg"
         assert cam["snapshot"] == "/stream/snapshot_raw.jpg"
-        # One GET of the worker's /live.json, cut off after 2 seconds.
-        assert [(q.method, str(q.url)) for q in sent] == [("GET", f"{WORKER}/live.json")]
-        assert sent[0].extensions["timeout"]["read"] == 2.0
+        # One GET each of the worker's /live.json and /stats, cut off after 2 seconds.
+        assert sorted((q.method, str(q.url)) for q in sent) == [
+            ("GET", f"{WORKER}/live.json"),
+            ("GET", f"{WORKER}/stats"),
+        ]
+        assert all(q.extensions["timeout"]["read"] == 2.0 for q in sent)
+        assert set(cam) == CAMERA_KEYS
         for answer in (500, httpx.ConnectError("refused"), httpx.ReadTimeout("slow")):
             fake_workers(c, monkeypatch, {"worker.test": answer})
             [cam] = c.get("/api/public/cameras").json()["cameras"]
             assert cam["status"] == "offline", answer
+
+
+async def test_dark_comes_from_the_workers_own_state(public_client, monkeypatch):
+    """`dark` is the worker's /stats autoswitch.is_dark: true, false, or null when the
+    worker has no such state, no worker answers, or /stats fails; status follows /live.json."""
+    cases = [
+        (httpx.Response(200, json=worker_stats(True)), True),
+        (httpx.Response(200, json=worker_stats(False)), False),
+        (httpx.Response(200, json=worker_stats(autoswitch=False)), None),
+        (httpx.Response(200, json={"running": False}), None),
+        (httpx.Response(200, json={"autoswitch": {"active": True}}), None),
+        (httpx.Response(200, json={"autoswitch": {"is_dark": "yes"}}), None),
+        (httpx.Response(200, json=[1]), None),
+        (httpx.Response(200, content=b"not json"), None),
+        (500, None),
+        (httpx.ConnectError("refused"), None),
+        (httpx.ReadTimeout("slow"), None),
+    ]
+    with public_client(WORKER_URL=WORKER, LIVE_VIDEO_EMBED_URL="", STREAM_BASE_URL="/stream") as c:
+        for answer, dark in cases:
+            fake_workers(c, monkeypatch, {"worker.test": 200}, stats={"worker.test": answer})
+            [cam] = c.get("/api/public/cameras").json()["cameras"]
+            assert cam["dark"] is dark, answer
+            assert cam["status"] == "live", answer  # /live.json answered
+        # A worker that does not answer /live.json is offline whatever /stats says.
+        fake_workers(
+            c,
+            monkeypatch,
+            {"worker.test": 500},
+            stats={"worker.test": httpx.Response(200, json=worker_stats(True))},
+        )
+        [cam] = c.get("/api/public/cameras").json()["cameras"]
+        assert cam["status"] == "offline"
 
 
 async def test_behind_the_dashboards_own_proxy_a_worker_is_not_a_public_stream(
@@ -219,7 +291,8 @@ async def test_the_pier_camera_is_listed_only_when_it_has_a_worker(public_client
     ) as c:
         sent = fake_workers(c, monkeypatch, {"pier.test": 200})
         reef, pier = c.get("/api/public/cameras").json()["cameras"]
-        assert [str(q.url) for q in sent] == [f"{PIER}/live.json"]  # the pier is still probed
+        # the pier is still probed
+        assert sorted(str(q.url) for q in sent) == [f"{PIER}/live.json", f"{PIER}/stats"]
         live = c.get("/api/public/live?camera=pier_cam")
     assert reef["id"] == "seahivecam" and reef["status"] == "embed"
     assert reef["stream_mjpeg"] is None and reef["snapshot"] is None
@@ -232,6 +305,7 @@ async def test_the_pier_camera_is_listed_only_when_it_has_a_worker(public_client
         "snapshot": None,
         "embed_url": None,
         "live": "/api/public/live?camera=pier_cam",
+        "dark": None,
     }
     assert live.status_code == 200 and live.json()["camera"] == "pier_cam"
 
@@ -1378,8 +1452,8 @@ async def test_the_exports_readme_is_public_without_addresses(rclient, monkeypat
     source only by its camera id."""
     r = rclient.get("/api/public/exports/README.md")
     assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/markdown")
-    assert r.headers["content-disposition"] == 'attachment; filename="README.md"'
+    assert r.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert r.headers["content-disposition"] == "inline"
     assert r.headers["cache-control"] == "public, max-age=3600"
     assert not EMAIL.search(r.text)
     _, note = public_readme_parts(r.text, EXPORTS_README.read_text())
