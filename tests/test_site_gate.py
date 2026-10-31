@@ -65,6 +65,17 @@ async def test_signed_out_every_route_but_the_sign_in_pages_needs_a_session(rdb,
     assert not leaks, "open to signed-out visitors:\n" + "\n".join(leaks)
 
 
+def test_only_the_public_module_serves_under_the_open_public_prefix():
+    """/api/public/ is open to everyone, so a route under it written anywhere but
+    routes_public.py (whose rule is no reviewer or personal data) would slip past the gate."""
+    from app.main import build_app
+
+    public = [r for r in build_app().routes if getattr(r, "path", "").startswith("/api/public/")]
+    assert public, "expected the public API's routes"
+    strays = [r.path for r in public if r.endpoint.__module__ != "app.routes_public"]
+    assert not strays, "under /api/public/ but not in routes_public.py: " + ", ".join(strays)
+
+
 async def test_signed_out_pages_go_to_sign_in_and_come_back(rdb, rclient):
     r = rclient.get("/", headers=HTML, follow_redirects=False)
     assert r.status_code == 302 and r.headers["location"] == "/login?next=/"
