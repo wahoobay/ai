@@ -26,7 +26,7 @@ OPEN_PATHS = {
     "/healthz",
     "/robots.txt",
 }
-OPEN_PREFIXES = ("/api/auth/",)
+OPEN_PREFIXES = ("/api/auth/", "/api/public/")
 JSON = {"Accept": "application/json"}
 HTML = {"Accept": "text/html,application/xhtml+xml"}
 WAITING = "your account is waiting for approval"

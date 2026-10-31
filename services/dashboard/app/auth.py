@@ -175,7 +175,9 @@ OPEN_PATHS = frozenset(
         "/robots.txt",
     }
 )
-OPEN_PREFIXES = ("/api/auth/",)
+# /api/public/ is the read-only API the public website calls (routes_public.py):
+# cached, and free of reviewer and personal data.
+OPEN_PREFIXES = ("/api/auth/", "/api/public/")
 
 
 def is_open_path(path: str) -> bool:

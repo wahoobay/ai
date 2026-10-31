@@ -671,6 +671,10 @@ def build_app() -> FastAPI:
 
     app.include_router(build_admin_users_router(cfg, state, TEMPLATES))
 
+    from .routes_public import build_public_router
+
+    app.include_router(build_public_router(cfg, state))
+
     if cfg.feature_review_tool:
         from .routes_review import build_review_router
 
