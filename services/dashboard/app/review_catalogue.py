@@ -69,6 +69,7 @@ class CatalogueEntry:
     aphia_id: int | None = None
     rank: str | None = None
     family: str | None = None
+    order: str | None = None
     resolved: bool = False
     raw_names: set[str] = field(default_factory=set)
     class_dir: str | None = None
@@ -114,6 +115,12 @@ class Catalogue:
 
     def names(self) -> list[str]:
         return sorted(self._by_name)
+
+    def taxon(self, name: str | None) -> CatalogueEntry | None:
+        """An entry for `name` to read its taxonomy from (its life stages share it),
+        one WoRMS resolved when there is one; None for a name the catalogue lacks."""
+        found = self._by_name.get(name or "", [])
+        return next((e for e in found if e.resolved), found[0] if found else None)
 
     def class_dir(self, name: str) -> str | None:
         return next((e.class_dir for e in self._by_name.get(name, []) if e.class_dir), None)
@@ -198,6 +205,7 @@ def load_catalogue(paths: CataloguePaths) -> Catalogue:
                 e.aphia_id = int(aphia) if aphia.isdigit() else None
                 e.rank = row.get("rank") or None
                 e.family = row.get("family") or None
+                e.order = row.get("order") or None
         e.raw_names.add(raw_n)
         return e
 
