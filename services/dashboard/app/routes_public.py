@@ -3,20 +3,31 @@
 The site gate leaves this prefix open (auth.OPEN_PREFIXES), so nothing here may
 carry reviewer or personal data. Every answer goes out through `cached()`, so
 CloudFront and browsers hold it for a few seconds instead of every visitor
-reaching the dashboard. Later routes (detections, species, environment,
-exports) join this module, above the catch-all at the end of the router."""
+reaching the dashboard. The SQL behind the detection and species answers is
+public_queries.py's, shared with the dashboard's own routes. Later routes
+(environment, exports) join this module, above the catch-all at the end of the
+router."""
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+from datetime import datetime, time, timedelta
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse, Response
 
+from . import public_queries as q
 from .common_names import common as common_name
 from .config import autoplay_embed
+from .detection_images import annotate_frame, crop_roi
+from .frames import frame_exists
+from .review_catalogue import slug
+from .review_images import render_frame
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +48,124 @@ def cached(payload: dict | list, seconds: int, status: int = 200) -> JSONRespons
 
 def _is_detection(d) -> bool:
     return isinstance(d, dict) and isinstance(d.get("bbox"), list) and len(d["bbox"]) == 4
+
+
+# The site's cameras by the id the dashboard and this API use. A worker stamps its
+# SOURCE_LABEL_PRIMARY on every detection (detection_events.source_name), and the launchers
+# set it to the camera's id (deploy/gpu-host/boot.sh: seahivecam; scripts/dev/
+# run_worker_pier.sh: pier_cam), so a camera's id is its source name. Any other source (an
+# unlabelled worker stamps its video URL's host) has no public name.
+CAMERAS = ("seahivecam", "pier_cam")
+# A track of fewer frames is a flicker, not a sighting (/api/species_counts' default).
+MIN_FRAMES = 3
+# A species' recent detections: the newest saved ones of the last week, as /detections/recent
+# answers them with its default confidence floor.
+SPECIES_RECENT = 12
+RECENT_HOURS_MAX = 168
+MIN_CONFIDENCE = 0.5
+IMMUTABLE = "public, max-age=86400, immutable"
+
+
+def _camera(name: str | None) -> str | None:
+    """A camera id for a detection's source_name, and the source_name for a camera id (they
+    are the same name): None for a name the site's cameras do not have."""
+    return name if name in CAMERAS else None
+
+
+def _iso(ts: datetime | None) -> str | None:
+    return ts.isoformat() if ts else None
+
+
+def _names(catalogue, raw: str | None) -> tuple[str | None, str | None]:
+    """(latin, common) for a name the classifier or a verdict wrote: its WoRMS accepted name,
+    and that name's common name (the curated list first, then the Species Log)."""
+    if not raw:
+        return None, None
+    latin = catalogue.accepted(raw)
+    return latin, common_name(latin) or catalogue.common_name(latin)
+
+
+def _detection(row: dict, catalogue) -> dict:
+    """A detection as the public sees it: the latest verdict's species when there is one (the
+    model's own species_id when the verdict agrees with it), the model's score, and links to
+    its crop and frame when its own frame was saved."""
+    raw, species_id = row["best_name"], row["best_species_id"]
+    if row["reviewed"]:
+        raw = row["corrected_name"]
+        agrees = raw is not None and catalogue.accepted(raw) == catalogue.accepted(row["best_name"])
+        if not agrees:
+            species_id = row["corrected_species_id"] or raw
+    latin, common = _names(catalogue, raw)
+    base = f"/api/public/detections/{row['id']}"
+    return {
+        "id": row["id"],
+        "ts": _iso(row["ts"]),
+        "camera": _camera(row["source_name"]),
+        "species_id": species_id,
+        "latin": latin,
+        "common": common,
+        "confidence": row["best_accuracy"],
+        "crop": f"{base}/crop.jpg" if row["image_path"] else None,
+        "frame": f"{base}/frame.jpg" if row["image_path"] else None,
+    }
+
+
+def _photo(catalogue, species_id: str) -> tuple | None:
+    """The catalogue's iNaturalist reference photo for a species: (path, attribution)."""
+    return catalogue.photo(slug(catalogue.accepted(species_id)))
+
+
+def _species(row: dict, week: int, catalogue) -> dict:
+    latin, common = _names(catalogue, row["name"])
+    taxon = catalogue.taxon(latin)
+    photo = _photo(catalogue, row["species_id"])
+    return {
+        "species_id": row["species_id"],
+        "latin": latin,
+        "common": common,
+        "family": taxon.family if taxon else None,
+        "order": taxon.order if taxon else None,
+        "aphia_id": taxon.aphia_id if taxon else None,
+        "photo": {
+            "url": f"/api/public/species/{quote(row['species_id'], safe='')}/photo.jpg",
+            "attribution": photo[1],
+        }
+        if photo
+        else None,
+        "sightings_total": row["sightings"],
+        "sightings_7d": week,
+        "first_seen": _iso(row["first_seen"]),
+        "last_seen": _iso(row["last_seen"]),
+    }
+
+
+def _month_starts(tz: str, n: int = 12) -> list[datetime]:
+    """The first instants of the last `n` calendar months in `tz`, oldest first."""
+    zone = ZoneInfo(tz)
+    today = datetime.now(zone).date()
+    starts = []
+    for back in range(n - 1, -1, -1):
+        year, month = divmod(today.year * 12 + today.month - 1 - back, 12)
+        starts.append(datetime(year, month + 1, 1, tzinfo=zone))
+    return starts
+
+
+def _render(draw, image_path: str, bbox: list[int], quality: int) -> bytes | None:
+    """The JPEG of `draw(image_path, bbox)`; None when the frame is gone from storage."""
+    if not frame_exists(image_path):
+        return None
+    buf = io.BytesIO()
+    draw(image_path, bbox).save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def _crop(image_path: str, bbox: list[int]):
+    return crop_roi(image_path, bbox, 0.10, 384)
+
+
+def _frame(image_path: str, bbox: list[int]):
+    # The box without a label: the model's name would contradict a volunteer's verdict.
+    return annotate_frame(image_path, bbox, None, 1280)
 
 
 def build_public_router(cfg, state) -> APIRouter:
@@ -128,6 +257,238 @@ def build_public_router(cfg, state) -> APIRouter:
                 ],
             },
             1,
+        )
+
+    def _pool():
+        return state.get("pool")
+
+    def _no_database() -> JSONResponse:
+        return cached({"error": "database unavailable"}, 10, status=503)
+
+    async def _catalogue():
+        return await state["review_catalogue"].aget()
+
+    def _unknown_camera() -> JSONResponse:
+        return cached({"error": "unknown camera"}, 10, status=404)
+
+    @router.get("/detections/recent")
+    async def public_recent_detections(
+        camera_id: str = Query("", alias="camera"),
+        hours: int = Query(24, ge=1, le=RECENT_HOURS_MAX),
+        limit: int = Query(24, ge=1, le=100),
+        min_confidence: float = Query(MIN_CONFIDENCE, ge=0.0, le=1.0),
+    ) -> JSONResponse:
+        """The newest identified fish, as a volunteer last named them; a box a volunteer
+        called not a fish is left out. Every camera, or one."""
+        source = _camera(camera_id)
+        if camera_id and source is None:
+            return _unknown_camera()
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        async with pool.connection() as conn:
+            rows = await q.recent_detections(
+                conn,
+                hours=hours,
+                limit=limit,
+                min_confidence=min_confidence,
+                source_name=source,
+            )
+        catalogue = await _catalogue()
+        return cached({"detections": [_detection(r, catalogue) for r in rows]}, 15)
+
+    @router.get("/detections/summary")
+    async def public_detections_summary(
+        hours: int = Query(1, ge=1, le=RECENT_HOURS_MAX),
+        camera_id: str = Query("", alias="camera"),
+    ) -> JSONResponse:
+        """Sightings per species in the last `hours`, most first: tracks of at least
+        MIN_FRAMES frames whose last frame falls in the window."""
+        source = _camera(camera_id)
+        if camera_id and source is None:
+            return _unknown_camera()
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        async with pool.connection() as conn:
+            rows = await q.sighting_counts(conn, hours, MIN_FRAMES, source_name=source, limit=None)
+        catalogue = await _catalogue()
+        species = []
+        for r in sorted(rows, key=lambda r: (-r["n"], r["species_id"])):
+            latin, common = _names(catalogue, r["name"])
+            species.append(
+                {
+                    "species_id": r["species_id"],
+                    "latin": latin,
+                    "common": common,
+                    "count": r["n"],
+                    "last_seen": _iso(r["last_seen"]),
+                }
+            )
+        total = sum(s["count"] for s in species)
+        return cached({"hours": hours, "total": total, "species": species}, 30)
+
+    async def _saved_image(event_id: int, draw, quality: int) -> Response:
+        """The detection's image drawn from the frame saved at its own timestamp (the private
+        routes' rule); a cached 404 when that frame was never saved or is gone."""
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        async with pool.connection() as conn:
+            row = await q.detection_with_frame(conn, event_id)
+        image_path = row["image_path"] if row else None
+        bbox = (row["bbox"] if row else None) or []
+        data = None
+        if image_path and len(bbox) == 4:
+            try:
+                data = await asyncio.to_thread(_render, draw, image_path, bbox, quality)
+            except (OSError, ValueError) as e:  # unreadable, or not an image
+                log.warning("public api: no image for detection %s: %r", event_id, e)
+        if data is None:
+            return cached({"error": "no saved frame"}, 60, status=404)
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": IMMUTABLE})
+
+    @router.get("/detections/{event_id}/crop.jpg")
+    async def public_detection_crop(event_id: int) -> Response:
+        return await _saved_image(event_id, _crop, 85)
+
+    @router.get("/detections/{event_id}/frame.jpg")
+    async def public_detection_frame(event_id: int) -> Response:
+        return await _saved_image(event_id, _frame, 82)
+
+    async def _species_entries(conn, catalogue, species_id: str | None = None) -> list[dict]:
+        """Every species seen (or `species_id` alone), with lifetime and last-week sightings
+        and its catalogue taxonomy; most seen first, then by name."""
+        lifetime = await q.species_sightings(conn, min_frames=MIN_FRAMES, species_id=species_id)
+        week = await q.species_sightings(
+            conn, min_frames=MIN_FRAMES, hours=7 * 24, species_id=species_id
+        )
+        in_week = {r["species_id"]: r["sightings"] for r in week}
+        entries = [_species(r, in_week.get(r["species_id"], 0), catalogue) for r in lifetime]
+        return sorted(
+            entries, key=lambda e: (-e["sightings_total"], e["latin"] or "", e["species_id"])
+        )
+
+    @router.get("/species")
+    async def public_species() -> JSONResponse:
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        catalogue = await _catalogue()
+        async with pool.connection() as conn:
+            entries = await _species_entries(conn, catalogue)
+        return cached({"species": entries}, 3600)
+
+    # Before /species/{species_id}, which would otherwise take "counts" for a species.
+    @router.get("/species/counts")
+    async def public_species_counts(
+        days: int = Query(30, ge=1, le=400),
+        granularity: str = Query("day", pattern="^(day|week)$"),
+        top: int = Query(6, ge=1, le=8),
+    ) -> JSONResponse:
+        """Sightings per local day (or ISO week, labelled by its Monday) in the site's zone
+        over the last `days` days, today included: the `top` species by total each with one
+        count per bucket, and the rest summed as `other`."""
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        zone = ZoneInfo(cfg.tz)
+        today = datetime.now(zone).date()
+        first = today - timedelta(days=days - 1)
+        if granularity == "week":
+            monday = first - timedelta(days=first.weekday())
+            buckets = [monday + timedelta(weeks=i) for i in range((today - monday).days // 7 + 1)]
+        else:
+            buckets = [first + timedelta(days=i) for i in range(days)]
+        since = datetime.combine(first, time(), zone)
+        async with pool.connection() as conn:
+            rows = await q.sightings_by_bucket(conn, since, cfg.tz, week=granularity == "week")
+        index = {b: i for i, b in enumerate(buckets)}
+        counts: dict[str, list[int]] = {}
+        names: dict[str, str] = {}
+        for r in rows:
+            i = index.get(r["bucket"])
+            if i is None:
+                continue
+            counts.setdefault(r["species_id"], [0] * len(buckets))[i] += r["n"]
+            names[r["species_id"]] = r["name"]
+        ranked = sorted(counts, key=lambda s: (-sum(counts[s]), s))
+        catalogue = await _catalogue()
+        series = []
+        for species_id in ranked[:top]:
+            latin, common = _names(catalogue, names[species_id])
+            series.append(
+                {
+                    "species_id": species_id,
+                    "latin": latin,
+                    "common": common,
+                    "counts": counts[species_id],
+                }
+            )
+        other = [sum(counts[s][i] for s in ranked[top:]) for i in range(len(buckets))]
+        return cached(
+            {
+                "granularity": granularity,
+                "tz": cfg.tz,
+                "buckets": [b.isoformat() for b in buckets],
+                "series": series,
+                "other": other,
+            },
+            3600,
+        )
+
+    @router.get("/species/{species_id}/photo.jpg")
+    async def public_species_photo(species_id: str) -> Response:
+        """The species' iNaturalist reference photo, which the species list credits."""
+        found = _photo(await _catalogue(), species_id)
+        data = None
+        if found is not None:
+            try:
+                data = await asyncio.to_thread(render_frame, str(found[0]), 640)
+            except (OSError, ValueError) as e:
+                log.warning("public api: no photo for %s: %r", species_id, e)
+        if data is None:
+            return cached({"error": "no photo"}, 60, status=404)
+        return Response(
+            data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"}
+        )
+
+    @router.get("/species/{species_id}")
+    async def public_species_profile(species_id: str) -> JSONResponse:
+        """The species' list entry, its sightings by local hour of day and by month over the
+        last twelve months (the site's zone), and its newest saved detections."""
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        catalogue = await _catalogue()
+        months = _month_starts(cfg.tz)
+        async with pool.connection() as conn:
+            found = await _species_entries(conn, catalogue, species_id)
+            if not found:
+                return cached({"error": "unknown species"}, 60, status=404)
+            [entry] = found
+            by_hour = await q.sightings_by_hour_of_day(
+                conn, species_id, cfg.tz, min_frames=MIN_FRAMES
+            )
+            by_month = await q.sightings_by_month(conn, species_id, months[0], cfg.tz)
+            recent = await q.recent_detections(
+                conn,
+                hours=RECENT_HOURS_MAX,
+                limit=SPECIES_RECENT,
+                min_confidence=MIN_CONFIDENCE,
+                species_id=species_id,
+                species_names=[n for n in (entry["latin"], species_id) if n],
+                saved_only=True,
+            )
+        labels = [m.strftime("%Y-%m") for m in months]
+        return cached(
+            {
+                **entry,
+                "by_hour": by_hour,
+                "by_month": [{"month": m, "sightings": by_month.get(m, 0)} for m in labels],
+                "recent": [_detection(r, catalogue) for r in recent],
+            },
+            3600,
         )
 
     # Keep last: whatever no route above answers under the prefix is a cached 404 too.

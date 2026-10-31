@@ -56,7 +56,6 @@ from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from PIL import Image
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field, ValidationError
@@ -65,6 +64,7 @@ from .alerts import SLO_RULES
 from .common_names import common as common_name
 from .common_names import reload_manifest_names
 from .config import autoplay_embed, settings
+from .detection_images import annotate_frame, crop_roi, resize_frame
 from .exports import (
     export_alerts,
     export_corrections,
@@ -83,7 +83,14 @@ from .exports import (
     hide_pending_spot_checks,
     query_for,
 )
-from .frames import frame_exists, open_frame
+from .frames import frame_exists
+from .public_queries import (
+    SAVED_FRAME_PATH,
+    detection_with_frame,
+    sighting_counts,
+    sightings_by_hour_of_day,
+    species_sightings,
+)
 from .review_queue import ReviewError, legacy_verdict, submit_verdict
 from .sheet_poller import SheetPoller
 from .stats import (
@@ -115,105 +122,6 @@ BASE_DIR = Path(__file__).resolve().parent
 # /app in the image, where the Dockerfile copies assets/ and db/ beside app/.
 REPO_ROOT = BASE_DIR.parents[2] if BASE_DIR.parents[1].name == "services" else BASE_DIR.parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-
-
-def _crop_roi(
-    image_path: str,
-    bbox: list[int],
-    pad_frac: float,
-    max_edge: int,
-) -> Image.Image:
-    """Crop a detection bbox out of a source frame with a fractional pad.
-
-    Synchronous; run in a threadpool from the route handler. Bbox is
-    [x1, y1, x2, y2] in source pixel coordinates. Pad expands the crop by
-    `pad_frac * max(width, height)` on each side, clamped to image bounds.
-    Output is downscaled so the longer edge is at most `max_edge` px.
-    """
-    x1, y1, x2, y2 = bbox
-    with Image.open(open_frame(image_path)) as src:
-        src.load()
-        W, H = src.size
-        w = max(1, x2 - x1)
-        h = max(1, y2 - y1)
-        pad = int(round(max(w, h) * pad_frac))
-        cx1 = max(0, x1 - pad)
-        cy1 = max(0, y1 - pad)
-        cx2 = min(W, x2 + pad)
-        cy2 = min(H, y2 + pad)
-        roi = src.crop((cx1, cy1, cx2, cy2)).convert("RGB")
-    rw, rh = roi.size
-    longest = max(rw, rh)
-    if longest > max_edge:
-        scale = max_edge / longest
-        roi = roi.resize((max(1, int(rw * scale)), max(1, int(rh * scale))), Image.LANCZOS)
-    return roi
-
-
-def _resize_frame(image_path: str, max_edge: int) -> Image.Image:
-    """Return the source frame downscaled so the longest edge is at most
-    ``max_edge`` pixels. No bbox is drawn. Used by the reviewer modal's
-    edit-bbox mode — the SVG overlay handles the bbox interactively, so
-    the underlying image must be unannotated.
-    """
-    with Image.open(open_frame(image_path)) as src:
-        src.load()
-        frame = src.convert("RGB").copy()
-    W, H = frame.size
-    if max(W, H) > max_edge:
-        scale = max_edge / max(W, H)
-        frame = frame.resize((max(1, int(W * scale)), max(1, int(H * scale))), Image.LANCZOS)
-    return frame
-
-
-def _annotate_frame(
-    image_path: str,
-    bbox: list[int],
-    label: str | None,
-    max_edge: int,
-) -> Image.Image:
-    """Draw the detection bbox on the full source frame for context view.
-
-    Lets a reviewer see the scene around the fish — water clarity, other
-    fish, depth — alongside the cropped ROI. Stroke + label use the
-    dashboard's accent color.
-    """
-    from PIL import ImageDraw, ImageFont
-
-    x1, y1, x2, y2 = bbox
-    with Image.open(open_frame(image_path)) as src:
-        src.load()
-        frame = src.convert("RGB").copy()
-    W, H = frame.size
-    if max(W, H) > max_edge:
-        scale = max_edge / max(W, H)
-        nw, nh = max(1, int(W * scale)), max(1, int(H * scale))
-        frame = frame.resize((nw, nh), Image.LANCZOS)
-        x1, y1, x2, y2 = (int(c * scale) for c in (x1, y1, x2, y2))
-    draw = ImageDraw.Draw(frame)
-    stroke_color = (79, 193, 255)  # dashboard accent
-    stroke_width = max(2, int(max(frame.size) / 400))
-    for inset in range(stroke_width):
-        draw.rectangle(
-            [(x1 - inset, y1 - inset), (x2 + inset, y2 + inset)],
-            outline=stroke_color,
-        )
-    if label:
-        try:
-            font = ImageFont.load_default(size=max(12, int(max(frame.size) / 70)))
-        except (TypeError, OSError):
-            font = ImageFont.load_default()
-        bbox_txt = draw.textbbox((0, 0), label, font=font)
-        tw = bbox_txt[2] - bbox_txt[0]
-        th = bbox_txt[3] - bbox_txt[1]
-        pad = 4
-        ly1 = max(0, y1 - th - 2 * pad)
-        draw.rectangle(
-            [(x1, ly1), (x1 + tw + 2 * pad, ly1 + th + 2 * pad)],
-            fill=stroke_color,
-        )
-        draw.text((x1 + pad, ly1 + pad), label, fill=(11, 26, 36), font=font)
-    return frame
 
 
 def _env(key: str, default: str) -> str:
@@ -983,30 +891,14 @@ def build_app() -> FastAPI:
                 "NOT EXISTS (SELECT 1 FROM detection_corrections dc " "WHERE dc.event_id = de.id)"
             )
         params.append(limit)
-        # detection_events.image_path is legacy / always NULL — the worker
-        # writes interesting frames to saved_frames (keyed by frame_id +
-        # source_name). Use a correlated subquery instead of a JOIN: the LIMIT
-        # caps how many lookups fire, the saved_frames index on
-        # (frame_id, source_name) makes each one O(log N), and we avoid the
-        # duplicate-event-row problem when saved_frames has multiple rows for
-        # the same key (which happens — same frame can be saved under several
-        # reasons). The timestamp is part of the match: frame_id restarts at 1
-        # with every worker restart, so frame_id + camera alone can name a
-        # different frame. When one frame was saved under several reasons,
-        # the lowest id wins.
+        # The frame is the one saved at the detection's own timestamp
+        # (public_queries.SAVED_FRAME_PATH says why it is a subquery).
         where_q = " AND ".join(where)
         sql = f"""
             SELECT de.id, de.ts, de.frame_id, de.source_name, de.det_conf,
                    de.bbox, de.topk, de.best_name, de.best_species_id,
                    de.best_accuracy,
-                   COALESCE(
-                     de.image_path,
-                     (SELECT image_path FROM saved_frames sf
-                       WHERE sf.frame_id = de.frame_id
-                         AND sf.source_name = de.source_name
-                         AND sf.ts = de.ts
-                       ORDER BY sf.id LIMIT 1)
-                   ) AS image_path
+                   {SAVED_FRAME_PATH} AS image_path
               FROM detection_events de
              WHERE {where_q}
              ORDER BY de.ts DESC
@@ -1046,24 +938,7 @@ def build_app() -> FastAPI:
         if pool is None:
             return db_unavailable()
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
-                    """
-                    SELECT de.bbox,
-                           COALESCE(
-                             de.image_path,
-                             (SELECT image_path FROM saved_frames sf
-                               WHERE sf.frame_id = de.frame_id
-                                 AND sf.source_name = de.source_name
-                                 AND sf.ts = de.ts
-                               ORDER BY sf.id LIMIT 1)
-                           ) AS image_path
-                      FROM detection_events de
-                     WHERE de.id = %s
-                    """,
-                    (event_id,),
-                )
-                row = await cur.fetchone()
+            row = await detection_with_frame(conn, event_id)
         if row is None:
             return JSONResponse({"error": "event not found"}, status_code=404)
         image_path = row.get("image_path")
@@ -1078,7 +953,7 @@ def build_app() -> FastAPI:
         try:
             img = await asyncio.get_running_loop().run_in_executor(
                 None,
-                _crop_roi,
+                crop_roi,
                 image_path,
                 bbox,
                 pad,
@@ -1119,24 +994,7 @@ def build_app() -> FastAPI:
         if pool is None:
             return db_unavailable()
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
-                    """
-                    SELECT de.bbox, de.best_name, de.best_accuracy,
-                           COALESCE(
-                             de.image_path,
-                             (SELECT image_path FROM saved_frames sf
-                               WHERE sf.frame_id = de.frame_id
-                                 AND sf.source_name = de.source_name
-                                 AND sf.ts = de.ts
-                               ORDER BY sf.id LIMIT 1)
-                           ) AS image_path
-                      FROM detection_events de
-                     WHERE de.id = %s
-                    """,
-                    (event_id,),
-                )
-                row = await cur.fetchone()
+            row = await detection_with_frame(conn, event_id)
         if row is None:
             return JSONResponse({"error": "event not found"}, status_code=404)
         image_path = row.get("image_path")
@@ -1158,7 +1016,7 @@ def build_app() -> FastAPI:
             if annotate:
                 img = await asyncio.get_running_loop().run_in_executor(
                     None,
-                    _annotate_frame,
+                    annotate_frame,
                     image_path,
                     bbox,
                     label,
@@ -1167,7 +1025,7 @@ def build_app() -> FastAPI:
             else:
                 img = await asyncio.get_running_loop().run_in_executor(
                     None,
-                    _resize_frame,
+                    resize_frame,
                     image_path,
                     size,
                 )
@@ -1200,21 +1058,8 @@ def build_app() -> FastAPI:
         if pool is None:
             return db_unavailable()
         if mode == "sightings":
-            sql = """
-                SELECT species_id, name,
-                       count(*)::int                AS n,
-                       avg(mean_accuracy)::real     AS mean_acc,
-                       max(last_seen)               AS last_seen,
-                       sum(frame_count)::int        AS total_frames,
-                       avg(frame_count)::real       AS mean_frames_per_track
-                  FROM species_sightings_mat
-                 WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
-                   AND frame_count >= %s
-                 GROUP BY 1, 2
-                 ORDER BY n DESC
-                 LIMIT 50
-            """
-            params = (hours, min_frames)
+            async with pool.connection() as conn:
+                rows = await sighting_counts(conn, hours, min_frames)
         else:
             sql = """
                 SELECT best_species_id AS species_id,
@@ -1230,10 +1075,10 @@ def build_app() -> FastAPI:
                  LIMIT 50
             """
             params = (hours,)
-        async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, params)
-                rows = await cur.fetchall()
+            async with pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(sql, params)
+                    rows = await cur.fetchall()
         for r in rows:
             r["last_seen"] = r["last_seen"].isoformat() if r["last_seen"] else None
             r["common"] = common_name(r["name"]) if r.get("name") else None
@@ -2301,27 +2146,8 @@ def build_app() -> FastAPI:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return db_unavailable()
-        sql = """
-            SELECT species_id,
-                   MIN(name)                          AS name,
-                   COUNT(*)::int                      AS sightings,
-                   SUM(frame_count)::bigint           AS total_frames,
-                   AVG(mean_accuracy)::real           AS mean_accuracy,
-                   MAX(peak_accuracy)::real           AS peak_accuracy,
-                   array_agg(DISTINCT source_name)    AS sources,
-                   MIN(first_seen)                    AS first_seen,
-                   MAX(last_seen)                     AS last_seen
-              FROM species_sightings_mat
-             WHERE last_seen >= NOW() - (%s::int || ' hours')::interval
-               AND frame_count >= %s
-             GROUP BY species_id
-             ORDER BY sightings DESC
-             LIMIT 200
-        """
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, (hours, min_frames))
-                rows = await cur.fetchall()
+            rows = await species_sightings(conn, min_frames=min_frames, hours=hours, limit=200)
         out = []
         for r in rows:
             out.append(
@@ -2436,19 +2262,7 @@ def build_app() -> FastAPI:
 
                 # Activity by local hour of day (the site's TZ; same convention
                 # as the visitor_stats hourly chart)
-                await cur.execute(
-                    """
-                    SELECT extract(hour FROM (first_seen AT TIME ZONE %s))::int AS hod,
-                           COUNT(*)::int AS sightings
-                      FROM species_sightings_mat
-                     WHERE species_id = %s
-                       AND last_seen >= NOW() - (%s::int || ' hours')::interval
-                     GROUP BY 1
-                     ORDER BY 1
-                    """,
-                    (cfg.tz, species_id, hours),
-                )
-                hod_rows = await cur.fetchall()
+                hod = await sightings_by_hour_of_day(conn, species_id, cfg.tz, hours=hours)
 
                 # Top-K accuracy distribution (when this species was the top-1)
                 await cur.execute(
@@ -2494,12 +2308,6 @@ def build_app() -> FastAPI:
                     (species_id, hours),
                 )
                 frame_rows = await cur.fetchall()
-
-        # Fill hour-of-day buckets so the UI gets all 24 values
-        hod = {i: 0 for i in range(24)}
-        for r in hod_rows:
-            if r["hod"] is not None:
-                hod[int(r["hod"])] = r["sightings"]
 
         return JSONResponse(
             {

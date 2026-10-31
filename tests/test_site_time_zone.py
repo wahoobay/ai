@@ -17,9 +17,10 @@ def test_review_windows_use_the_configured_time_zone(monkeypatch):
 
 
 def test_hour_of_day_sql_takes_the_zone_as_a_parameter():
-    source = (APP / "main.py").read_text()
-    assert "AT TIME ZONE 'America/New_York'" not in source
-    assert "AT TIME ZONE %s" in source
+    # The dashboard's and the public API's local-time SQL lives in public_queries.py.
+    for name in ("main.py", "public_queries.py", "routes_public.py"):
+        assert "AT TIME ZONE 'America/New_York'" not in (APP / name).read_text(), name
+    assert "AT TIME ZONE %s" in (APP / "public_queries.py").read_text()
 
 
 def test_pages_hand_the_browser_the_site_time_zone():
