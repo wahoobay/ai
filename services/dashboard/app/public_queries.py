@@ -226,35 +226,40 @@ async def recent_detections(
     return await _rows(conn, sql, params)
 
 
-async def sightings_by_bucket(conn, since: datetime, tz: str, *, week: bool) -> list[dict]:
-    """Sightings per species per local day in `tz` (or per ISO week, as its Monday) from
-    the hourly rollup, for the hours from `since`: species_id, name, bucket (a date), n."""
-    bucket = (
-        "date_trunc('week', hour AT TIME ZONE %s)::date" if week else "(hour AT TIME ZONE %s)::date"
-    )
+async def sightings_by_bucket(
+    conn, since: datetime, tz: str, min_frames: int, *, week: bool
+) -> list[dict]:
+    """Sightings (tracks of at least `min_frames` frames) per species per local day in `tz`,
+    or per ISO week as its Monday, by their first frame, from `since` on: species_id, name,
+    bucket (a date), n. Read per track, not from the hourly rollup, which keeps 60 days."""
+    local = "first_seen AT TIME ZONE %s"
+    bucket = f"date_trunc('week', {local})::date" if week else f"({local})::date"
     return await _rows(
         conn,
         f"""
-        SELECT species_id, MIN(name) AS name, {bucket} AS bucket, SUM(sightings)::int AS n
-          FROM species_sightings_hourly_mat
-         WHERE hour >= %s
+        SELECT species_id, MIN(name) AS name, {bucket} AS bucket, COUNT(*)::int AS n
+          FROM species_sightings_mat
+         WHERE first_seen >= %s AND frame_count >= %s
          GROUP BY 1, 3
         """,
-        (tz, since),
+        (tz, since, min_frames),
     )
 
 
-async def sightings_by_month(conn, species_id: str, since: datetime, tz: str) -> dict[str, int]:
-    """The species' sightings per local calendar month in `tz` ("YYYY-MM") from the hourly
-    rollup, for the hours from `since`; months without one are absent."""
+async def sightings_by_month(
+    conn, species_id: str, since: datetime, tz: str, min_frames: int
+) -> dict[str, int]:
+    """The species' sightings (tracks of at least `min_frames` frames) per local calendar
+    month in `tz` ("YYYY-MM") by their first frame, from `since` on; months without one are
+    absent. Read per track, not from the hourly rollup, which keeps 60 days."""
     rows = await _rows(
         conn,
         """
-        SELECT to_char(hour AT TIME ZONE %s, 'YYYY-MM') AS month, SUM(sightings)::int AS n
-          FROM species_sightings_hourly_mat
-         WHERE species_id = %s AND hour >= %s
+        SELECT to_char(first_seen AT TIME ZONE %s, 'YYYY-MM') AS month, COUNT(*)::int AS n
+          FROM species_sightings_mat
+         WHERE species_id = %s AND first_seen >= %s AND frame_count >= %s
          GROUP BY 1
         """,
-        (tz, species_id, since),
+        (tz, species_id, since, min_frames),
     )
     return {r["month"]: r["n"] for r in rows}

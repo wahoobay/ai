@@ -647,7 +647,7 @@ async def test_species_list_has_taxonomy_and_lifetime_counts(rdb, rclient, revie
     assert (testfish["sightings_total"], testfish["sightings_7d"]) == (1, 0)
     photo = rclient.get(seriola["photo"]["url"])
     assert photo.status_code == 200 and photo.headers["content-type"] == "image/jpeg"
-    assert photo.headers["cache-control"] == "public, max-age=3600"
+    assert photo.headers["cache-control"] == "public, max-age=86400, immutable"
     r = rclient.get("/api/public/species/Pomatomus%20saltarix/photo.jpg")
     assert r.status_code == 404 and r.headers["cache-control"] == "public, max-age=60"
 
@@ -657,7 +657,8 @@ async def test_species_profile_has_24_hours_12_months_and_recent(rdb, public_cli
     now = datetime.now(UTC)
     late = (now - timedelta(days=2)).replace(hour=3, minute=30, second=0, microsecond=0)
     earlier = now - timedelta(days=45)
-    starts = [late, late + timedelta(minutes=5), earlier]
+    oldest = now - timedelta(days=75)  # past the hourly rollup's 60 days
+    starts = [late, late + timedelta(minutes=5), earlier, oldest]
     for i, start in enumerate(starts, 1):
         await seed_track(rdb, "Seriola zonata", i, start)
     await seed_track(rdb, "Acanthurus coeruleus", 9, late)
@@ -714,8 +715,11 @@ async def test_species_counts_buckets_in_the_sites_time_zone(rdb, public_client)
     late = (now - timedelta(days=3)).replace(hour=3, minute=30, second=0, microsecond=0)
     evening = late.astimezone(tz).date()
     assert evening == late.date() - timedelta(days=1)
+    # And one past the hourly rollup's 60 days, also on its own evening.
+    long_ago = (now - timedelta(days=75)).replace(hour=3, minute=30, second=0, microsecond=0)
     track = iter(range(1, 100))
     for species, n, start in (
+        ("Seriola zonata", 1, long_ago),
         ("Seriola zonata", 3, late),
         ("Acanthurus coeruleus", 2, late - timedelta(days=1)),
         ("Pomatomus saltarix", 1, late),
@@ -728,6 +732,7 @@ async def test_species_counts_buckets_in_the_sites_time_zone(rdb, public_client)
         r = client.get("/api/public/species/counts?days=7&top=2")
         weeks = client.get("/api/public/species/counts?days=14&granularity=week&top=8").json()
         default = client.get("/api/public/species/counts").json()
+        hundred = client.get("/api/public/species/counts?days=100&top=8").json()
     assert r.status_code == 200, r.text
     assert r.headers["cache-control"] == "public, max-age=3600"
     body = r.json()
@@ -764,6 +769,10 @@ async def test_species_counts_buckets_in_the_sites_time_zone(rdb, public_client)
     assert [len(s["counts"]) for s in weeks["series"]] == [len(mondays)] * 4
     assert sum(sum(s["counts"]) for s in weeks["series"]) == 7 and sum(weeks["other"]) == 0
     assert len(default["buckets"]) == 30 and len(default["series"]) == 4
+    seriola = next(s for s in hundred["series"] if s["species_id"] == "Seriola zonata")
+    by_day = dict(zip(hundred["buckets"], seriola["counts"], strict=True))
+    assert by_day[(long_ago.date() - timedelta(days=1)).isoformat()] == 1
+    assert by_day[evening.isoformat()] == 3 and sum(seriola["counts"]) == 4
 
 
 async def test_no_public_response_mentions_identity_columns(rdb, rclient, tmp_path):
@@ -798,6 +807,10 @@ async def test_no_public_response_mentions_identity_columns(rdb, rclient, tmp_pa
         r = rclient.get(path)
         assert r.status_code == 200, (path, r.text)
         assert not IDENTITY_RE.search(r.text), path
+    [seriola] = rclient.get("/api/public/species").json()["species"]
+    photo = rclient.get(seriola["photo"]["url"])  # a JPEG, and nothing else about anyone
+    assert photo.status_code == 200 and photo.headers["content-type"] == "image/jpeg"
+    assert not IDENTITY_RE.search(str(dict(photo.headers)))
 
 
 async def test_out_of_range_parameters_are_refused(rclient):
@@ -811,3 +824,37 @@ async def test_out_of_range_parameters_are_refused(rclient):
         "/api/public/species/counts?granularity=month",
     ):
         assert rclient.get(path).status_code == 422, path
+
+
+async def test_live_and_recent_name_a_species_by_its_accepted_name(
+    rdb, public_client, monkeypatch, tmp_path
+):
+    """The classifier's class keeps the Species Log's misspelling (Pomatomus saltarix); the
+    public sees the WoRMS accepted name taxonomy.csv maps it to, and its id unchanged. A name
+    the catalogue does not map passes through as given."""
+    misspelt = {
+        **LIVE["detections"][0],
+        "best_name": "Pomatomus saltarix",
+        "best_species_id": "Pomatomus saltarix",
+    }
+    frame = dict(LIVE, detections=[misspelt, LIVE["detections"][1]])
+    await seed_frame(
+        rdb,
+        tmp_path,
+        ts=datetime.now(UTC) - timedelta(minutes=1),
+        frame_id=50,
+        boxes=[{"bbox": [10, 10, 90, 90], "species": "Pomatomus saltarix", "p": 0.9}],
+    )
+    with public_client(WORKER_URL=WORKER) as client:
+        fake_workers(client, monkeypatch, {"worker.test": httpx.Response(200, json=frame)})
+        live = client.get("/api/public/live?camera=seahivecam").json()["detections"]
+        [recent] = client.get("/api/public/detections/recent").json()["detections"]
+    assert [(d["species_id"], d["latin"], d["common"]) for d in live] == [
+        ("Pomatomus saltarix", "Pomatomus saltatrix", "Bluefish"),
+        ("testfish_innominatus", "Testfish innominatus", None),
+    ]
+    assert (recent["species_id"], recent["latin"], recent["common"]) == (
+        "Pomatomus saltarix",
+        "Pomatomus saltatrix",
+        "Bluefish",
+    )

@@ -26,7 +26,7 @@ from .common_names import common as common_name
 from .config import autoplay_embed
 from .detection_images import annotate_frame, crop_roi
 from .frames import frame_exists
-from .review_catalogue import slug
+from .review_catalogue import normalize_raw, slug
 from .review_images import render_frame
 
 log = logging.getLogger(__name__)
@@ -77,11 +77,13 @@ def _iso(ts: datetime | None) -> str | None:
 
 
 def _names(catalogue, raw: str | None) -> tuple[str | None, str | None]:
-    """(latin, common) for a name the classifier or a verdict wrote: its WoRMS accepted name,
-    and that name's common name (the curated list first, then the Species Log)."""
+    """(latin, common) for a name the classifier or a verdict wrote: its WoRMS accepted name
+    (a name the catalogue does not map passes through as given), and that name's common
+    name (the curated list first, then the Species Log)."""
     if not raw:
         return None, None
-    latin = catalogue.accepted(raw)
+    accepted = catalogue.accepted(raw)
+    latin = raw if accepted == normalize_raw(raw) else accepted
     return latin, common_name(latin) or catalogue.common_name(latin)
 
 
@@ -180,6 +182,9 @@ def build_public_router(cfg, state) -> APIRouter:
     if cfg.worker_url_pier:
         cameras["pier_cam"] = (cfg.worker_url_pier, False, None)
 
+    async def _catalogue():
+        return await state["review_catalogue"].aget()
+
     async def worker_live(client: httpx.AsyncClient, camera: str, worker: str) -> dict | None:
         """The worker's current frame from one GET of its /live.json; None when it does not
         answer 200 with JSON within WORKER_TIMEOUT_S."""
@@ -237,6 +242,8 @@ def build_public_router(cfg, state) -> APIRouter:
         found = frame.get("detections") if isinstance(frame, dict) else None
         if not isinstance(found, list) or not all(_is_detection(d) for d in found):
             return cached({"error": "camera offline"}, 10, status=503)
+        catalogue = await _catalogue()
+        named = [(d, *_names(catalogue, d["best_name"])) for d in found if d.get("best_name")]
         return cached(
             {
                 "camera": camera,
@@ -249,11 +256,10 @@ def build_public_router(cfg, state) -> APIRouter:
                         "bbox": d["bbox"],
                         "confidence": d.get("best_accuracy"),
                         "species_id": d.get("best_species_id"),
-                        "latin": d["best_name"],
-                        "common": common_name(d["best_name"]),
+                        "latin": latin,
+                        "common": common,
                     }
-                    for d in found
-                    if d.get("best_name")
+                    for d, latin, common in named
                 ],
             },
             1,
@@ -264,9 +270,6 @@ def build_public_router(cfg, state) -> APIRouter:
 
     def _no_database() -> JSONResponse:
         return cached({"error": "database unavailable"}, 10, status=503)
-
-    async def _catalogue():
-        return await state["review_catalogue"].aget()
 
     def _unknown_camera() -> JSONResponse:
         return cached({"error": "unknown camera"}, 10, status=404)
@@ -402,7 +405,9 @@ def build_public_router(cfg, state) -> APIRouter:
             buckets = [first + timedelta(days=i) for i in range(days)]
         since = datetime.combine(first, time(), zone)
         async with pool.connection() as conn:
-            rows = await q.sightings_by_bucket(conn, since, cfg.tz, week=granularity == "week")
+            rows = await q.sightings_by_bucket(
+                conn, since, cfg.tz, MIN_FRAMES, week=granularity == "week"
+            )
         index = {b: i for i, b in enumerate(buckets)}
         counts: dict[str, list[int]] = {}
         names: dict[str, str] = {}
@@ -449,9 +454,7 @@ def build_public_router(cfg, state) -> APIRouter:
                 log.warning("public api: no photo for %s: %r", species_id, e)
         if data is None:
             return cached({"error": "no photo"}, 60, status=404)
-        return Response(
-            data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"}
-        )
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": IMMUTABLE})
 
     @router.get("/species/{species_id}")
     async def public_species_profile(species_id: str) -> JSONResponse:
@@ -470,7 +473,7 @@ def build_public_router(cfg, state) -> APIRouter:
             by_hour = await q.sightings_by_hour_of_day(
                 conn, species_id, cfg.tz, min_frames=MIN_FRAMES
             )
-            by_month = await q.sightings_by_month(conn, species_id, months[0], cfg.tz)
+            by_month = await q.sightings_by_month(conn, species_id, months[0], cfg.tz, MIN_FRAMES)
             recent = await q.recent_detections(
                 conn,
                 hours=RECENT_HOURS_MAX,
