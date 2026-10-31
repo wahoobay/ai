@@ -318,18 +318,43 @@ def build_public_router(cfg, state) -> APIRouter:
             log.debug("public api: the %s worker did not answer: %r", camera, e)
         return None
 
+    async def worker_dark(client: httpx.AsyncClient, camera: str, worker: str) -> bool | None:
+        """Whether the worker's source reports it is dark, from one GET of its /stats
+        (autoswitch.is_dark); None when it does not answer 200 within WORKER_TIMEOUT_S or
+        the body has no boolean there."""
+        try:
+            r = await client.get(f"{worker}/stats", timeout=WORKER_TIMEOUT_S)
+            if r.status_code == 200:
+                source = r.json().get("autoswitch")
+                dark = source.get("is_dark") if isinstance(source, dict) else None
+                return dark if isinstance(dark, bool) else None
+            log.debug("public api: the %s worker's stats answered %s", camera, r.status_code)
+        except (httpx.HTTPError, ValueError, AttributeError) as e:
+            log.debug("public api: the %s worker's stats did not answer: %r", camera, e)
+        return None
+
     @router.get("/cameras")
     async def public_cameras() -> JSONResponse:
         """Each camera's status and the media a signed-out visitor can fetch: `live` only
         when its worker answers and the stream origin serves it; otherwise the embed, if
-        the camera has one, or offline. The site names its cameras from its own content."""
+        the camera has one, or offline. The site names its cameras from its own content.
+
+        `dark` is true or false as the camera worker reports about its own source (its
+        /stats `autoswitch.is_dark`, from frame luminance) and null when that is not known:
+        no worker, a /stats that fails or answers non-200, or a body without the field. It
+        never changes `status`."""
         client: httpx.AsyncClient = state["client"]
 
         async def entry(camera: str, worker: str, on_origin: bool, embed: str | None) -> dict:
             media = bool(worker) and on_origin
+            dark = None
+            if worker:
+                live, dark = await asyncio.gather(
+                    worker_live(client, camera, worker), worker_dark(client, camera, worker)
+                )
             if not worker:
                 status = "embed"
-            elif await worker_live(client, camera, worker) is None:
+            elif live is None:
                 status = "offline"
             elif media:
                 status = "live"
@@ -342,6 +367,7 @@ def build_public_router(cfg, state) -> APIRouter:
                 "snapshot": f"{stream_base}/snapshot_raw.jpg" if media else None,
                 "embed_url": embed,
                 "live": f"/api/public/live?camera={camera}",
+                "dark": dark,
             }
 
         entries = await asyncio.gather(*(entry(cam, *spec) for cam, spec in cameras.items()))
