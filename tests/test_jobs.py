@@ -59,6 +59,17 @@ def test_an_unknown_job_is_refused_without_touching_the_database(pg_url, monkeyp
     assert "job_runs" not in {r[0] for r in query(pg_url, "SELECT tablename FROM pg_tables")}
 
 
+def test_the_lambda_prints_its_result_for_the_log_group(capsys):
+    """An asynchronous invocation (run-job-staging) has no caller to return the result to,
+    and the runtime keeps the root logger at WARNING: the result goes to stdout, which
+    Lambda keeps in the function's log group whatever the logging level."""
+    from app.lambda_entry import handler
+
+    out = handler({"job": "make_coffee"}, None)
+    printed = capsys.readouterr().out.strip().splitlines()
+    assert printed and json.loads(printed[-1]) == out
+
+
 def test_worker_rules_are_skipped_without_a_worker(pg_url, monkeypatch):
     from app.jobs import run_job
 

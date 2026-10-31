@@ -34,3 +34,17 @@ def test_run_job_staging_offers_known_jobs_and_never_production():
     assert job["type"] == "choice" and job["required"] is True
     assert {"import_legacy", "status"} <= set(job["options"]) <= set(JOBS)
     assert "STAGING_ROLE_ARN" in text and "PROD_" not in text
+
+
+def test_run_job_staging_dispatches_the_job_asynchronously():
+    """The import runs for up to 840 s. A synchronous invoke outlives the AWS CLI's 60 s read
+    timeout, and the CLI's retry would start a second import beside the first: the workflow
+    hands the job over (Event), never repeats the dispatch, and says where the result is."""
+    text = (WORKFLOWS / "run-job-staging.yml").read_text()
+    commands = [
+        line for line in text.replace("\\\n", " ").splitlines() if "aws lambda invoke" in line
+    ]
+    assert commands and all("--invocation-type Event" in c for c in commands), commands
+    assert "RequestResponse" not in text
+    assert 'AWS_MAX_ATTEMPTS: "1"' in text
+    assert "aws logs tail /aws/lambda/" in text

@@ -340,7 +340,9 @@ hidden prompt; a read-only session, SELECTs only). The job (`app/legacy_import.p
 `LEGACY_URL`, default `<MODELS_URL>/legacy/`) inserts only the rows older than a
 table's first non-legacy reading for the site's deployment, with `source =
 'legacy'`; `ON CONFLICT (deployment_uri, ts) DO NOTHING`, so a second run inserts
-nothing. Both files hold one row per distinct `ts` (ISO 8601 UTC), ascending.
+nothing. A run stops when its time budget (`budget_s`, 840 s) is spent and
+reports `partial: true`; the next run carries on. Both files hold one row per
+distinct `ts` (ISO 8601 UTC), ascending.
 
 ### The source tables
 

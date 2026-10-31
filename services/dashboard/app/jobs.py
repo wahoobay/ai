@@ -91,7 +91,8 @@ async def reseed_sample(pool: AsyncConnectionPool) -> dict[str, Any]:
 
 async def import_legacy(pool: AsyncConnectionPool) -> dict[str, Any]:
     """Bring the Java backend's sensor history in from LEGACY_URL (default <MODELS_URL>/legacy/):
-    only rows older than the first live reading; a second run inserts nothing."""
+    only rows older than the first live reading; a second run inserts nothing. Within a time
+    budget: partial: true means it stopped early, and the next run carries on."""
     from . import legacy_import
 
     site = settings()

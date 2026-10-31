@@ -373,14 +373,19 @@ worker stamps on its rows.
   infra repository's README ("AI stacks") says how to set them. The DGX is not
   deployed this way: see `docs/operations.md`.
 - **Running one job on staging:** Actions → `run-job-staging` → the job
-  (`status`, `import_legacy`) invokes staging's jobs Lambda with `{"job": "<job>"}`.
+  (`status`, `import_legacy`) hands staging's jobs Lambda `{"job": "<job>"}`
+  asynchronously (the import outlasts a synchronous call). The result is a JSON
+  line in the Lambda's log group, `/aws/lambda/<jobs function>`; the workflow
+  prints the `aws logs tail` command that follows it.
 
 ### Importing the Java database's sensor history
 
 The old site's backend (MySQL, `wahoobay-db`) holds the sonde's and the weather
 station's readings since 2025; this database has them only since its poller
-started. Once, from a shell that has the Java database's read-only URL, in this
-checkout (`pip install '.[legacy]'` first: the MySQL driver):
+started. Only measured readings come across: the sonde's `water_quality` and the
+weather station's `sitedata`, never Tomorrow.io's modelled `weatherdata`. Once,
+from a shell that has the Java database's read-only URL, in this checkout
+(`pip install '.[legacy]'` first: the MySQL driver):
 
 ```bash
 # the Java database's read-only URL (mysql://user:password@host:3306/database) from a hidden prompt
@@ -397,7 +402,11 @@ the keys and array lengths of the newest 50 rows; if they differ from the
 (`docs/data_pipeline.md`, "Legacy history"). The export prints each file's row
 count and first and last `ts`; `legacy/` is git-ignored. The job inserts only
 rows older than each table's first non-legacy reading for the site's deployment,
-tagged `source = 'legacy'`; running it again inserts nothing.
+tagged `source = 'legacy'`; running it again inserts nothing. It works within a
+time budget (840 s, inside the Lambda's timeout). Its result (`read`, `inserted`,
+`partial`) is the line the workflow tells you to follow in the jobs Lambda's log
+group: if the job reports `partial: true`, dispatch it again, and it carries on
+where it stopped.
 
 ---
 

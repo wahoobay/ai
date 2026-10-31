@@ -66,14 +66,18 @@ FORECAST = {
 }
 
 
-def _import(pg_url: str, legacy_url: str = f"file://{FIXTURES}/") -> dict:
+def _import(pg_url: str, legacy_url: str = f"file://{FIXTURES}/", **budget) -> dict:
     from app.legacy_import import import_legacy
     from psycopg_pool import AsyncConnectionPool
 
     async def go() -> dict:
         async with AsyncConnectionPool(pg_url, min_size=0, max_size=2, open=False) as pool:
             return await import_legacy(
-                pool, legacy_url=legacy_url, deployment_uri=DEPLOYMENT, location_id="reef_b"
+                pool,
+                legacy_url=legacy_url,
+                deployment_uri=DEPLOYMENT,
+                location_id="reef_b",
+                **budget,
             )
 
     return asyncio.run(go())
@@ -101,7 +105,11 @@ def _live(pg_url: str, ts: datetime, deployment: str = DEPLOYMENT) -> None:
 def test_the_fixtures_load(pg_url):
     alembic("upgrade", "head", url=pg_url)
     out = _import(pg_url)
-    assert out == {"water": {"read": 5, "inserted": 5}, "weather": {"read": 5, "inserted": 5}}
+    assert out == {
+        "water": {"read": 5, "inserted": 5},
+        "weather": {"read": 5, "inserted": 5},
+        "partial": False,
+    }
     water = query(
         pg_url,
         "SELECT ts, deployment_uri, water_temp_c, ph, spcond_ms_cm FROM sensor_readings ORDER BY ts",
@@ -143,7 +151,11 @@ def test_a_second_run_inserts_nothing(pg_url):
     alembic("upgrade", "head", url=pg_url)
     _import(pg_url)
     again = _import(pg_url)
-    assert again == {"water": {"read": 5, "inserted": 0}, "weather": {"read": 5, "inserted": 0}}
+    assert again == {
+        "water": {"read": 5, "inserted": 0},
+        "weather": {"read": 5, "inserted": 0},
+        "partial": False,
+    }
     assert query(pg_url, "SELECT count(*) FROM sensor_readings") == [(5,)]
     assert query(pg_url, "SELECT count(*) FROM weather_readings") == [(5,)]
 
@@ -155,7 +167,11 @@ def test_only_rows_older_than_the_first_live_reading_are_inserted(pg_url):
     # Another deployment's readings do not move this deployment's cut-off.
     _live(pg_url, datetime(2025, 1, 1, tzinfo=UTC), deployment="elsewhere")
     out = _import(pg_url)
-    assert out == {"water": {"read": 5, "inserted": 3}, "weather": {"read": 5, "inserted": 3}}
+    assert out == {
+        "water": {"read": 5, "inserted": 3},
+        "weather": {"read": 5, "inserted": 3},
+        "partial": False,
+    }
     for table, column in (("sensor_readings", "water_temp_c"), ("weather_readings", "air_temp_c")):
         mine = f"FROM {table} WHERE deployment_uri = %s"
         newest_legacy = query(pg_url, f"SELECT max(ts) {mine} AND source = 'legacy'", DEPLOYMENT)
@@ -174,6 +190,41 @@ def test_a_missing_file_is_skipped_and_reported(pg_url, tmp_path):
     out = _import(pg_url, f"file://{tmp_path}/")
     assert out["water"] == {"read": 5, "inserted": 5}
     assert out["weather"] == {"read": 0, "inserted": 0, "missing": f"file://{tmp_path}/weather.csv"}
+
+
+def test_a_spent_budget_stops_after_the_batch_and_the_next_run_finishes(pg_url, monkeypatch):
+    from app import legacy_import
+
+    alembic("upgrade", "head", url=pg_url)
+    monkeypatch.setattr(legacy_import, "BATCH", 2)
+    # No time at all: the batch in hand is finished, then the run stops and says so.
+    out = _import(pg_url, budget_s=0)
+    assert out == {"water": {"read": 5, "inserted": 2}, "partial": True}
+    assert query(pg_url, "SELECT count(*) FROM sensor_readings") == [(2,)]
+    # Dispatched again, it carries on where it stopped.
+    out = _import(pg_url)
+    assert out == {
+        "water": {"read": 5, "inserted": 3},
+        "weather": {"read": 5, "inserted": 5},
+        "partial": False,
+    }
+    assert query(pg_url, "SELECT count(*) FROM sensor_readings") == [(5,)]
+    assert query(pg_url, "SELECT count(*) FROM weather_readings") == [(5,)]
+
+
+def test_every_run_makes_progress_however_small_the_budget(pg_url, monkeypatch):
+    from app import legacy_import
+
+    alembic("upgrade", "head", url=pg_url)
+    monkeypatch.setattr(legacy_import, "BATCH", 2)
+    runs = [_import(pg_url, budget_s=0)]
+    while runs[-1]["partial"]:
+        assert len(runs) < 6, runs  # three batches a file: one batch a run at the least
+        runs.append(_import(pg_url, budget_s=0))
+    assert len(runs) == 6
+    assert sum(r.get("water", {}).get("inserted", 0) for r in runs) == 5
+    assert sum(r.get("weather", {}).get("inserted", 0) for r in runs) == 5
+    assert query(pg_url, "SELECT count(*) FROM weather_readings WHERE source = 'legacy'") == [(5,)]
 
 
 def test_a_file_with_another_header_is_refused(pg_url, tmp_path):
@@ -202,7 +253,11 @@ def test_import_legacy_is_a_job(pg_url, tmp_path, monkeypatch):
     assert out == {
         "job": "import_legacy",
         "ok": True,
-        "detail": {"water": {"read": 5, "inserted": 5}, "weather": {"read": 5, "inserted": 5}},
+        "detail": {
+            "water": {"read": 5, "inserted": 5},
+            "weather": {"read": 5, "inserted": 5},
+            "partial": False,
+        },
     }
     assert query(pg_url, "SELECT job, ok FROM job_runs ORDER BY id") == [
         ("import_legacy", False),
@@ -345,6 +400,7 @@ def test_what_the_export_writes_the_import_reads(pg_url, tmp_path):
     assert _import(pg_url, f"file://{tmp_path}/") == {
         "water": {"read": 1, "inserted": 1},
         "weather": {"read": 1, "inserted": 1},
+        "partial": False,
     }
     assert query(pg_url, "SELECT ts, water_temp_c, ph, do_pct FROM sensor_readings") == [
         (datetime(2025, 1, 1, tzinfo=UTC), 28.0, pytest.approx(8.05, abs=1e-4), None)
