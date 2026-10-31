@@ -5,43 +5,37 @@ carry reviewer or personal data. Every answer goes out through `cached()`, so
 CloudFront and browsers hold it for a few seconds instead of every visitor
 reaching the dashboard. The SQL behind the detection, species and environment
 answers is public_queries.py's, shared with the dashboard's own routes; the
-downloads are the dashboard's own exports (exports.PUBLIC_EXPORTS), produced by
-the same functions. Every route sits above the catch-all at the end of the
-router."""
+downloads are the dashboard's own exports (exports.PUBLIC_EXPORTS) over a few
+fixed windows, read from a server-side cursor, at most DOWNLOADS_AT_ONCE at a
+time. Every route sits above the catch-all at the end of the router; a request
+the API cannot read is a cached 422 too (public_validation_error)."""
 
 from __future__ import annotations
 
 import asyncio
 import io
 import logging
+import os
 import re
+import tempfile
+from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi import APIRouter, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from . import public_queries as q
 from .common_names import common as common_name
 from .config import autoplay_embed
 from .detection_images import annotate_frame, crop_roi
-from .exports import (
-    PUBLIC_EXPORTS,
-    export_events,
-    export_frame_stats,
-    export_hourly_summary,
-    export_sightings,
-    export_species_counts,
-    export_topk_long,
-    export_tracks_timeline,
-    export_water_quality,
-    export_weather,
-    fetch_parquet_bytes,
-    query_for,
-)
+from .exports import PUBLIC_EXPORTS, public_query, stream_csv, write_parquet
 from .frames import frame_exists
 from .review_catalogue import normalize_raw, slug
 from .review_images import render_frame
@@ -81,21 +75,18 @@ SPECIES_RECENT = 12
 RECENT_HOURS_MAX = 168
 MIN_CONFIDENCE = 0.5
 IMMUTABLE = "public, max-age=86400, immutable"
-# The downloads: where they are, the window they cover unless asked otherwise, and how long a
-# browser or CloudFront keeps one.
+# The environment history's windows (days) and resolutions (points): few, so CloudFront's cache
+# keys stay few.
+HISTORY_DAYS = (1, 7, 30, 90, 365, 800)
+HISTORY_POINTS = (100, 200, 500)
+# The downloads: where they are, how long a browser or CloudFront keeps one, and how many may
+# run at once (each holds a database connection while it reads).
 EXPORTS = "/api/public/exports"
-EXPORT_DAYS = 90
 DOWNLOAD_CACHE = "public, max-age=3600"
+DOWNLOADS_AT_ONCE = 2
 
-_APP_DIR = Path(__file__).resolve().parent
 # The README the dashboard's own downloads carry (main.py, /api/export/README.md).
-EXPORTS_README = _APP_DIR / "data" / "README.md"
-# The licences document: assets/ at the repository root in a checkout, /app/assets in the image.
-LICENCES = (
-    (_APP_DIR.parents[2] if _APP_DIR.parents[1].name == "services" else _APP_DIR.parent)
-    / "assets"
-    / "LICENSES_AND_CREDITS.md"
-)
+EXPORTS_README = Path(__file__).resolve().parent / "data" / "README.md"
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 # What the public copy of the README adds: how its files name a source.
 README_NOTE = (
@@ -115,34 +106,72 @@ def _reading(ts: datetime | None, row: dict, columns: tuple) -> dict:
     return {"ts": _iso(ts), **{c: row[c] for c in columns}}
 
 
-def _plain(line: str) -> str:
-    """A line of Markdown as text: no quote or list marker, links as their words, no emphasis
-    or code marks."""
-    line = re.sub(r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+\.)\s+)?", "", line)
-    line = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", line)
-    return re.sub(r"\*\*|__|`|\*", "", line).strip()
+def _one_of(name: str, value: int, allowed: Sequence[int]) -> int:
+    """`value` when it is one of `allowed`, else the 422 FastAPI gives a query parameter outside
+    a Literal (which these cannot be typed as: a Literal of ints refuses the query's string)."""
+    if value in allowed:
+        return value
+    expected = ", ".join(map(str, allowed[:-1])) + f" or {allowed[-1]}"
+    raise RequestValidationError(
+        [
+            {
+                "type": "literal_error",
+                "loc": ("query", name),
+                "msg": f"Input should be {expected}",
+                "input": str(value),
+                "ctx": {"expected": expected},
+            }
+        ]
+    )
 
 
-def data_licence(path: Path) -> str | None:
-    """The first line of the licences document that licenses the data, as plain text: a line
-    of prose (not a heading, a table row or code) that names a licence and the data, and no
-    one's e-mail address. None when no line does, or there is no document."""
-    try:
-        text = path.read_text()
-    except OSError:
-        return None
-    in_code = False
-    for line in text.splitlines():
-        if line.lstrip().startswith("```"):
-            in_code = not in_code
-            continue
-        if in_code or line.lstrip().startswith(("#", "|")) or EMAIL.search(line):
-            continue
-        if re.search(r"licen[cs]", line, re.IGNORECASE) and re.search(
-            r"\bdata\b", line, re.IGNORECASE
-        ):
-            return _plain(line)
-    return None
+async def public_validation_error(request: Request, exc: RequestValidationError) -> Response:
+    """The app's handler for a request it cannot read: under /api/public/, a 422 cached briefly
+    like every other answer there; anywhere else, FastAPI's own."""
+    if request.url.path.startswith("/api/public/"):
+        detail = jsonable_encoder(exc.errors())
+        return cached({"error": "invalid request", "detail": detail}, 10, status=422)
+    return await request_validation_exception_handler(request, exc)
+
+
+class _Primed:
+    """`first`, then the rest of the async generator `rest`, whose first item it was."""
+
+    def __init__(self, first: str, rest: AsyncGenerator[str, None]):
+        self.first, self.rest = first, rest
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        if self.first is None:
+            return await self.rest.__anext__()
+        first, self.first = self.first, None
+        return first
+
+    async def aclose(self) -> None:
+        await self.rest.aclose()
+
+
+class _ClosingStream(StreamingResponse):
+    """A streaming response that closes its body once sent, or once sending fails, in the
+    request's own task: the stream's cleanup never waits for the garbage collector."""
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self.body_iterator.aclose()
+
+
+class _TemporaryFile(FileResponse):
+    """A file response whose file is deleted once sent, or once sending fails."""
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            Path(self.path).unlink(missing_ok=True)
 
 
 def _public_readme() -> str | None:
@@ -621,13 +650,12 @@ def build_public_router(cfg, state) -> APIRouter:
         )
 
     @router.get("/environment/history")
-    async def public_environment_history(
-        days: int = Query(7, ge=1, le=800),
-        max_points: int = Query(200, ge=10, le=2000),
-    ) -> JSONResponse:
-        """The site's readings of the last `days` days, averaged into at most `max_points`
-        even buckets (the dashboard's history rule), oldest first; each point is its
-        bucket's start."""
+    async def public_environment_history(days: int = 7, max_points: int = 200) -> JSONResponse:
+        """The site's readings of the last `days` days (one of HISTORY_DAYS), averaged into at
+        most `max_points` (one of HISTORY_POINTS) even buckets, the dashboard's history rule;
+        oldest first, each point its bucket's start."""
+        days = _one_of("days", days, HISTORY_DAYS)
+        max_points = _one_of("max_points", max_points, HISTORY_POINTS)
         pool = _pool()
         if pool is None:
             return _no_database()
@@ -645,26 +673,27 @@ def build_public_router(cfg, state) -> APIRouter:
             600,
         )
 
-    licence = data_licence(LICENCES)
-
     @router.get("/exports")
     async def public_exports() -> JSONResponse:
-        """The downloads: each export's CSV and Parquet, the README and the data's licence
-        (null when the licences document names none for it)."""
+        """The downloads: each export's CSV and Parquet and the windows they may cover, the
+        README, and the data's licence."""
         return cached(
             {
                 "exports": [
                     {
                         "name": name,
-                        "description": description,
+                        "description": export.description,
                         "csv": f"{EXPORTS}/{name}.csv",
                         "parquet": f"{EXPORTS}/{name}.parquet",
-                        "default_days": EXPORT_DAYS,
+                        "default_days": export.default_days,
+                        "allowed_days": list(export.allowed_days),
                     }
-                    for name, description in PUBLIC_EXPORTS.items()
+                    for name, export in PUBLIC_EXPORTS.items()
                 ],
                 "readme": f"{EXPORTS}/README.md",
-                "license": licence,
+                # No document licenses this data yet (assets/LICENSES_AND_CREDITS.md covers
+                # the classifier's training inputs): null until one does.
+                "license": None,
             },
             3600,
         )
@@ -682,59 +711,73 @@ def build_public_router(cfg, state) -> APIRouter:
             return cached({"error": "no README"}, 60, status=404)
         return Response(text, media_type="text/markdown", headers=_download("README.md"))
 
-    # A source in the public files is a camera's id, or nothing: a worker without a camera
-    # label stamps its video URL's host as its source.
-    public_values = {"source_name": _camera}
-    # Each public export's CSV from the function the dashboard's own /api/export/<name>.csv
-    # calls, with that route's defaults for every filter but the window, its rows passed
-    # through public_values (`v`).
-    v = {"values": public_values}
-    csv_exports = {
-        "events": lambda pool, hours: export_events(pool, hours, None, 0.0, **v),
-        "species_counts": lambda pool, hours: export_species_counts(pool, hours, **v),
-        "sightings": lambda pool, hours: export_sightings(pool, hours, MIN_FRAMES, **v),
-        "hourly_summary": lambda pool, hours: export_hourly_summary(pool, hours, deployment, **v),
-        "water_quality": lambda pool, hours: export_water_quality(pool, hours, deployment, **v),
-        "weather": lambda pool, hours: export_weather(pool, hours, deployment, **v),
-        "frame_stats": lambda pool, hours: export_frame_stats(pool, hours, **v),
-        "tracks_timeline": lambda pool, hours: export_tracks_timeline(pool, hours, MIN_FRAMES, **v),
-        "topk_long": lambda pool, hours: export_topk_long(pool, hours, 0.0, **v),
-    }
+    # A source in the public files is a camera's id, or empty: a worker without a camera label
+    # stamps its video URL's host as its source.
+    public_values = {"source_name": lambda source: _camera(source) or ""}
+    busy = state["public_downloads"] = asyncio.Semaphore(DOWNLOADS_AT_ONCE)
+
+    def _busy() -> JSONResponse:
+        return cached({"error": "busy"}, 10, status=503)
+
+    def _download_query(name: str, fmt: str, days: int | None) -> tuple | None:
+        """The public export's (sql, params, columns) over `days` (its default when None; a
+        422 when not one of its windows); None for a name that is not a public export."""
+        export = PUBLIC_EXPORTS.get(name)
+        if export is None:
+            return None
+        days = _one_of("days", export.default_days if days is None else days, export.allowed_days)
+        return public_query(
+            name, fmt, hours=days * 24, deployment=deployment, cameras=list(cameras)
+        )
 
     @router.get("/exports/{name}.csv")
-    async def public_export_csv(
-        name: str, days: int = Query(EXPORT_DAYS, ge=1, le=400)
-    ) -> Response:
-        """One of PUBLIC_EXPORTS over the last `days` days, streamed as CSV."""
-        if name not in PUBLIC_EXPORTS:
+    async def public_export_csv(name: str, days: int | None = None) -> Response:
+        """One of PUBLIC_EXPORTS over the last `days` days, streamed as CSV from a server-side
+        cursor; a cached 503 when DOWNLOADS_AT_ONCE are already running."""
+        query = _download_query(name, "csv", days)
+        if query is None:
             return _not_found()
         pool = _pool()
         if pool is None:
             return _no_database()
-        return StreamingResponse(
-            csv_exports[name](pool, days * 24),
-            media_type="text/csv",
-            headers=_download(f"{name}.csv"),
+        if busy.locked():
+            return _busy()
+        await busy.acquire()
+        lines = stream_csv(pool, *query, values=public_values, done=busy.release)
+        # The query runs before the answer starts. From here the stream gives its place back
+        # when it is closed: by the response once sent or failed, or, were the response never
+        # sent, by the event loop's finalizer.
+        header = await anext(lines)
+        return _ClosingStream(
+            _Primed(header, lines), media_type="text/csv", headers=_download(f"{name}.csv")
         )
 
     @router.get("/exports/{name}.parquet")
-    async def public_export_parquet(
-        name: str, days: int = Query(EXPORT_DAYS, ge=1, le=400)
-    ) -> Response:
-        """One of PUBLIC_EXPORTS over the last `days` days as Parquet: the dashboard's
-        query_for SQL and Parquet writer, with the same defaults as the CSV."""
-        if name not in PUBLIC_EXPORTS:
+    async def public_export_parquet(name: str, days: int | None = None) -> Response:
+        """One of PUBLIC_EXPORTS over the last `days` days as Parquet: written a row group at a
+        time to a temporary file, which is sent and then deleted; a cached 503 when
+        DOWNLOADS_AT_ONCE are already running."""
+        query = _download_query(name, "parquet", days)
+        if query is None:
             return _not_found()
         pool = _pool()
         if pool is None:
             return _no_database()
-        sql, params, cols = query_for(
-            name, hours=days * 24, deployment=deployment, min_frames=MIN_FRAMES, min_accuracy=0.0
-        )
-        return Response(
-            await fetch_parquet_bytes(pool, sql, params, cols, public_values),
-            media_type="application/vnd.apache.parquet",
-            headers=_download(f"{name}.parquet"),
+        if busy.locked():
+            return _busy()
+        await busy.acquire()
+        try:
+            fd, path = tempfile.mkstemp(prefix="public-export-", suffix=".parquet")
+            os.close(fd)
+            try:
+                await write_parquet(pool, *query, path, values=public_values)
+            except BaseException:
+                Path(path).unlink(missing_ok=True)
+                raise
+        finally:
+            busy.release()
+        return _TemporaryFile(
+            path, media_type="application/vnd.apache.parquet", headers=_download(f"{name}.parquet")
         )
 
     # Keep last: whatever no route above answers under the prefix is a cached 404 too.

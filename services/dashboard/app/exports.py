@@ -15,11 +15,14 @@ from __future__ import annotations
 import csv
 import io
 import json
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
+from psycopg.postgres import types as pg_types
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+from starlette.concurrency import run_in_threadpool
 
 # ---------------------------------------------------------------------------
 # Generic helpers
@@ -45,19 +48,8 @@ def _format(v) -> str:
     return str(v)
 
 
-# For a column, the function each row's value passes through before it is written: the public
-# API's (routes_public.py) shows a source by its camera id alone.
-Values = Mapping[str, Callable] | None
-
-
-def _with_values(row: dict, values: Values) -> dict:
-    if not values:
-        return row
-    return {**row, **{c: f(row[c]) for c, f in values.items() if c in row}}
-
-
 async def _stream(
-    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str], values: Values = None
+    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str]
 ) -> AsyncIterator[str]:
     yield _csv_line(columns)
     async with pool.connection() as conn:
@@ -68,7 +60,6 @@ async def _stream(
                 if not batch:
                     break
                 for r in batch:
-                    r = _with_values(r, values)
                     yield _csv_line(r[c] for c in columns)
 
 
@@ -116,14 +107,9 @@ def hide_pending_spot_checks(alias: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def export_events(
-    pool: AsyncConnectionPool,
-    hours: int,
-    species_id: str | None,
-    min_accuracy: float,
-    *,
-    values: Values = None,
-):
+def _events_query(
+    hours: int, species_id: str | None, min_accuracy: float
+) -> tuple[str, tuple, list[str]]:
     where = ["ts >= NOW() - (%s::int || ' hours')::interval", "best_accuracy >= %s"]
     params: list = [hours, min_accuracy]
     if species_id:
@@ -158,7 +144,13 @@ def export_events(
         "config_hash",
         "pipeline_git_sha",
     ]
-    return _stream(pool, sql, tuple(params), cols, values)
+    return sql, tuple(params), cols
+
+
+def export_events(
+    pool: AsyncConnectionPool, hours: int, species_id: str | None, min_accuracy: float
+):
+    return _stream(pool, *_events_query(hours, species_id, min_accuracy))
 
 
 def _species_counts_query(hours: int) -> tuple[str, tuple, list[str]]:
@@ -190,8 +182,8 @@ def _species_counts_query(hours: int) -> tuple[str, tuple, list[str]]:
     return sql, (hours,), cols
 
 
-def export_species_counts(pool: AsyncConnectionPool, hours: int, *, values: Values = None):
-    return _stream(pool, *_species_counts_query(hours), values)
+def export_species_counts(pool: AsyncConnectionPool, hours: int):
+    return _stream(pool, *_species_counts_query(hours))
 
 
 def _water_quality_query(hours: int, deployment: str) -> tuple[str, tuple, list[str]]:
@@ -220,10 +212,8 @@ def _water_quality_query(hours: int, deployment: str) -> tuple[str, tuple, list[
     return sql, (deployment, hours), cols
 
 
-def export_water_quality(
-    pool: AsyncConnectionPool, hours: int, deployment: str, *, values: Values = None
-):
-    return _stream(pool, *_water_quality_query(hours, deployment), values)
+def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str):
+    return _stream(pool, *_water_quality_query(hours, deployment))
 
 
 def _weather_query(hours: int, deployment: str) -> tuple[str, tuple, list[str]]:
@@ -289,10 +279,8 @@ def _weather_query(hours: int, deployment: str) -> tuple[str, tuple, list[str]]:
     return sql, (deployment, hours), cols
 
 
-def export_weather(
-    pool: AsyncConnectionPool, hours: int, deployment: str, *, values: Values = None
-):
-    return _stream(pool, *_weather_query(hours, deployment), values)
+def export_weather(pool: AsyncConnectionPool, hours: int, deployment: str):
+    return _stream(pool, *_weather_query(hours, deployment))
 
 
 def _frame_stats_query(hours: int) -> tuple[str, tuple, list[str]]:
@@ -322,8 +310,8 @@ def _frame_stats_query(hours: int) -> tuple[str, tuple, list[str]]:
     return sql, (hours,), cols
 
 
-def export_frame_stats(pool: AsyncConnectionPool, hours: int, *, values: Values = None):
-    return _stream(pool, *_frame_stats_query(hours), values)
+def export_frame_stats(pool: AsyncConnectionPool, hours: int):
+    return _stream(pool, *_frame_stats_query(hours))
 
 
 def export_saved_frames(pool: AsyncConnectionPool, hours: int):
@@ -490,10 +478,8 @@ def _sightings_query(hours: int, min_frames: int) -> tuple[str, tuple, list[str]
     return sql, (hours, min_frames), cols
 
 
-def export_sightings(
-    pool: AsyncConnectionPool, hours: int, min_frames: int, *, values: Values = None
-):
-    return _stream(pool, *_sightings_query(hours, min_frames), values)
+def export_sightings(pool: AsyncConnectionPool, hours: int, min_frames: int):
+    return _stream(pool, *_sightings_query(hours, min_frames))
 
 
 # ---------------------------------------------------------------------------
@@ -504,13 +490,17 @@ def export_sightings(
 # ---------------------------------------------------------------------------
 
 
-def export_hourly_summary(
-    pool: AsyncConnectionPool, hours: int, deployment: str, *, values: Values = None
-):
-    sql = """
+def _hourly_summary_query(
+    hours: int, deployment: str, cameras: Sequence[str] | None = None
+) -> tuple[str, tuple, list[str]]:
+    """With `cameras`, a source is its camera's id, any other source '' (one group of them)."""
+    source = "source_name"
+    if cameras is not None:
+        source = "CASE WHEN source_name = ANY(%s) THEN source_name ELSE '' END AS source_name"
+    sql = f"""
         WITH detection_buckets AS (
             SELECT date_trunc('hour', ts) AS hour,
-                   source_name,
+                   {source},
                    best_species_id  AS species_id,
                    best_name        AS name,
                    count(*)::int    AS event_count,
@@ -561,7 +551,12 @@ def export_hourly_summary(
         "turbidity_fnu",
         "spcond_ms_cm",
     ]
-    return _stream(pool, sql, (hours, deployment, hours), cols, values)
+    params = (hours, deployment, hours)
+    return sql, params if cameras is None else (list(cameras), *params), cols
+
+
+def export_hourly_summary(pool: AsyncConnectionPool, hours: int, deployment: str):
+    return _stream(pool, *_hourly_summary_query(hours, deployment))
 
 
 # ---------------------------------------------------------------------------
@@ -569,9 +564,7 @@ def export_hourly_summary(
 # ---------------------------------------------------------------------------
 
 
-def export_tracks_timeline(
-    pool: AsyncConnectionPool, hours: int, min_frames: int, *, values: Values = None
-):
+def _tracks_timeline_query(hours: int, min_frames: int) -> tuple[str, tuple, list[str]]:
     sql = """
         WITH eligible_tracks AS (
             SELECT track_id
@@ -618,7 +611,11 @@ def export_tracks_timeline(
         "best_accuracy",
         "image_path",
     ]
-    return _stream(pool, sql, (hours, min_frames, hours), cols, values)
+    return sql, (hours, min_frames, hours), cols
+
+
+def export_tracks_timeline(pool: AsyncConnectionPool, hours: int, min_frames: int):
+    return _stream(pool, *_tracks_timeline_query(hours, min_frames))
 
 
 # ---------------------------------------------------------------------------
@@ -627,9 +624,7 @@ def export_tracks_timeline(
 # ---------------------------------------------------------------------------
 
 
-def export_topk_long(
-    pool: AsyncConnectionPool, hours: int, min_accuracy: float, *, values: Values = None
-):
+def _topk_long_query(hours: int, min_accuracy: float) -> tuple[str, tuple, list[str]]:
     sql = """
         SELECT e.id AS event_id,
                e.ts,
@@ -659,7 +654,11 @@ def export_topk_long(
         "species_id",
         "accuracy",
     ]
-    return _stream(pool, sql, (hours, min_accuracy), cols, values)
+    return sql, (hours, min_accuracy), cols
+
+
+def export_topk_long(pool: AsyncConnectionPool, hours: int, min_accuracy: float):
+    return _stream(pool, *_topk_long_query(hours, min_accuracy))
 
 
 # ---------------------------------------------------------------------------
@@ -764,21 +763,69 @@ KNOWN_RESOURCES = {
     "labeled_corrections",
 }
 
+
+@dataclass(frozen=True)
+class PublicExport:
+    description: str
+    allowed_days: tuple[int, ...]
+    default_days: int
+
+
+# The windows a public download may cover, in days: few, so that CloudFront's cache keys and the
+# work behind a download stay bounded. The four largest exports (a row per detection, per
+# classifier candidate or per second of video) reach back a month; the others a year.
+_WEEK_OR_MONTH = (7, 30)
+_UP_TO_A_YEAR = (7, 30, 90, 365)
+
 # The exports anyone may download from the public API (routes_public.py), in the order the site
-# lists them, each with one line about it. None of them carries a reviewer, a note, a user or a
-# session, and the public API names their sources by camera id alone (`values`); the
+# lists them, each with one line about it and its windows. None of them carries a reviewer, a
+# note, a user or a session, and the public API names their sources by camera id alone; the
 # corrections, the alerts, the saved frames' storage paths and the camera's metadata stay
 # behind sign-in.
 PUBLIC_EXPORTS = {
-    "events": "One row per detection per frame: the box, the classifier's candidates, provenance.",
-    "species_counts": "Detections per species with confidence statistics (prefer sightings).",
-    "sightings": "One row per tracked fish seen in at least three frames: species and duration.",
-    "hourly_summary": "Detections and sightings per species per hour, beside the water's means.",
-    "water_quality": "The sonde: temperature, pH, oxygen, chlorophyll, turbidity, conductivity.",
-    "weather": "The weather station's readings and the forecast layer, merged per reading.",
-    "frame_stats": "About one row per second of video: brightness, colour and detection rate.",
-    "tracks_timeline": "Each tracked fish's detections in order, with the box's centre and size.",
-    "topk_long": "One row per detection and classifier candidate, ranked, for calibration.",
+    "events": PublicExport(
+        "One row per detection per frame: the box, the classifier's candidates, provenance.",
+        _WEEK_OR_MONTH,
+        7,
+    ),
+    "species_counts": PublicExport(
+        "Detections per species with confidence statistics (prefer sightings).", _UP_TO_A_YEAR, 90
+    ),
+    "sightings": PublicExport(
+        "One row per tracked fish seen in at least three frames: species and duration.",
+        _UP_TO_A_YEAR,
+        90,
+    ),
+    "hourly_summary": PublicExport(
+        "Detections and sightings per species per hour, beside the water's means.",
+        _UP_TO_A_YEAR,
+        90,
+    ),
+    "water_quality": PublicExport(
+        "The sonde: temperature, pH, oxygen, chlorophyll, turbidity, conductivity.",
+        _UP_TO_A_YEAR,
+        90,
+    ),
+    "weather": PublicExport(
+        "The weather station's readings and the forecast layer, merged per reading.",
+        _UP_TO_A_YEAR,
+        90,
+    ),
+    "frame_stats": PublicExport(
+        "About one row per second of video: brightness, colour and detection rate.",
+        _WEEK_OR_MONTH,
+        7,
+    ),
+    "tracks_timeline": PublicExport(
+        "Each tracked fish's detections in order, with the box's centre and size.",
+        _WEEK_OR_MONTH,
+        7,
+    ),
+    "topk_long": PublicExport(
+        "One row per detection and classifier candidate, ranked, for calibration.",
+        _WEEK_OR_MONTH,
+        7,
+    ),
 }
 
 
@@ -790,13 +837,13 @@ PUBLIC_EXPORTS = {
 
 
 async def fetch_parquet_bytes(
-    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str], values: Values = None
+    pool: AsyncConnectionPool, sql: str, params: tuple, columns: list[str]
 ) -> bytes:
     import io
 
     import pandas as pd
 
-    rows = [_with_values(r, values) for r in await _fetch_all(pool, sql, params, columns)]
+    rows = await _fetch_all(pool, sql, params, columns)
     df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
     # JSONB / list columns need stringification for parquet portability
     for col in df.columns:
@@ -859,139 +906,14 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
         return sql, tuple(params), cols
 
     if resource == "tracks_timeline":
-        hours = kwargs["hours"]
-        min_frames = kwargs.get("min_frames", 3)
-        sql = """
-            WITH eligible_tracks AS (
-                SELECT track_id
-                  FROM detection_events
-                 WHERE ts >= NOW() - (%s::int || ' hours')::interval
-                   AND track_id IS NOT NULL
-                 GROUP BY 1
-                HAVING count(*) >= %s
-            )
-            SELECT e.track_id,
-                   row_number() OVER (PARTITION BY e.track_id ORDER BY e.ts ASC) AS step,
-                   e.id AS event_id, e.ts, e.frame_id, e.source_name,
-                   e.bbox,
-                   ((e.bbox[1] + e.bbox[3])::real) / 2.0 AS bbox_cx,
-                   ((e.bbox[2] + e.bbox[4])::real) / 2.0 AS bbox_cy,
-                   (e.bbox[3] - e.bbox[1])::real AS bbox_w,
-                   (e.bbox[4] - e.bbox[2])::real AS bbox_h,
-                   e.det_conf, e.best_name, e.best_species_id, e.best_accuracy,
-                   e.image_path
-              FROM detection_events e
-              JOIN eligible_tracks t USING (track_id)
-             WHERE e.ts >= NOW() - (%s::int || ' hours')::interval
-             ORDER BY e.track_id, e.ts ASC
-        """
-        cols = [
-            "track_id",
-            "step",
-            "event_id",
-            "ts",
-            "frame_id",
-            "source_name",
-            "bbox",
-            "bbox_cx",
-            "bbox_cy",
-            "bbox_w",
-            "bbox_h",
-            "det_conf",
-            "best_name",
-            "best_species_id",
-            "best_accuracy",
-            "image_path",
-        ]
-        return sql, (hours, min_frames, hours), cols
+        return _tracks_timeline_query(kwargs["hours"], kwargs.get("min_frames", 3))
 
     if resource == "topk_long":
-        hours = kwargs["hours"]
-        min_accuracy = kwargs.get("min_accuracy", 0.0)
-        sql = """
-            SELECT e.id AS event_id, e.ts, e.frame_id, e.source_name, e.track_id,
-                   e.det_conf,
-                   (kv.idx)::int AS rank,
-                   kv.value->>'name'             AS name,
-                   kv.value->>'species_id'       AS species_id,
-                   (kv.value->>'accuracy')::real AS accuracy
-              FROM detection_events e
-              CROSS JOIN LATERAL jsonb_array_elements(e.topk) WITH ORDINALITY AS kv(value, idx)
-             WHERE e.ts >= NOW() - (%s::int || ' hours')::interval
-               AND (kv.value->>'accuracy')::real >= %s
-             ORDER BY e.ts DESC, e.id DESC, rank ASC
-        """
-        cols = [
-            "event_id",
-            "ts",
-            "frame_id",
-            "source_name",
-            "track_id",
-            "det_conf",
-            "rank",
-            "name",
-            "species_id",
-            "accuracy",
-        ]
-        return sql, (hours, min_accuracy), cols
+        return _topk_long_query(kwargs["hours"], kwargs.get("min_accuracy", 0.0))
 
     if resource == "hourly_summary":
-        hours = kwargs["hours"]
-        deployment = kwargs["deployment"]  # the route fills in the site's deployment
-        sql = """
-            WITH detection_buckets AS (
-                SELECT date_trunc('hour', ts) AS hour,
-                       source_name,
-                       best_species_id  AS species_id,
-                       best_name        AS name,
-                       count(*)::int    AS event_count,
-                       count(DISTINCT track_id) FILTER (WHERE track_id IS NOT NULL)::int AS sighting_count,
-                       avg(best_accuracy)::real AS mean_accuracy
-                  FROM detection_events
-                 WHERE ts >= NOW() - (%s::int || ' hours')::interval
-                   AND best_species_id IS NOT NULL
-                 GROUP BY 1, 2, 3, 4
-            ),
-            wq_buckets AS (
-                SELECT date_trunc('hour', ts) AS hour,
-                       avg(water_temp_c)::real      AS water_temp_c,
-                       avg(ph)::real                AS ph,
-                       avg(do_pct)::real            AS do_pct,
-                       avg(chlorophyll_rfu)::real   AS chlorophyll_rfu,
-                       avg(phycoerythrin_rfu)::real AS phycoerythrin_rfu,
-                       avg(turbidity_fnu)::real     AS turbidity_fnu,
-                       avg(spcond_ms_cm)::real      AS spcond_ms_cm
-                  FROM sensor_readings
-                 WHERE deployment_uri = %s
-                   AND ts >= NOW() - (%s::int || ' hours')::interval
-                 GROUP BY 1
-            )
-            SELECT db.hour, db.source_name, db.species_id, db.name,
-                   db.event_count, db.sighting_count, db.mean_accuracy,
-                   wq.water_temp_c, wq.ph, wq.do_pct,
-                   wq.chlorophyll_rfu, wq.phycoerythrin_rfu, wq.turbidity_fnu,
-                   wq.spcond_ms_cm
-              FROM detection_buckets db
-              LEFT JOIN wq_buckets wq USING (hour)
-             ORDER BY db.hour ASC, db.event_count DESC
-        """
-        cols = [
-            "hour",
-            "source_name",
-            "species_id",
-            "name",
-            "event_count",
-            "sighting_count",
-            "mean_accuracy",
-            "water_temp_c",
-            "ph",
-            "do_pct",
-            "chlorophyll_rfu",
-            "phycoerythrin_rfu",
-            "turbidity_fnu",
-            "spcond_ms_cm",
-        ]
-        return sql, (hours, deployment, hours), cols
+        # The route fills in the site's deployment; the public API, its cameras.
+        return _hourly_summary_query(kwargs["hours"], kwargs["deployment"], kwargs.get("cameras"))
 
     if resource == "species_counts":
         return _species_counts_query(kwargs["hours"])
@@ -1009,3 +931,128 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
         return _frame_stats_query(kwargs["hours"])
 
     raise ValueError(f"resource '{resource}' has no query builder")
+
+
+# ---------------------------------------------------------------------------
+# Public downloads (routes_public.py): the same SQL, read from a server-side
+# cursor a batch at a time, so that no download is ever held in memory whole.
+# The dashboard's own routes above keep their client-side reads.
+# ---------------------------------------------------------------------------
+
+# Rows per FETCH from the server-side cursor: one CSV chunk, or one Parquet row group.
+CSV_BATCH = 2_000
+PARQUET_BATCH = 50_000
+
+# For a column, the function each row's value passes through before it is written.
+Values = Mapping[str, Callable] | None
+
+
+def public_query(
+    name: str, fmt: str, *, hours: int, deployment: str, cameras: Sequence[str]
+) -> tuple[str, tuple, list[str]]:
+    """(sql, params, columns) of a public export in `fmt` ("csv" or "parquet"): the SQL of the
+    dashboard's own download in that format, with its routes' defaults for every filter but
+    the window, and hourly_summary grouped by camera (any other source as one '')."""
+    if fmt == "csv" and name == "events":
+        return _events_query(hours, None, 0.0)  # the dashboard's events.csv has no track_id
+    return query_for(
+        name, hours=hours, deployment=deployment, min_frames=3, min_accuracy=0.0, cameras=cameras
+    )
+
+
+def _cells(row: dict, columns: list[str], values: Values) -> list:
+    if values:
+        row = {**row, **{c: f(row[c]) for c, f in values.items() if c in row}}
+    return [row[c] for c in columns]
+
+
+async def stream_csv(
+    pool: AsyncConnectionPool,
+    sql: str,
+    params: tuple,
+    columns: list[str],
+    *,
+    values: Values = None,
+    done: Callable[[], None] = lambda: None,
+) -> AsyncIterator[str]:
+    """The query's rows as CSV from a server-side cursor: the header once the query runs, then
+    one chunk per CSV_BATCH rows. `done` runs when the stream ends, however it ends."""
+    try:
+        async with pool.connection() as conn:
+            async with conn.cursor(name="public_export", row_factory=dict_row) as cur:
+                await cur.execute(sql, params)
+                yield _csv_line(columns)
+                while rows := await cur.fetchmany(CSV_BATCH):
+                    yield "".join(_csv_line(_cells(r, columns, values)) for r in rows)
+    finally:
+        done()
+
+
+def _arrow_type(oid: int):
+    """The Parquet column type for a PostgreSQL type; text for an array, JSON or anything
+    else, written as the CSV writes it."""
+    import pyarrow as pa
+
+    info = pg_types.get(oid)
+    if info is None or info.oid != oid:  # unknown, or an array (registered under its element)
+        return pa.string()
+    return {
+        "bool": pa.bool_(),
+        "int2": pa.int64(),
+        "int4": pa.int64(),
+        "int8": pa.int64(),
+        "float4": pa.float32(),
+        "float8": pa.float64(),
+        "numeric": pa.float64(),
+        "date": pa.date32(),
+        "timestamp": pa.timestamp("us"),
+        "timestamptz": pa.timestamp("us", tz="UTC"),
+    }.get(info.name, pa.string())
+
+
+def _write_row_group(writer, schema, rows: list[list]) -> None:
+    import pyarrow as pa
+
+    arrays = []
+    for i, field in enumerate(schema):
+        cells = [row[i] for row in rows]
+        if pa.types.is_string(field.type):
+            cells = [None if v is None else _format(v) for v in cells]
+        elif pa.types.is_floating(field.type):
+            cells = [None if v is None else float(v) for v in cells]
+        arrays.append(pa.array(cells, type=field.type))
+    writer.write_table(pa.Table.from_arrays(arrays, schema=schema), row_group_size=len(rows))
+
+
+async def write_parquet(
+    pool: AsyncConnectionPool,
+    sql: str,
+    params: tuple,
+    columns: list[str],
+    path: str,
+    *,
+    values: Values = None,
+) -> None:
+    """The query's rows into a Parquet file at `path`, from a server-side cursor, PARQUET_BATCH
+    rows (one row group) at a time; the encoding and the writing run off the event loop. Each
+    column is typed from its PostgreSQL type, and a column `values` maps is text."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    async with pool.connection() as conn:
+        async with conn.cursor(name="public_export", row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            oids = {c.name: c.type_code for c in cur.description}
+            schema = pa.schema(
+                [
+                    (c, pa.string() if values and c in values else _arrow_type(oids[c]))
+                    for c in columns
+                ]
+            )
+            writer = await run_in_threadpool(pq.ParquetWriter, path, schema, compression="snappy")
+            try:
+                while rows := await cur.fetchmany(PARQUET_BATCH):
+                    cells = [_cells(r, columns, values) for r in rows]
+                    await run_in_threadpool(_write_row_group, writer, schema, cells)
+            finally:
+                await run_in_threadpool(writer.close)

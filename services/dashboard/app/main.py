@@ -53,6 +53,7 @@ import httpx
 import psycopg
 import uvicorn
 from fastapi import Depends, FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -585,9 +586,12 @@ def build_app() -> FastAPI:
 
     app.include_router(build_admin_users_router(cfg, state, TEMPLATES))
 
-    from .routes_public import build_public_router
+    from .routes_public import build_public_router, public_validation_error
 
     app.include_router(build_public_router(cfg, state))
+    # A request under /api/public/ that cannot be read is a cached 422 (the public API's rule);
+    # every other path keeps FastAPI's own answer.
+    app.add_exception_handler(RequestValidationError, public_validation_error)
 
     if cfg.feature_review_tool:
         from .routes_review import build_review_router

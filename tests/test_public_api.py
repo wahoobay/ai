@@ -3,6 +3,7 @@ reviewer and personal data (spec §4.2 item 3). The new public website calls it.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import inspect
 import io
@@ -10,6 +11,7 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -855,13 +857,21 @@ async def test_out_of_range_parameters_are_refused(rclient):
         "/api/public/species/counts?granularity=month",
         "/api/public/environment/history?days=801",
         "/api/public/environment/history?days=0",
+        "/api/public/environment/history?days=2",
+        "/api/public/environment/history?days=week",
         "/api/public/environment/history?max_points=2001",
-        "/api/public/environment/history?max_points=9",
+        "/api/public/environment/history?max_points=150",
         "/api/public/exports/events.csv?days=401",
+        "/api/public/exports/events.csv?days=90",
         "/api/public/exports/events.parquet?days=401",
         "/api/public/exports/sightings.csv?days=0",
+        "/api/public/exports/sightings.parquet?days=400",
     ):
-        assert rclient.get(path).status_code == 422, path
+        r = rclient.get(path)
+        assert r.status_code == 422, path
+        # A refusal under the public prefix is cached like any other answer there.
+        assert r.headers["cache-control"] == "public, max-age=10", path
+        assert r.json()["error"] == "invalid request", path
 
 
 async def test_live_and_recent_name_a_species_by_its_accepted_name(
@@ -1067,6 +1077,19 @@ EXPORTS_README = (
     Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "data" / "README.md"
 )
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+# The four largest exports: a row per detection, per candidate or per second of video.
+HEAVY_EXPORTS = {"events", "frame_stats", "topk_long", "tracks_timeline"}
+
+
+def windows(name: str) -> tuple[list[int], int]:
+    """The days an export may cover, and its default."""
+    return ([7, 30], 7) if name in HEAVY_EXPORTS else ([7, 30, 90, 365], 90)
+
+
+def app_state(client) -> dict:
+    """build_app's state, from the closure of a public route (as fake_workers finds it)."""
+    route = next(r for r in client.app.routes if getattr(r, "path", None) == "/api/public/live")
+    return inspect.getclosurevars(route.endpoint).nonlocals["state"]
 
 
 async def clear_readings(rdb):
@@ -1145,7 +1168,7 @@ async def test_environment_history_averages_each_bucket_of_the_window(rdb, rclie
     rule): each point is a bucket's start and its means; the weather code and description
     are the bucket's latest. Other deployments and older readings are left out."""
     await clear_readings(rdb)
-    days, max_points = 2, 10
+    days, max_points = 7, 100
     bucket_s = days * 24 * 3600 // max_points
     now = datetime.now(UTC)
     # A bucket that starts a day ago, wholly inside the window.
@@ -1155,7 +1178,7 @@ async def test_environment_history_averages_each_bucket_of_the_window(rdb, rclie
     await seed_water(rdb, start + timedelta(minutes=1), water_temp_c=24.0, ph=8.0)
     await seed_water(rdb, start + timedelta(minutes=2), water_temp_c=26.0, ph=8.2)
     await seed_water(rdb, start + timedelta(minutes=3), deployment="another_site", ph=1.0)
-    await seed_water(rdb, now - timedelta(days=3), water_temp_c=99.0)
+    await seed_water(rdb, now - timedelta(days=8), water_temp_c=99.0)
     await seed_water(rdb, now - timedelta(minutes=5), water_temp_c=27.0)
     await seed_weather(
         rdb, start + timedelta(minutes=1), air_temp_c=28.0, weather_code=1, weather_description="a"
@@ -1187,32 +1210,34 @@ async def test_exports_list_the_nine_public_exports_and_where_to_fetch_them(rcli
     assert [e["name"] for e in body["exports"]] == PUBLIC_EXPORTS
     for e in body["exports"]:
         name = e["name"]
-        assert set(e) == {"name", "description", "csv", "parquet", "default_days"}, name
+        keys = {"name", "description", "csv", "parquet", "default_days", "allowed_days"}
+        assert set(e) == keys, name
         assert e["description"] and "\n" not in e["description"], name
         assert e["csv"] == f"/api/public/exports/{name}.csv"
         assert e["parquet"] == f"/api/public/exports/{name}.parquet"
-        assert e["default_days"] == 90
+        assert (e["allowed_days"], e["default_days"]) == windows(name), name
     assert body["readme"] == "/api/public/exports/README.md"
-    # assets/LICENSES_AND_CREDITS.md licenses the classifier's training inputs, not this data.
+    # No document licenses this data yet.
     assert body["license"] is None
 
 
-def test_the_licence_is_the_first_line_that_licenses_the_data(tmp_path):
-    from app.routes_public import data_licence
-
-    doc = tmp_path / "LICENSES.md"
-    doc.write_text(
-        "# Dataset — licences and credits\n"
-        "| Source | Licence(s) |\n"
-        "|---|---|\n"
-        "| photos | CC-BY |\n"
-        "The photos' licences are listed per photo.\n"
-        "Questions about the data licence: someone@example.org\n"
-        "> The exported **data** are licensed under [CC BY 4.0](https://example.org/by/4.0/).\n"
-        "Data licence, second mention.\n"
-    )
-    assert data_licence(doc) == "The exported data are licensed under CC BY 4.0."
-    assert data_licence(tmp_path / "missing.md") is None
+async def test_an_export_answers_only_its_allowed_windows(rclient):
+    """A download covers one of a few windows, so its cache keys and its work are bounded: the
+    four largest exports a week or a month, the others up to a year."""
+    for name in PUBLIC_EXPORTS:
+        allowed, _ = windows(name)
+        for days in allowed:
+            r = rclient.get(f"/api/public/exports/{name}.csv?days={days}")
+            assert r.status_code == 200, (name, days)
+        r = rclient.get(f"/api/public/exports/{name}.parquet?days={allowed[-1]}")
+        assert r.status_code == 200, name
+        for days in sorted({1, 31, 90, 365, 400} - set(allowed)):
+            for ext in ("csv", "parquet"):
+                r = rclient.get(f"/api/public/exports/{name}.{ext}?days={days}")
+                assert r.status_code == 422, (name, ext, days)
+                assert r.headers["cache-control"] == "public, max-age=10", (name, ext, days)
+                [error] = r.json()["detail"]
+                assert error["loc"] == ["query", "days"], (name, ext, days)
 
 
 async def test_private_exports_are_never_served_publicly(rclient):
@@ -1291,18 +1316,27 @@ async def test_every_public_export_downloads_without_identity(rdb, rclient, tmp_
 async def test_an_export_covers_the_last_days_asked_for(rdb, rclient):
     await clear_readings(rdb)
     now = datetime.now(UTC)
-    await seed_water(rdb, now - timedelta(days=2), water_temp_c=24.0)
+    await seed_water(rdb, now - timedelta(days=10), water_temp_c=24.0)
     await seed_water(rdb, now - timedelta(hours=1), water_temp_c=26.0)
-    await seed_water(rdb, now - timedelta(days=91), water_temp_c=20.0)
+    await seed_water(rdb, now - timedelta(days=100), water_temp_c=20.0)
+    async with rdb.connection() as conn:
+        for ago, frame_id in ((timedelta(days=10), 1), (timedelta(hours=1), 2)):
+            await conn.execute(
+                "INSERT INTO frame_stats (ts, source_name, frame_id, num_detections) "
+                "VALUES (%s, 'seahivecam', %s, 1)",
+                (now - ago, frame_id),
+            )
 
-    def temperatures(query: str) -> list[str]:
-        r = rclient.get(f"/api/public/exports/water_quality.csv{query}")
+    def column(name: str, key: str, query: str) -> list[str]:
+        r = rclient.get(f"/api/public/exports/{name}.csv{query}")
         assert r.status_code == 200, query
-        return [row["water_temp_c"] for row in csv.DictReader(io.StringIO(r.text))]
+        return [row[key] for row in csv.DictReader(io.StringIO(r.text))]
 
-    assert temperatures("") == ["24.0", "26.0"]
-    assert temperatures("?days=1") == ["26.0"]
-    assert temperatures("?days=400") == ["20.0", "24.0", "26.0"]
+    assert column("water_quality", "water_temp_c", "") == ["24.0", "26.0"]  # 90 days
+    assert column("water_quality", "water_temp_c", "?days=7") == ["26.0"]
+    assert column("water_quality", "water_temp_c", "?days=365") == ["20.0", "24.0", "26.0"]
+    assert column("frame_stats", "frame_id", "") == ["2"]  # a week
+    assert column("frame_stats", "frame_id", "?days=30") == ["1", "2"]
 
 
 def public_readme_parts(text: str, source: str) -> tuple[str, str]:
@@ -1346,7 +1380,7 @@ HOST = "cam.example.net"
 async def test_public_exports_name_a_source_only_by_its_camera_id(rdb, public_client, tmp_path):
     """The public files carry a configured camera's id in `source_name`, and nothing for any
     other source, in CSV and Parquet alike; the dashboard's own export keeps the raw source."""
-    import pandas as pd
+    import pyarrow.parquet as pq
 
     await clear_readings(rdb)
     now = datetime.now(UTC)
@@ -1379,11 +1413,9 @@ async def test_public_exports_name_a_source_only_by_its_camera_id(rdb, public_cl
             rows = list(csv.DictReader(io.StringIO(r.text)))
             if rows and "source_name" in rows[0]:
                 p = client.get(f"/api/public/exports/{name}.parquet")
-                # Parquet keeps a missing value as null ("" in an all-empty column: the
-                # writer's rule); either is the empty value here.
-                column = pd.read_parquet(io.BytesIO(p.content))["source_name"]
-                parquet = {value if isinstance(value, str) else "" for value in column}
-                out[name] = ({row["source_name"] for row in rows}, parquet)
+                column = pq.read_table(io.BytesIO(p.content)).column("source_name")
+                assert str(column.type) == "string", name
+                out[name] = ({row["source_name"] for row in rows}, set(column.to_pylist()))
         return out
 
     named = ["events", "sightings", "hourly_summary", "frame_stats", "tracks_timeline", "topk_long"]
@@ -1397,3 +1429,151 @@ async def test_public_exports_name_a_source_only_by_its_camera_id(rdb, public_cl
         private = client.get("/api/export/events.csv?hours=24")
         assert private.status_code == 200
         assert HOST in {row["source_name"] for row in csv.DictReader(io.StringIO(private.text))}
+
+
+async def test_hourly_summary_groups_every_other_source_under_one_empty_camera(
+    rdb, rclient, tmp_path
+):
+    """Grouped by camera id, not by raw source: two sources that are not cameras in one hour
+    are one row (hour, "", species), in CSV and Parquet alike."""
+    import pyarrow.parquet as pq
+
+    await clear_readings(rdb)
+    hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    for n, source in enumerate(("seahivecam", HOST, "other.example.net")):
+        await seed_frame(
+            rdb,
+            tmp_path,
+            ts=hour + timedelta(minutes=10 + n),
+            frame_id=500 + n,
+            source=source,
+            save=False,
+            boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata", "track_id": 50 + n}] * 2,
+        )
+    csv_rows = list(
+        csv.DictReader(io.StringIO(rclient.get("/api/public/exports/hourly_summary.csv").text))
+    )
+    parquet = rclient.get("/api/public/exports/hourly_summary.parquet").content
+    parquet_rows = pq.read_table(io.BytesIO(parquet)).to_pylist()
+    for rows in (csv_rows, parquet_rows):
+        keys = [(str(r["hour"]), r["source_name"], r["species_id"]) for r in rows]
+        assert len(keys) == len(set(keys)) == 2
+        counts = {r["source_name"]: (int(r["event_count"]), int(r["sighting_count"])) for r in rows}
+        assert counts == {"seahivecam": (2, 1), "": (4, 2)}
+
+
+async def test_a_parquet_download_is_written_in_row_groups_to_a_file_then_deleted(
+    rdb, rclient, monkeypatch, tmp_path
+):
+    """The rows go to a temporary Parquet file a batch (one row group) at a time, never all in
+    memory; the file is deleted once sent."""
+    import tempfile
+
+    import app.exports as exports
+    import pyarrow.parquet as pq
+
+    await clear_readings(rdb)
+    now = datetime.now(UTC)
+    for i in range(5):
+        await seed_water(rdb, now - timedelta(hours=i + 1), water_temp_c=20.0 + i)
+    monkeypatch.setattr(exports, "PARQUET_BATCH", 2)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(spool))
+    r = rclient.get("/api/public/exports/water_quality.parquet")
+    assert r.status_code == 200
+    parquet = pq.ParquetFile(io.BytesIO(r.content))
+    assert (parquet.metadata.num_row_groups, parquet.metadata.num_rows) == (3, 5)
+    table = parquet.read()
+    assert table.column("water_temp_c").to_pylist() == [24.0, 23.0, 22.0, 21.0, 20.0]
+    assert str(table.schema.field("ts").type) == "timestamp[us, tz=UTC]"
+    assert list(spool.iterdir()) == []
+
+
+async def test_at_most_two_downloads_run_at_once(rdb, rclient):
+    """Two downloads in flight hold both places; a third is refused at once with a cached 503,
+    and a finished download gives its place back."""
+    busy = app_state(rclient)["public_downloads"]
+    downloads = ("/api/public/exports/species_counts.csv", "/api/public/exports/weather.parquet")
+    for path in downloads:
+        assert rclient.get(path).status_code == 200, path
+    for _ in range(2):  # both places free again: take them, as two downloads in flight would
+        assert not busy.locked()
+        await busy.acquire()
+    for path in downloads:
+        r = rclient.get(path)
+        assert r.status_code == 503, path
+        assert r.json() == {"error": "busy"}
+        assert r.headers["cache-control"] == "public, max-age=10"
+    busy.release()
+    for path in downloads:
+        assert rclient.get(path).status_code == 200, path
+    assert not busy.locked()
+    busy.release()
+
+
+async def test_a_malformed_request_is_cached_under_the_public_prefix_only(rdb, rclient):
+    r = rclient.get("/api/public/detections/recent?limit=many")
+    assert r.status_code == 422
+    assert r.headers["cache-control"] == "public, max-age=10"
+    body = r.json()
+    assert set(body) == {"error", "detail"} and body["error"] == "invalid request"
+    assert [e["loc"] for e in body["detail"]] == [["query", "limit"]]
+    # The dashboard's own routes answer as FastAPI does.
+    await make_user(rdb, "vic", role="viewer")
+    login(rclient, "vic")
+    r = rclient.get("/api/water_quality/history?hours=0")
+    assert r.status_code == 422
+    assert set(r.json()) == {"detail"}
+    assert [e["loc"] for e in r.json()["detail"]] == [["query", "hours"]]
+    assert "public" not in r.headers.get("cache-control", "")
+
+
+async def test_a_download_cut_off_gives_its_place_back_at_once(
+    rdb, review_assets, monkeypatch, tmp_path
+):
+    """A visitor who leaves mid-download (the send fails, as uvicorn's ASGI 2.3 server reports
+    it) frees the download's place before the request ends, and leaves no temporary file."""
+    import tempfile
+
+    from app.main import build_app
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    for key, value in review_assets["env"].items():
+        monkeypatch.setenv(key, value)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(spool))
+    app = build_app()
+    busy = app_state(SimpleNamespace(app=app))["public_downloads"]
+
+    async def receive():
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            raise OSError("the visitor left")
+
+    async with app.router.lifespan_context(app):
+        for ext in ("csv", "parquet"):
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": f"/api/public/exports/species_counts.{ext}",
+                "raw_path": b"",
+                "query_string": b"",
+                "root_path": "",
+                "headers": [],
+                "client": ("127.0.0.1", 1),
+                "server": ("test", 80),
+            }
+            with pytest.raises(OSError):
+                await app(scope, receive, send)
+            assert not busy.locked(), ext
+            await busy.acquire()  # both places are free: one now, and
+            assert not busy.locked(), ext  # the other still
+            busy.release()
+    assert list(spool.iterdir()) == []
