@@ -1,5 +1,5 @@
-"""The SQL behind the detection and sighting answers, shared by the dashboard's own routes
-(main.py) and the public API (routes_public.py), so both read the same rows the same way.
+"""The SQL behind the detection, sighting and environment answers, shared by the dashboard's own
+routes (main.py) and the public API (routes_public.py), so both read the same rows the same way.
 
 Each function takes an open connection and returns plain rows; shaping them into a response
 is the caller's job. A reviewer's verdict is read for what it says, never for who gave it: no
@@ -317,3 +317,127 @@ async def sightings_by_month(
         (tz, species_id, since, min_frames),
     )
     return {r["month"]: r["n"] for r in rows}
+
+
+# ---- environment: the sonde (sensor_readings) and the weather station (weather_readings) ----
+
+# The sonde's columns, as the dashboard's /api/water_quality routes return them.
+SENSOR_COLUMNS = (
+    "water_temp_c",
+    "ph",
+    "do_pct",
+    "chlorophyll_rfu",
+    "phycoerythrin_rfu",
+    "turbidity_fnu",
+    "spcond_ms_cm",
+)
+# The weather station's columns and the forecast layer's, as /api/weather returns them.
+WEATHER_COLUMNS = (
+    "bar_press_hpa",
+    "wind_dir_avg_deg",
+    "wind_dir_min_deg",
+    "wind_dir_max_deg",
+    "wind_speed_avg_ms",
+    "wind_speed_min_ms",
+    "wind_speed_max_ms",
+    "air_temp_c",
+    "rel_humidity_pct",
+    "rain_accum_mm",
+    "rain_dur_frac_hr",
+    "rain_int_mm_hr",
+    "rain_peak_int_mm_hr",
+    "hail_accum",
+    "hail_dur",
+    "hail_int",
+    "hail_peak_int",
+    "water_level_mm",
+    "solar_rad_wm2",
+    "cloud_cover_pct",
+    "dew_point_c",
+    "forecast_humidity_pct",
+    "precip_intensity_mm_hr",
+    "precip_prob_pct",
+    "press_sea_level_hpa",
+    "press_surface_hpa",
+    "temp_apparent_c",
+    "uv_index",
+    "weather_code",
+    "weather_description",
+)
+
+
+def history_bucket_seconds(hours: int, max_points: int) -> int:
+    """The bucket of a history over `hours` that keeps it to `max_points` points: an even
+    interval, whatever the readings' own rate, and never under a minute."""
+    return max(60, (hours * 3600) // max_points)
+
+
+async def _latest_reading(conn, table: str, columns: tuple, deployment: str) -> dict | None:
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            f"""
+            SELECT ts, deployment_uri, source, {", ".join(columns)}
+              FROM {table}
+             WHERE deployment_uri = %s
+             ORDER BY ts DESC
+             LIMIT 1
+            """,
+            (deployment,),
+        )
+        return await cur.fetchone()
+
+
+async def latest_water(conn, deployment: str) -> dict | None:
+    """The deployment's newest sonde reading (ts, deployment_uri, source, SENSOR_COLUMNS);
+    None when it has none."""
+    return await _latest_reading(conn, "sensor_readings", SENSOR_COLUMNS, deployment)
+
+
+async def latest_weather(conn, deployment: str) -> dict | None:
+    """The deployment's newest weather reading (ts, deployment_uri, source, WEATHER_COLUMNS);
+    None when it has none."""
+    return await _latest_reading(conn, "weather_readings", WEATHER_COLUMNS, deployment)
+
+
+async def water_by_bucket(conn, deployment: str, hours: int, bucket_s: int) -> list[dict]:
+    """The deployment's sonde readings of the last `hours`, averaged per `bucket_s` seconds,
+    oldest first: bucket (its start) and each of SENSOR_COLUMNS."""
+    aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in SENSOR_COLUMNS)
+    return await _rows(
+        conn,
+        f"""
+            SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
+                   {aggs}
+              FROM sensor_readings
+             WHERE deployment_uri = %s
+               AND ts >= NOW() - (%s::int || ' hours')::interval
+             GROUP BY 1
+             ORDER BY 1 ASC
+        """,
+        (bucket_s, bucket_s, deployment, hours),
+    )
+
+
+async def weather_by_bucket(conn, deployment: str, hours: int, bucket_s: int) -> list[dict]:
+    """The deployment's weather readings of the last `hours` per `bucket_s` seconds, oldest
+    first: bucket (its start) and each of WEATHER_COLUMNS, averaged but for the categorical
+    two, which cannot be: the bucket's latest weather_code, and its latest description."""
+    categorical = {"weather_code", "weather_description"}
+    numeric_cols = tuple(c for c in WEATHER_COLUMNS if c not in categorical)
+    aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in numeric_cols)
+    return await _rows(
+        conn,
+        f"""
+            SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
+                   {aggs},
+                   (array_agg(weather_code ORDER BY ts DESC))[1] AS weather_code,
+                   (array_agg(weather_description ORDER BY ts DESC)
+                    FILTER (WHERE weather_description IS NOT NULL))[1] AS weather_description
+              FROM weather_readings
+             WHERE deployment_uri = %s
+               AND ts >= NOW() - (%s::int || ' hours')::interval
+             GROUP BY 1
+             ORDER BY 1 ASC
+        """,
+        (bucket_s, bucket_s, deployment, hours),
+    )

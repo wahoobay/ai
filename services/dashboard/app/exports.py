@@ -144,7 +144,7 @@ def export_events(
     return _stream(pool, sql, tuple(params), cols)
 
 
-def export_species_counts(pool: AsyncConnectionPool, hours: int):
+def _species_counts_query(hours: int) -> tuple[str, tuple, list[str]]:
     sql = """
         SELECT best_species_id AS species_id,
                best_name       AS name,
@@ -170,10 +170,14 @@ def export_species_counts(pool: AsyncConnectionPool, hours: int):
         "first_seen",
         "last_seen",
     ]
-    return _stream(pool, sql, (hours,), cols)
+    return sql, (hours,), cols
 
 
-def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str):
+def export_species_counts(pool: AsyncConnectionPool, hours: int):
+    return _stream(pool, *_species_counts_query(hours))
+
+
+def _water_quality_query(hours: int, deployment: str) -> tuple[str, tuple, list[str]]:
     sql = """
         SELECT ts, deployment_uri, source,
                water_temp_c, ph, do_pct,
@@ -196,10 +200,14 @@ def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str)
         "turbidity_fnu",
         "spcond_ms_cm",
     ]
-    return _stream(pool, sql, (deployment, hours), cols)
+    return sql, (deployment, hours), cols
 
 
-def export_weather(pool: AsyncConnectionPool, hours: int, deployment: str):
+def export_water_quality(pool: AsyncConnectionPool, hours: int, deployment: str):
+    return _stream(pool, *_water_quality_query(hours, deployment))
+
+
+def _weather_query(hours: int, deployment: str) -> tuple[str, tuple, list[str]]:
     """All columns of weather_readings — on-site WXT-536 station feed
     plus the merged Open-Meteo / NWS forecast layer. Both sources are
     materialised on the same row by the poller; NULLs are normal where
@@ -259,10 +267,14 @@ def export_weather(pool: AsyncConnectionPool, hours: int, deployment: str):
         "weather_code",
         "weather_description",
     ]
-    return _stream(pool, sql, (deployment, hours), cols)
+    return sql, (deployment, hours), cols
 
 
-def export_frame_stats(pool: AsyncConnectionPool, hours: int):
+def export_weather(pool: AsyncConnectionPool, hours: int, deployment: str):
+    return _stream(pool, *_weather_query(hours, deployment))
+
+
+def _frame_stats_query(hours: int) -> tuple[str, tuple, list[str]]:
     sql = """
         SELECT ts, source_name, frame_id,
                mean_luma, mean_r, mean_g, mean_b, std_luma,
@@ -286,7 +298,11 @@ def export_frame_stats(pool: AsyncConnectionPool, hours: int):
         "model_version",
         "config_hash",
     ]
-    return _stream(pool, sql, (hours,), cols)
+    return sql, (hours,), cols
+
+
+def export_frame_stats(pool: AsyncConnectionPool, hours: int):
+    return _stream(pool, *_frame_stats_query(hours))
 
 
 def export_saved_frames(pool: AsyncConnectionPool, hours: int):
@@ -402,7 +418,7 @@ def export_alerts(
 # ---------------------------------------------------------------------------
 
 
-def export_sightings(pool: AsyncConnectionPool, hours: int, min_frames: int):
+def _sightings_query(hours: int, min_frames: int) -> tuple[str, tuple, list[str]]:
     sql = """
         SELECT s.track_id,
                s.source_name,
@@ -450,7 +466,11 @@ def export_sightings(pool: AsyncConnectionPool, hours: int, min_frames: int):
         "peak_accuracy",
         "top3_species",
     ]
-    return _stream(pool, sql, (hours, min_frames), cols)
+    return sql, (hours, min_frames), cols
+
+
+def export_sightings(pool: AsyncConnectionPool, hours: int, min_frames: int):
+    return _stream(pool, *_sightings_query(hours, min_frames))
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +735,22 @@ KNOWN_RESOURCES = {
     "labeled_corrections",
 }
 
+# The exports anyone may download from the public API (routes_public.py), in the order the site
+# lists them, each with one line about it. None of them carries a reviewer, a note, a user or a
+# session; the corrections, the alerts, the saved frames' storage paths and the camera's
+# metadata stay behind sign-in.
+PUBLIC_EXPORTS = {
+    "events": "One row per detection per frame: the box, the classifier's candidates, provenance.",
+    "species_counts": "Detections per species with confidence statistics (prefer sightings).",
+    "sightings": "One row per tracked fish seen in at least three frames: species and duration.",
+    "hourly_summary": "Detections and sightings per species per hour, beside the water's means.",
+    "water_quality": "The sonde: temperature, pH, oxygen, chlorophyll, turbidity, conductivity.",
+    "weather": "The weather station's readings and the forecast layer, merged per reading.",
+    "frame_stats": "About one row per second of video: brightness, colour and detection rate.",
+    "tracks_timeline": "Each tracked fish's detections in order, with the box's centre and size.",
+    "topk_long": "One row per detection and classifier candidate, ranked, for calibration.",
+}
+
 
 # ---------------------------------------------------------------------------
 # Parquet path — materialises rows into a pandas DataFrame and writes a
@@ -926,5 +962,20 @@ def query_for(resource: str, **kwargs) -> tuple[str, tuple, list[str]]:
             "spcond_ms_cm",
         ]
         return sql, (hours, deployment, hours), cols
+
+    if resource == "species_counts":
+        return _species_counts_query(kwargs["hours"])
+
+    if resource == "sightings":
+        return _sightings_query(kwargs["hours"], kwargs.get("min_frames", 3))
+
+    if resource == "water_quality":
+        return _water_quality_query(kwargs["hours"], kwargs["deployment"])
+
+    if resource == "weather":
+        return _weather_query(kwargs["hours"], kwargs["deployment"])
+
+    if resource == "frame_stats":
+        return _frame_stats_query(kwargs["hours"])
 
     raise ValueError(f"resource '{resource}' has no query builder")

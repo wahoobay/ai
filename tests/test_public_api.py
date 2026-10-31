@@ -72,6 +72,9 @@ PUBLIC_JSON_PATHS = [
     "/api/public/species",
     "/api/public/species/Seriola%20zonata",
     "/api/public/species/counts",
+    "/api/public/environment/latest",
+    "/api/public/environment/history",
+    "/api/public/exports",
 ]
 # What a detection in /detections/recent and in a species' "recent" carries, and nothing else.
 DETECTION_KEYS = {
@@ -828,6 +831,9 @@ async def test_no_public_response_mentions_identity_columns(rdb, rclient, tmp_pa
     )
     await seed_track(rdb, "Seriola zonata", 2, now - timedelta(minutes=30))
     await refresh_sightings(rdb)
+    await clear_readings(rdb)
+    await seed_water(rdb, now - timedelta(hours=1), water_temp_c=26.0)
+    await seed_weather(rdb, now - timedelta(hours=1), air_temp_c=29.0)
     for path in PUBLIC_JSON_PATHS:
         r = rclient.get(path)
         assert r.status_code == 200, (path, r.text)
@@ -847,6 +853,13 @@ async def test_out_of_range_parameters_are_refused(rclient):
         "/api/public/species/counts?days=401",
         "/api/public/species/counts?top=9",
         "/api/public/species/counts?granularity=month",
+        "/api/public/environment/history?days=801",
+        "/api/public/environment/history?days=0",
+        "/api/public/environment/history?max_points=2001",
+        "/api/public/environment/history?max_points=9",
+        "/api/public/exports/events.csv?days=401",
+        "/api/public/exports/events.parquet?days=401",
+        "/api/public/exports/sightings.csv?days=0",
     ):
         assert rclient.get(path).status_code == 422, path
 
@@ -986,3 +999,330 @@ async def test_a_not_a_fish_verdict_takes_its_track_out_of_every_sighting(
             "species recent": {"kept"},
         }
         assert image(client, spotted[1], "crop") == 404
+
+
+# ---- environment and exports ----------------------------------------------------------------
+
+# The sonde's columns and the weather station's (with the forecast layer's), as the dashboard's
+# /api/water_quality and /api/weather routes return them; a reading adds its time, `ts`.
+WATER_COLUMNS = {
+    "water_temp_c",
+    "ph",
+    "do_pct",
+    "chlorophyll_rfu",
+    "phycoerythrin_rfu",
+    "turbidity_fnu",
+    "spcond_ms_cm",
+}
+WEATHER_COLUMNS = {
+    "bar_press_hpa",
+    "wind_dir_avg_deg",
+    "wind_dir_min_deg",
+    "wind_dir_max_deg",
+    "wind_speed_avg_ms",
+    "wind_speed_min_ms",
+    "wind_speed_max_ms",
+    "air_temp_c",
+    "rel_humidity_pct",
+    "rain_accum_mm",
+    "rain_dur_frac_hr",
+    "rain_int_mm_hr",
+    "rain_peak_int_mm_hr",
+    "hail_accum",
+    "hail_dur",
+    "hail_int",
+    "hail_peak_int",
+    "water_level_mm",
+    "solar_rad_wm2",
+    "cloud_cover_pct",
+    "dew_point_c",
+    "forecast_humidity_pct",
+    "precip_intensity_mm_hr",
+    "precip_prob_pct",
+    "press_sea_level_hpa",
+    "press_surface_hpa",
+    "temp_apparent_c",
+    "uv_index",
+    "weather_code",
+    "weather_description",
+}
+# The site's deployment in the suite (conftest's SENSESTREAM_DEPLOYMENT_URI).
+SITE = "test_site"
+# The exports the public may download, in the order the site lists them.
+PUBLIC_EXPORTS = [
+    "events",
+    "species_counts",
+    "sightings",
+    "hourly_summary",
+    "water_quality",
+    "weather",
+    "frame_stats",
+    "tracks_timeline",
+    "topk_long",
+]
+# The dashboard's exports that are never public: who labelled what, alerts, the saved frames'
+# storage paths, the camera's metadata.
+PRIVATE_EXPORTS = ["corrections", "labeled_corrections", "alerts", "saved_frames"]
+EXPORTS_README = (
+    Path(__file__).resolve().parents[1] / "services" / "dashboard" / "app" / "data" / "README.md"
+)
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+async def clear_readings(rdb):
+    """The suite's TRUNCATE leaves the sensor tables alone (the seed tests fill them)."""
+    async with rdb.connection() as conn:
+        await conn.execute("TRUNCATE sensor_readings, weather_readings, frame_stats")
+
+
+async def seed_water(rdb, ts, deployment=SITE, source="live", **values):
+    cols = ", ".join(["ts", "deployment_uri", "source", *values])
+    marks = ", ".join(["%s"] * (3 + len(values)))
+    async with rdb.connection() as conn:
+        await conn.execute(
+            f"INSERT INTO sensor_readings ({cols}) VALUES ({marks})",
+            (ts, deployment, source, *values.values()),
+        )
+
+
+async def seed_weather(rdb, ts, deployment=SITE, source="live", **values):
+    cols = ", ".join(["ts", "deployment_uri", "source", *values])
+    marks = ", ".join(["%s"] * (3 + len(values)))
+    async with rdb.connection() as conn:
+        await conn.execute(
+            f"INSERT INTO weather_readings ({cols}) VALUES ({marks})",
+            (ts, deployment, source, *values.values()),
+        )
+
+
+async def test_environment_latest_is_the_sites_newest_reading_of_each_feed(rdb, rclient):
+    """The newest sonde and weather readings of the site's deployment, every column of each,
+    and nothing about where they came from but the deployment."""
+    await clear_readings(rdb)
+    now = datetime.now(UTC).replace(microsecond=0)
+    await seed_water(rdb, now - timedelta(hours=2), water_temp_c=25.0, ph=8.0)
+    await seed_water(rdb, now - timedelta(hours=1), water_temp_c=26.5, ph=8.1, do_pct=97.0)
+    await seed_water(rdb, now, deployment="another_site", water_temp_c=30.0)
+    await seed_weather(rdb, now - timedelta(hours=3), air_temp_c=27.0)
+    await seed_weather(
+        rdb,
+        now - timedelta(minutes=30),
+        air_temp_c=29.5,
+        wind_speed_avg_ms=4.0,
+        weather_code=3,
+        weather_description="overcast",
+    )
+    r = rclient.get("/api/public/environment/latest")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=60"
+    body = r.json()
+    assert set(body) == {"deployment", "water", "weather"}
+    assert body["deployment"] == SITE
+    water, weather = body["water"], body["weather"]
+    assert set(water) == {"ts", *WATER_COLUMNS}
+    assert set(weather) == {"ts", *WEATHER_COLUMNS}
+    assert when(water) == now - timedelta(hours=1)
+    assert (water["water_temp_c"], water["ph"], water["do_pct"]) == (26.5, pytest.approx(8.1), 97.0)
+    assert water["turbidity_fnu"] is None
+    assert when(weather) == now - timedelta(minutes=30)
+    assert weather["air_temp_c"] == 29.5 and weather["wind_speed_avg_ms"] == 4.0
+    assert (weather["weather_code"], weather["weather_description"]) == (3, "overcast")
+
+
+async def test_environment_without_readings_is_null_and_empty(rdb, rclient):
+    await clear_readings(rdb)
+    latest = rclient.get("/api/public/environment/latest")
+    assert latest.status_code == 200
+    assert latest.json() == {"deployment": SITE, "water": None, "weather": None}
+    history = rclient.get("/api/public/environment/history")
+    assert history.status_code == 200
+    assert history.headers["cache-control"] == "public, max-age=600"
+    assert history.json() == {"days": 7, "water": [], "weather": []}
+
+
+async def test_environment_history_averages_each_bucket_of_the_window(rdb, rclient):
+    """`days` back from now in at most `max_points` even buckets (the private history routes'
+    rule): each point is a bucket's start and its means; the weather code and description
+    are the bucket's latest. Other deployments and older readings are left out."""
+    await clear_readings(rdb)
+    days, max_points = 2, 10
+    bucket_s = days * 24 * 3600 // max_points
+    now = datetime.now(UTC)
+    # A bucket that starts a day ago, wholly inside the window.
+    start = datetime.fromtimestamp(
+        (now - timedelta(days=1)).timestamp() // bucket_s * bucket_s, UTC
+    )
+    await seed_water(rdb, start + timedelta(minutes=1), water_temp_c=24.0, ph=8.0)
+    await seed_water(rdb, start + timedelta(minutes=2), water_temp_c=26.0, ph=8.2)
+    await seed_water(rdb, start + timedelta(minutes=3), deployment="another_site", ph=1.0)
+    await seed_water(rdb, now - timedelta(days=3), water_temp_c=99.0)
+    await seed_water(rdb, now - timedelta(minutes=5), water_temp_c=27.0)
+    await seed_weather(
+        rdb, start + timedelta(minutes=1), air_temp_c=28.0, weather_code=1, weather_description="a"
+    )
+    await seed_weather(rdb, start + timedelta(minutes=2), air_temp_c=30.0, weather_code=2)
+    r = rclient.get(f"/api/public/environment/history?days={days}&max_points={max_points}")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=600"
+    body = r.json()
+    assert set(body) == {"days", "water", "weather"} and body["days"] == days
+    assert all(set(p) == {"ts", *WATER_COLUMNS} for p in body["water"])
+    assert all(set(p) == {"ts", *WEATHER_COLUMNS} for p in body["weather"])
+    first, last = body["water"]
+    assert when(first) == start and when(last) <= now
+    assert first["water_temp_c"] == 25.0 and first["ph"] == pytest.approx(8.1)
+    assert last["water_temp_c"] == 27.0
+    [weather] = body["weather"]
+    assert when(weather) == start and weather["air_temp_c"] == 29.0
+    # The code is the newest reading's; the description the newest one that has one.
+    assert (weather["weather_code"], weather["weather_description"]) == (2, "a")
+
+
+async def test_exports_list_the_nine_public_exports_and_where_to_fetch_them(rclient):
+    r = rclient.get("/api/public/exports")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=3600"
+    body = r.json()
+    assert set(body) == {"exports", "readme", "license"}
+    assert [e["name"] for e in body["exports"]] == PUBLIC_EXPORTS
+    for e in body["exports"]:
+        name = e["name"]
+        assert set(e) == {"name", "description", "csv", "parquet", "default_days"}, name
+        assert e["description"] and "\n" not in e["description"], name
+        assert e["csv"] == f"/api/public/exports/{name}.csv"
+        assert e["parquet"] == f"/api/public/exports/{name}.parquet"
+        assert e["default_days"] == 90
+    assert body["readme"] == "/api/public/exports/README.md"
+    # assets/LICENSES_AND_CREDITS.md licenses the classifier's training inputs, not this data.
+    assert body["license"] is None
+
+
+def test_the_licence_is_the_first_line_that_licenses_the_data(tmp_path):
+    from app.routes_public import data_licence
+
+    doc = tmp_path / "LICENSES.md"
+    doc.write_text(
+        "# Dataset — licences and credits\n"
+        "| Source | Licence(s) |\n"
+        "|---|---|\n"
+        "| photos | CC-BY |\n"
+        "The photos' licences are listed per photo.\n"
+        "Questions about the data licence: someone@example.org\n"
+        "> The exported **data** are licensed under [CC BY 4.0](https://example.org/by/4.0/).\n"
+        "Data licence, second mention.\n"
+    )
+    assert data_licence(doc) == "The exported data are licensed under CC BY 4.0."
+    assert data_licence(tmp_path / "missing.md") is None
+
+
+async def test_private_exports_are_never_served_publicly(rclient):
+    for name in PRIVATE_EXPORTS:
+        for ext in ("csv", "parquet"):
+            r = rclient.get(f"/api/public/exports/{name}.{ext}")
+            assert r.status_code == 404, (name, ext)
+            assert r.headers["cache-control"].startswith("public, max-age="), (name, ext)
+    for path in ("/api/public/exports/camera_metadata.json", "/api/public/exports/nope.csv"):
+        assert rclient.get(path).status_code == 404, path
+
+
+async def test_every_public_export_downloads_without_identity(rdb, rclient, tmp_path):
+    """Each of the nine as CSV and Parquet: an attachment, cached an hour, with the same rows
+    in both, and no column or value that says who labelled what."""
+    from app.exports import IDENTITY_COLUMNS
+
+    await clear_readings(rdb)
+    now = datetime.now(UTC)
+    frame = await seed_frame(
+        rdb,
+        tmp_path,
+        ts=now - timedelta(minutes=10),
+        frame_id=40,
+        boxes=[{"bbox": [10, 10, 90, 90], "species": "Seriola zonata", "p": 0.9, "track_id": 7}],
+    )
+    for i in range(1, 3):
+        await seed_frame(
+            rdb,
+            tmp_path,
+            ts=now - timedelta(minutes=10) + timedelta(seconds=i),
+            frame_id=40 + i,
+            save=False,
+            boxes=[{"bbox": [12, 12, 92, 92], "species": "Seriola zonata", "track_id": 7}],
+        )
+    alice = await make_user(rdb, "alice")
+    await add_verdict(
+        rdb,
+        frame["event_ids"][0],
+        alice,
+        name="Acanthurus coeruleus",
+        reviewer="Alice Example",
+        notes="secret note",
+    )
+    await refresh_sightings(rdb)
+    await seed_water(rdb, now - timedelta(minutes=20), water_temp_c=26.0)
+    await seed_weather(rdb, now - timedelta(minutes=20), air_temp_c=29.0)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "INSERT INTO frame_stats (ts, source_name, frame_id, mean_luma, num_detections) "
+            "VALUES (%s, 'seahivecam', 40, 0.4, 1)",
+            (now - timedelta(minutes=10),),
+        )
+    import pandas as pd
+
+    for name in PUBLIC_EXPORTS:
+        r = rclient.get(f"/api/public/exports/{name}.csv")
+        assert r.status_code == 200, (name, r.text)
+        assert r.headers["content-type"].startswith("text/csv"), name
+        assert r.headers["content-disposition"] == f'attachment; filename="{name}.csv"'
+        assert r.headers["cache-control"] == "public, max-age=3600", name
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert len(rows) > 1, f"{name}: expected the seeded rows"
+        assert not set(rows[0]) & set(IDENTITY_COLUMNS), name
+        assert not IDENTITY_RE.search(r.text), name
+        p = rclient.get(f"/api/public/exports/{name}.parquet")
+        assert p.status_code == 200, (name, p.text)
+        assert p.headers["content-type"] == "application/vnd.apache.parquet", name
+        assert p.headers["content-disposition"] == f'attachment; filename="{name}.parquet"'
+        assert p.headers["cache-control"] == "public, max-age=3600", name
+        frame_ = pd.read_parquet(io.BytesIO(p.content))
+        assert not set(frame_.columns) & set(IDENTITY_COLUMNS), name
+        assert len(frame_) == len(rows) - 1, name
+
+
+async def test_an_export_covers_the_last_days_asked_for(rdb, rclient):
+    await clear_readings(rdb)
+    now = datetime.now(UTC)
+    await seed_water(rdb, now - timedelta(days=2), water_temp_c=24.0)
+    await seed_water(rdb, now - timedelta(hours=1), water_temp_c=26.0)
+    await seed_water(rdb, now - timedelta(days=91), water_temp_c=20.0)
+
+    def temperatures(query: str) -> list[str]:
+        r = rclient.get(f"/api/public/exports/water_quality.csv{query}")
+        assert r.status_code == 200, query
+        return [row["water_temp_c"] for row in csv.DictReader(io.StringIO(r.text))]
+
+    assert temperatures("") == ["24.0", "26.0"]
+    assert temperatures("?days=1") == ["26.0"]
+    assert temperatures("?days=400") == ["20.0", "24.0", "26.0"]
+
+
+async def test_the_exports_readme_is_public_without_addresses(rclient, monkeypatch, tmp_path):
+    """The README the dashboard's own downloads carry, less any line that names an e-mail
+    address: the public API names no one's address."""
+    r = rclient.get("/api/public/exports/README.md")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert r.headers["content-disposition"] == 'attachment; filename="README.md"'
+    assert r.headers["cache-control"] == "public, max-age=3600"
+    source = EXPORTS_README.read_text().splitlines()
+    assert r.text.splitlines() == [line for line in source if not EMAIL.search(line)]
+    assert not EMAIL.search(r.text)
+
+    import app.routes_public as routes_public
+
+    readme = tmp_path / "README.md"
+    readme.write_text("# Data\n\nCite it.\nCorrections: contact someone@example.org.\nThanks.\n")
+    monkeypatch.setattr(routes_public, "EXPORTS_README", readme)
+    assert rclient.get("/api/public/exports/README.md").text == "# Data\n\nCite it.\nThanks.\n"
+    monkeypatch.setattr(routes_public, "EXPORTS_README", tmp_path / "missing.md")
+    gone = rclient.get("/api/public/exports/README.md")
+    assert gone.status_code == 404 and gone.headers["cache-control"] == "public, max-age=60"

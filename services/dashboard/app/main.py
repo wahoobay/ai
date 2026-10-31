@@ -86,10 +86,16 @@ from .exports import (
 from .frames import frame_exists
 from .public_queries import (
     SAVED_FRAME_PATH,
+    SENSOR_COLUMNS,
     detection_with_frame,
+    history_bucket_seconds,
+    latest_water,
+    latest_weather,
     sighting_counts,
     sightings_by_hour_of_day,
     species_sightings,
+    water_by_bucket,
+    weather_by_bucket,
 )
 from .review_queue import ReviewError, legacy_verdict, submit_verdict
 from .sheet_poller import SheetPoller
@@ -1088,15 +1094,6 @@ def build_app() -> FastAPI:
     # Water quality (sensor_readings table; fed by synthetic generator now,
     # live SenseStream poller later)
     # ------------------------------------------------------------------
-    SENSOR_COLUMNS = (
-        "water_temp_c",
-        "ph",
-        "do_pct",
-        "chlorophyll_rfu",
-        "phycoerythrin_rfu",
-        "turbidity_fnu",
-        "spcond_ms_cm",
-    )
 
     @app.get("/api/water_quality/latest")
     async def water_quality_latest(
@@ -1105,18 +1102,8 @@ def build_app() -> FastAPI:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return db_unavailable()
-        cols = ", ".join(SENSOR_COLUMNS)
-        sql = f"""
-            SELECT ts, deployment_uri, source, {cols}
-              FROM sensor_readings
-             WHERE deployment_uri = %s
-             ORDER BY ts DESC
-             LIMIT 1
-        """
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, (deployment,))
-                row = await cur.fetchone()
+            row = await latest_water(conn, deployment)
         if not row:
             return JSONResponse({"error": "no readings for deployment"}, status_code=404)
         row["ts"] = row["ts"].isoformat() if row["ts"] else None
@@ -1136,22 +1123,9 @@ def build_app() -> FastAPI:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return db_unavailable()
-        # bucket size in seconds
-        bucket_s = max(60, (hours * 3600) // max_points)
-        aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in SENSOR_COLUMNS)
-        sql = f"""
-            SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
-                   {aggs}
-              FROM sensor_readings
-             WHERE deployment_uri = %s
-               AND ts >= NOW() - (%s::int || ' hours')::interval
-             GROUP BY 1
-             ORDER BY 1 ASC
-        """
+        bucket_s = history_bucket_seconds(hours, max_points)
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, (bucket_s, bucket_s, deployment, hours))
-                rows = await cur.fetchall()
+            rows = await water_by_bucket(conn, deployment, hours, bucket_s)
         for r in rows:
             r["bucket"] = r["bucket"].isoformat() if r.get("bucket") else None
         return JSONResponse(
@@ -1201,56 +1175,14 @@ def build_app() -> FastAPI:
     # sonde, in synthetic stub mode until the SenseStream auth token
     # arrives)
     # ------------------------------------------------------------------
-    WEATHER_COLUMNS = (
-        "bar_press_hpa",
-        "wind_dir_avg_deg",
-        "wind_dir_min_deg",
-        "wind_dir_max_deg",
-        "wind_speed_avg_ms",
-        "wind_speed_min_ms",
-        "wind_speed_max_ms",
-        "air_temp_c",
-        "rel_humidity_pct",
-        "rain_accum_mm",
-        "rain_dur_frac_hr",
-        "rain_int_mm_hr",
-        "rain_peak_int_mm_hr",
-        "hail_accum",
-        "hail_dur",
-        "hail_int",
-        "hail_peak_int",
-        "water_level_mm",
-        "solar_rad_wm2",
-        "cloud_cover_pct",
-        "dew_point_c",
-        "forecast_humidity_pct",
-        "precip_intensity_mm_hr",
-        "precip_prob_pct",
-        "press_sea_level_hpa",
-        "press_surface_hpa",
-        "temp_apparent_c",
-        "uv_index",
-        "weather_code",
-        "weather_description",
-    )
 
     @app.get("/api/weather/latest")
     async def weather_latest(deployment: str = Depends(deployment_param)) -> Response:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return db_unavailable()
-        cols = ", ".join(WEATHER_COLUMNS)
-        sql = f"""
-            SELECT ts, deployment_uri, source, {cols}
-              FROM weather_readings
-             WHERE deployment_uri = %s
-             ORDER BY ts DESC
-             LIMIT 1
-        """
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, (deployment,))
-                row = await cur.fetchone()
+            row = await latest_weather(conn, deployment)
         if not row:
             return JSONResponse({"error": "no weather readings for deployment"}, status_code=404)
         row["ts"] = row["ts"].isoformat() if row["ts"] else None
@@ -1267,28 +1199,9 @@ def build_app() -> FastAPI:
         pool: AsyncConnectionPool | None = state.get("pool")
         if pool is None:
             return db_unavailable()
-        bucket_s = max(60, (hours * 3600) // max_points)
-        # Categorical columns (weather_code, weather_description) can't be
-        # averaged — we take the most-recent value per bucket via array_agg.
-        categorical = {"weather_code", "weather_description"}
-        numeric_cols = tuple(c for c in WEATHER_COLUMNS if c not in categorical)
-        aggs = ",\n              ".join(f"avg({c})::real AS {c}" for c in numeric_cols)
-        sql = f"""
-            SELECT to_timestamp(floor(extract(epoch FROM ts) / %s) * %s) AS bucket,
-                   {aggs},
-                   (array_agg(weather_code ORDER BY ts DESC))[1] AS weather_code,
-                   (array_agg(weather_description ORDER BY ts DESC)
-                    FILTER (WHERE weather_description IS NOT NULL))[1] AS weather_description
-              FROM weather_readings
-             WHERE deployment_uri = %s
-               AND ts >= NOW() - (%s::int || ' hours')::interval
-             GROUP BY 1
-             ORDER BY 1 ASC
-        """
+        bucket_s = history_bucket_seconds(hours, max_points)
         async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, (bucket_s, bucket_s, deployment, hours))
-                rows = await cur.fetchall()
+            rows = await weather_by_bucket(conn, deployment, hours, bucket_s)
         for r in rows:
             r["bucket"] = r["bucket"].isoformat() if r.get("bucket") else None
         return JSONResponse(

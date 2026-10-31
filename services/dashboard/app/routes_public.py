@@ -3,9 +3,10 @@
 The site gate leaves this prefix open (auth.OPEN_PREFIXES), so nothing here may
 carry reviewer or personal data. Every answer goes out through `cached()`, so
 CloudFront and browsers hold it for a few seconds instead of every visitor
-reaching the dashboard. The SQL behind the detection and species answers is
-public_queries.py's, shared with the dashboard's own routes. Later routes
-(environment, exports) join this module, above the catch-all at the end of the
+reaching the dashboard. The SQL behind the detection, species and environment
+answers is public_queries.py's, shared with the dashboard's own routes; the
+downloads are the dashboard's own exports (exports.PUBLIC_EXPORTS), produced by
+the same functions. Every route sits above the catch-all at the end of the
 router."""
 
 from __future__ import annotations
@@ -13,18 +14,34 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import public_queries as q
 from .common_names import common as common_name
 from .config import autoplay_embed
 from .detection_images import annotate_frame, crop_roi
+from .exports import (
+    PUBLIC_EXPORTS,
+    export_events,
+    export_frame_stats,
+    export_hourly_summary,
+    export_sightings,
+    export_species_counts,
+    export_topk_long,
+    export_tracks_timeline,
+    export_water_quality,
+    export_weather,
+    fetch_parquet_bytes,
+    query_for,
+)
 from .frames import frame_exists
 from .review_catalogue import normalize_raw, slug
 from .review_images import render_frame
@@ -64,10 +81,72 @@ SPECIES_RECENT = 12
 RECENT_HOURS_MAX = 168
 MIN_CONFIDENCE = 0.5
 IMMUTABLE = "public, max-age=86400, immutable"
+# The downloads: where they are, the window they cover unless asked otherwise, and how long a
+# browser or CloudFront keeps one.
+EXPORTS = "/api/public/exports"
+EXPORT_DAYS = 90
+DOWNLOAD_CACHE = "public, max-age=3600"
+
+_APP_DIR = Path(__file__).resolve().parent
+# The README the dashboard's own downloads carry (main.py, /api/export/README.md).
+EXPORTS_README = _APP_DIR / "data" / "README.md"
+# The licences document: assets/ at the repository root in a checkout, /app/assets in the image.
+LICENCES = (
+    (_APP_DIR.parents[2] if _APP_DIR.parents[1].name == "services" else _APP_DIR.parent)
+    / "assets"
+    / "LICENSES_AND_CREDITS.md"
+)
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 
 
 def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat() if ts else None
+
+
+def _reading(ts: datetime | None, row: dict, columns: tuple) -> dict:
+    """A reading as the public sees it: its time and the feed's columns, and nothing about
+    where it came from (the deployment is said once, the source not at all)."""
+    return {"ts": _iso(ts), **{c: row[c] for c in columns}}
+
+
+def _plain(line: str) -> str:
+    """A line of Markdown as text: no quote or list marker, links as their words, no emphasis
+    or code marks."""
+    line = re.sub(r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+\.)\s+)?", "", line)
+    line = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", line)
+    return re.sub(r"\*\*|__|`|\*", "", line).strip()
+
+
+def data_licence(path: Path) -> str | None:
+    """The first line of the licences document that licenses the data, as plain text: a line
+    of prose (not a heading, a table row or code) that names a licence and the data, and no
+    one's e-mail address. None when no line does, or there is no document."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    in_code = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or line.lstrip().startswith(("#", "|")) or EMAIL.search(line):
+            continue
+        if re.search(r"licen[cs]", line, re.IGNORECASE) and re.search(
+            r"\bdata\b", line, re.IGNORECASE
+        ):
+            return _plain(line)
+    return None
+
+
+def _public_readme() -> str | None:
+    """The exports' README without the lines that name an e-mail address; None when the file
+    is missing."""
+    try:
+        text = EXPORTS_README.read_text()
+    except OSError:
+        return None
+    return "".join(line for line in text.splitlines(keepends=True) if not EMAIL.search(line))
 
 
 def _names(catalogue, raw: str | None) -> tuple[str | None, str | None]:
@@ -274,6 +353,9 @@ def build_public_router(cfg, state) -> APIRouter:
 
     def _no_database() -> JSONResponse:
         return cached({"error": "database unavailable"}, 10, status=503)
+
+    def _not_found() -> JSONResponse:
+        return cached({"error": "not found"}, 10, status=404)
 
     @router.get("/detections/recent")
     async def public_recent_detections(
@@ -510,9 +592,142 @@ def build_public_router(cfg, state) -> APIRouter:
             3600,
         )
 
+    deployment = cfg.deployment_uri
+
+    @router.get("/environment/latest")
+    async def public_environment_latest() -> JSONResponse:
+        """The site's newest sonde reading and newest weather reading; null for a feed that
+        has none."""
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        async with pool.connection() as conn:
+            water = await q.latest_water(conn, deployment)
+            weather = await q.latest_weather(conn, deployment)
+        return cached(
+            {
+                "deployment": deployment,
+                "water": _reading(water["ts"], water, q.SENSOR_COLUMNS) if water else None,
+                "weather": _reading(weather["ts"], weather, q.WEATHER_COLUMNS) if weather else None,
+            },
+            60,
+        )
+
+    @router.get("/environment/history")
+    async def public_environment_history(
+        days: int = Query(7, ge=1, le=800),
+        max_points: int = Query(200, ge=10, le=2000),
+    ) -> JSONResponse:
+        """The site's readings of the last `days` days, averaged into at most `max_points`
+        even buckets (the dashboard's history rule), oldest first; each point is its
+        bucket's start."""
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        hours = days * 24
+        bucket_s = q.history_bucket_seconds(hours, max_points)
+        async with pool.connection() as conn:
+            water = await q.water_by_bucket(conn, deployment, hours, bucket_s)
+            weather = await q.weather_by_bucket(conn, deployment, hours, bucket_s)
+        return cached(
+            {
+                "days": days,
+                "water": [_reading(r["bucket"], r, q.SENSOR_COLUMNS) for r in water],
+                "weather": [_reading(r["bucket"], r, q.WEATHER_COLUMNS) for r in weather],
+            },
+            600,
+        )
+
+    licence = data_licence(LICENCES)
+
+    @router.get("/exports")
+    async def public_exports() -> JSONResponse:
+        """The downloads: each export's CSV and Parquet, the README and the data's licence
+        (null when the licences document names none for it)."""
+        return cached(
+            {
+                "exports": [
+                    {
+                        "name": name,
+                        "description": description,
+                        "csv": f"{EXPORTS}/{name}.csv",
+                        "parquet": f"{EXPORTS}/{name}.parquet",
+                        "default_days": EXPORT_DAYS,
+                    }
+                    for name, description in PUBLIC_EXPORTS.items()
+                ],
+                "readme": f"{EXPORTS}/README.md",
+                "license": licence,
+            },
+            3600,
+        )
+
+    def _download(filename: str) -> dict:
+        return {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": DOWNLOAD_CACHE,
+        }
+
+    @router.get("/exports/README.md")
+    async def public_exports_readme() -> Response:
+        text = _public_readme()
+        if text is None:
+            return cached({"error": "no README"}, 60, status=404)
+        return Response(text, media_type="text/markdown", headers=_download("README.md"))
+
+    # Each public export's CSV from the function the dashboard's own /api/export/<name>.csv
+    # calls, with that route's defaults for every filter but the window.
+    csv_exports = {
+        "events": lambda pool, hours: export_events(pool, hours, None, 0.0),
+        "species_counts": export_species_counts,
+        "sightings": lambda pool, hours: export_sightings(pool, hours, MIN_FRAMES),
+        "hourly_summary": lambda pool, hours: export_hourly_summary(pool, hours, deployment),
+        "water_quality": lambda pool, hours: export_water_quality(pool, hours, deployment),
+        "weather": lambda pool, hours: export_weather(pool, hours, deployment),
+        "frame_stats": export_frame_stats,
+        "tracks_timeline": lambda pool, hours: export_tracks_timeline(pool, hours, MIN_FRAMES),
+        "topk_long": lambda pool, hours: export_topk_long(pool, hours, 0.0),
+    }
+
+    @router.get("/exports/{name}.csv")
+    async def public_export_csv(
+        name: str, days: int = Query(EXPORT_DAYS, ge=1, le=400)
+    ) -> Response:
+        """One of PUBLIC_EXPORTS over the last `days` days, streamed as CSV."""
+        if name not in PUBLIC_EXPORTS:
+            return _not_found()
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        return StreamingResponse(
+            csv_exports[name](pool, days * 24),
+            media_type="text/csv",
+            headers=_download(f"{name}.csv"),
+        )
+
+    @router.get("/exports/{name}.parquet")
+    async def public_export_parquet(
+        name: str, days: int = Query(EXPORT_DAYS, ge=1, le=400)
+    ) -> Response:
+        """One of PUBLIC_EXPORTS over the last `days` days as Parquet: the dashboard's
+        query_for SQL and Parquet writer, with the same defaults as the CSV."""
+        if name not in PUBLIC_EXPORTS:
+            return _not_found()
+        pool = _pool()
+        if pool is None:
+            return _no_database()
+        sql, params, cols = query_for(
+            name, hours=days * 24, deployment=deployment, min_frames=MIN_FRAMES, min_accuracy=0.0
+        )
+        return Response(
+            await fetch_parquet_bytes(pool, sql, params, cols),
+            media_type="application/vnd.apache.parquet",
+            headers=_download(f"{name}.parquet"),
+        )
+
     # Keep last: whatever no route above answers under the prefix is a cached 404 too.
     @router.get("/{rest:path}")
     async def public_not_found(rest: str) -> JSONResponse:
-        return cached({"error": "not found"}, 10, status=404)
+        return _not_found()
 
     return router
