@@ -19,7 +19,7 @@ hlsVariant: fmp4          # plain HLS, cacheable by CloudFront; low-latency part
 hlsSegmentCount: 7
 # The streaming-cost knob (README "Segment length"): a viewer's requests scale with 1/segment length, and on the
 # CloudFront Pro plan requests, not bytes, are the allowance (1 s measured 7,200 an hour per viewer; 2 s halves it,
-# 4 s and 6 s halve and third it again for 5 and 10 more seconds of delay). Segments are cut at the first IDR after
+# 4 s and 6 s halve and third it again for about 4 and 8 more seconds of delay). Segments are cut at the first IDR after
 # this duration; the camera and the encoder both send one every second, so any whole number of seconds works.
 hlsSegmentDuration: 2s
 hlsAlwaysRemux: yes       # the muxers run with no viewer: the first viewer and boot's check start at once

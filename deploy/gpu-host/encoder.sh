@@ -7,9 +7,10 @@
 # encode that nominal clock wins (-use_wallclock_as_timestamps only survives a stream copy; bring-up 2026-10-31:
 # the worker's ~15 fps came out as 25 fps of stream time, 0.63x real time, 2.4 s segments). So the filter graph
 # stamps every frame from the wall clock and the output is a constant ENCODER_FPS (duplicating or dropping the odd
-# frame), with one IDR per second of stream time (-g = fps, -forced-idr so the forced keyframes are real IDRs):
-# HLS segments are one second, in real time, regardless of the inference rate. No B-frames and the low-latency tune
-# keep the glass-to-glass delay to the segmenting itself.
+# frame), with one IDR per second of stream time (-g = fps, -forced-idr so the forced keyframes are real IDRs), so
+# MediaMTX can cut segments of any whole number of seconds (hlsSegmentDuration in mediamtx.yml, the cost knob) in
+# real time, regardless of the inference rate. No B-frames and the low-latency tune keep the glass-to-glass delay
+# to the segmenting itself.
 set -u
 WORKER="${WORKER_URL:-http://worker:8081}"
 MTX="${MEDIAMTX_RTSP:-rtsp://mediamtx:8554}"

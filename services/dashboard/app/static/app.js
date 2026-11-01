@@ -1100,14 +1100,27 @@ function initLivePresence() {
     document.addEventListener(type, mark, { passive: true });
   }
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { if (!_liveStopped) stopLive("hidden"); }
+    // A picture-in-picture window is still being watched when its tab is hidden.
+    if (document.hidden) { if (!_liveStopped && !document.pictureInPictureElement) stopLive("hidden"); }
     else if (_liveStopped === "hidden") resumeLive();
   });
   const resume = document.getElementById("live-resume");
-  if (resume) resume.addEventListener("click", resumeLive);
+  if (resume) {
+    resume.addEventListener("click", () => {
+      resumeLive();
+      tick();
+      document.getElementById("bbox-toggle")?.focus({ preventScroll: true });  // the button just hid itself
+    });
+  }
   setInterval(() => {
     if (!_liveStopped && !document.hidden && Date.now() - _liveLastInteraction > LIVE_IDLE_MS) stopLive("idle");
   }, 60000);
+}
+
+// The dashboard's pollers (two requests every half second for the live panel alone) go through the
+// same CloudFront plan as the video: they pause with it while the tab is hidden or idle-stopped.
+function whenWatching(fn) {
+  return () => { if (!document.hidden && _liveStopped !== "idle") fn(); };
 }
 
 // Point #stream (an <img> for MJPEG, a <video> for HLS) at the camera/variant. The HLS player
@@ -1119,8 +1132,8 @@ function setLiveSource(cam, boxes, force = false) {
   if (!el) return;
   _liveCam = cam;
   _liveBoxes = boxes;
+  if (document.hidden && !document.pictureInPictureElement) { if (!_liveStopped) stopLive("hidden"); return; }
   if (_liveStopped === "idle") { resumeLive(); return; }
-  if (document.hidden) { stopLive("hidden"); return; }
   const url = liveSourceUrl(cam, boxes);
   const isVideo = el.tagName === "VIDEO";
   if (!force) {
@@ -2829,15 +2842,15 @@ _initSpeciesModal();
 _initRoiModal();
 _initCelebrityModal();
 _initCameraToggle();
-setInterval(tick, 500);
-setInterval(tickHistory, 5000);
-setInterval(tickWaterQuality, 30000);
-setInterval(tickDrift, 30000);
-setInterval(tickAlerts, 15000);
-setInterval(tickCorrectionStats, 10000);
-setInterval(tickReef, 30000);
-setInterval(tickTrends, 60000);
-setInterval(tickReports, 60000);
+setInterval(whenWatching(tick), 500);
+setInterval(whenWatching(tickHistory), 5000);
+setInterval(whenWatching(tickWaterQuality), 30000);
+setInterval(whenWatching(tickDrift), 30000);
+setInterval(whenWatching(tickAlerts), 15000);
+setInterval(whenWatching(tickCorrectionStats), 10000);
+setInterval(whenWatching(tickReef), 30000);
+setInterval(whenWatching(tickTrends), 60000);
+setInterval(whenWatching(tickReports), 60000);
 tick();
 tickHistory();
 tickWaterQuality();

@@ -69,7 +69,17 @@ def test_the_player_stops_requesting_when_the_tab_is_hidden_or_unattended():
     assert "LIVE_IDLE_MS = 4 * 60 * 60 * 1000" in js and 'stopLive("idle")' in js
     assert 'getElementById("live-resume")' in js and "resumeLive" in js
     assert "liveSyncDurationCount: 2" in js
-    assert "initLivePresence();" in js
+    assert js.index("initLivePresence();") < js.index("initBboxToggle();")
+    # setLiveSource: a hidden tab never starts the stream (picture-in-picture excepted); a call while
+    # idle-stopped is a sign of life and resumes.
+    assert (
+        "if (document.hidden && !document.pictureInPictureElement) { if (!_liveStopped) stopLive"
+        in js
+    )
+    assert 'if (_liveStopped === "idle") { resumeLive(); return; }' in js
+    # The pollers pause with the video: every setInterval of a tick goes through whenWatching.
+    assert "setInterval(whenWatching(tick), 500);" in js
+    assert "setInterval(tick" not in js.replace("setInterval(whenWatching(tick", "")
 
 
 def test_hls_js_is_vendored_and_pinned():

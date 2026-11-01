@@ -60,7 +60,7 @@ test hook; compose never sets it.
 
 ## Segment length: the streaming-cost knob
 
-`hlsSegmentDuration` in `mediamtx.yml` (**2 s** since 2026-11-01; segments are cut at the first IDR after it, and
+`hlsSegmentDuration` in `mediamtx.yml` (**2 s** since 2026-10-31; segments are cut at the first IDR after it, and
 the camera and the encoder both send one every second) sets what a viewer costs. CloudFront serves the stream
 on the flat-rate Pro plan (50 TB and 10 M requests a month), and requests, not bytes, are the allowance: the
 raw variant is 0.19 GB per viewer-hour and the boxed one about 1.1 GB, but an hls.js viewer fetches one
@@ -75,11 +75,13 @@ playlist and one segment per segment length. Measured at bring-up:
 
 Longer segments change only time (delay, time to first picture, time to switch camera or boxes, recovery after
 an outage), never smoothness or picture quality. The dashboard's player keeps two segments of buffer
-(`liveSyncDurationCount` in `static/app.js`), stops loading while its tab is hidden and after four hours without
-a pointer or key ("still watching?"), so an unattended tab costs nothing. Exceeding the allowance costs nothing
-either (AWS tolerates a 3× month, then emails at 50/80/100 % and, if it goes on for months, serves from more
-distant edges); the infra stack alarms when a day passes the allowance's daily pace. **Dan's standing
-instruction (2026-11-01): if streaming cost or the request allowance ever becomes an issue, this knob is raised
+(`liveSyncDurationCount` in `static/app.js`), stops loading, and stops the dashboard's pollers with it, while
+its tab is hidden and after four hours without a pointer, key, touch or wheel ("still watching?"), so an
+unattended tab costs nothing. The pollers matter: the live panel alone asks the API twice every half second,
+about 14,000 requests an hour per open dashboard tab, four times the video. Exceeding the allowance costs
+nothing either (AWS tolerates a 3× month, then emails at 50/80/100 % and, if it goes on for months, serves from
+more distant edges); the infra stack alarms when a day passes the allowance's daily pace. **Dan's standing
+instruction (2026-10-31): if streaming cost or the request allowance ever becomes an issue, this knob is raised
 with him first, not changed quietly.**
 
 Measure at bring-up, with the dashboard watching the boxed variant:
