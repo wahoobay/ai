@@ -74,6 +74,27 @@ main {
 .stream-overlay-btn:hover { background: rgba(0, 0, 0, 0.75); }
 .stream-overlay-btn.off { color: var(--muted); }
 
+/* The idle stop's resume button: centred over the (now black) live panel. */
+.live-resume {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  padding: 12px 18px;
+  font-size: 15px;
+  width: max-content;
+  max-width: 90%;
+  text-align: center;
+  cursor: pointer;
+  font-family: inherit;
+}
+.live-resume:hover { background: rgba(0, 0, 0, 0.85); }
+.live-resume[hidden] { display: none; }
+
 .fallback-banner {
   position: absolute;
   left: 0;

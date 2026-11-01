@@ -34,6 +34,7 @@ async def test_the_page_plays_hls_when_a_base_is_configured(rdb, review_assets, 
     assert '<video id="stream"' in html and 'data-hls-base="/hls"' in html
     assert "/static/vendor/hls.min.js" in html
     assert '<img id="stream"' not in html
+    assert 'id="live-resume"' in html and "Still watching?" in html  # the idle stop's resume button
 
 
 async def test_the_page_keeps_mjpeg_without_an_hls_base(rdb, review_assets, monkeypatch):
@@ -57,6 +58,28 @@ def test_the_player_retries_forever_and_falls_back_to_native_hls():
     assert "Hls.Events.ERROR" in js and "startLoad(" in js and "recoverMediaError(" in js
     assert "liveSourceUrl(" in js and "setLiveSource(" in js
     assert "shouldRetry" in js
+
+
+def test_the_player_stops_requesting_when_the_tab_is_hidden_or_unattended():
+    """On the CloudFront Pro plan requests are the allowance: a background tab must make none, an unattended
+    one stops after four hours and resumes from the "still watching?" button, and the buffer is two of the
+    host's two-second segments."""
+    js = (APP_DIR / "static" / "app.js").read_text()
+    assert 'addEventListener("visibilitychange"' in js and 'stopLive("hidden")' in js
+    assert "LIVE_IDLE_MS = 4 * 60 * 60 * 1000" in js and 'stopLive("idle")' in js
+    assert 'getElementById("live-resume")' in js and "resumeLive" in js
+    assert "liveSyncDurationCount: 2" in js
+    assert js.index("initLivePresence();") < js.index("initBboxToggle();")
+    # setLiveSource: a hidden tab never starts the stream (picture-in-picture excepted); a call while
+    # idle-stopped is a sign of life and resumes.
+    assert (
+        "if (document.hidden && !document.pictureInPictureElement) { if (!_liveStopped) stopLive"
+        in js
+    )
+    assert 'if (_liveStopped === "idle") { resumeLive(); return; }' in js
+    # The pollers pause with the video: every setInterval of a tick goes through whenWatching.
+    assert "setInterval(whenWatching(tick), 500);" in js
+    assert "setInterval(tick" not in js.replace("setInterval(whenWatching(tick", "")
 
 
 def test_hls_js_is_vendored_and_pinned():

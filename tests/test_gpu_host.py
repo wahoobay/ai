@@ -396,7 +396,9 @@ def test_mediamtx_pulls_the_camera_once_and_serves_plain_hls():
         cfg["rtsp"] is True and cfg["rtspAddress"] == ":8554" and cfg["rtspTransports"] == ["tcp"]
     )
     assert cfg["hls"] is True and cfg["hlsAddress"] == ":8888"
-    assert cfg["hlsVariant"] == "fmp4" and cfg["hlsSegmentDuration"] == "1s"
+    assert (
+        cfg["hlsVariant"] == "fmp4" and cfg["hlsSegmentDuration"] == "2s"
+    )  # the cost knob (README)
     assert cfg["hlsSegmentCount"] == 7
     assert (
         cfg["hlsAlwaysRemux"] is True

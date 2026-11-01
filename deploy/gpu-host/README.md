@@ -53,9 +53,36 @@ saw the worker's 15 fps play at 0.63× real time in 2.4-second segments). `boot.
 (a bind-mounted edit alone does not restart a running loop).
 
 Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_FPS` (`15`, an integer; the GOP
-follows it, so segments stay one second; probed only at 15, so probe another value on the host before using it), `ENCODER_BITRATE` (`3000k`), `ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE`
+follows it, so an IDR still comes every second, which divides any whole-second segment length; probed only at
+15, so probe another value on the host before using it), `ENCODER_BITRATE` (`3000k`), `ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE`
 (`8000k`), `WORKER_URL` (`http://worker:8081`), `MEDIAMTX_RTSP` (`rtsp://mediamtx:8554`). `ENCODER_ONCE=1` is a
 test hook; compose never sets it.
+
+## Segment length: the streaming-cost knob
+
+`hlsSegmentDuration` in `mediamtx.yml` (**2 s** since 2026-10-31; segments are cut at the first IDR after it, and
+the camera and the encoder both send one every second) sets what a viewer costs. CloudFront serves the stream
+on the flat-rate Pro plan (50 TB and 10 M requests a month), and requests, not bytes, are the allowance: the
+raw variant is 0.19 GB per viewer-hour and the boxed one about 1.1 GB, but an hls.js viewer fetches one
+playlist and one segment per segment length. Measured at bring-up:
+
+| Segments | Requests per viewer-hour | Viewer-hours in 10 M | Delay (2-segment buffer) |
+|---|---|---|---|
+| 1 s | 7,200 (ffmpeg client 9,600) | 1,400 | 3–4 s |
+| 2 s | 3,600 | 2,800 | 5–6 s |
+| 4 s | 1,800 | 5,600 | 9–10 s |
+| 6 s | 1,200 | 8,300 | 13–14 s |
+
+Longer segments change only time (delay, time to first picture, time to switch camera or boxes, recovery after
+an outage), never smoothness or picture quality. The dashboard's player keeps two segments of buffer
+(`liveSyncDurationCount` in `static/app.js`), stops loading, and stops the dashboard's pollers with it, while
+its tab is hidden and after four hours without a pointer, key, touch or wheel ("still watching?"), so an
+unattended tab costs nothing. The pollers matter: the live panel alone asks the API twice every half second,
+about 14,000 requests an hour per open dashboard tab, four times the video. Exceeding the allowance costs
+nothing either (AWS tolerates a 3× month, then emails at 50/80/100 % and, if it goes on for months, serves from
+more distant edges); the infra stack alarms when a day passes the allowance's daily pace. **Dan's standing
+instruction (2026-10-31): if streaming cost or the request allowance ever becomes an issue, this knob is raised
+with him first, not changed quietly.**
 
 Measure at bring-up, with the dashboard watching the boxed variant:
 

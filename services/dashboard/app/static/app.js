@@ -1064,13 +1064,76 @@ let _liveHls = null;
 let _liveRetry = null;
 let _liveUrl = null;
 let _liveOnError = null;
+let _liveCam = null;
+let _liveBoxes = true;
+// null while the stream should be playing; "hidden" while the tab is in the background (resumes by itself),
+// "idle" after LIVE_IDLE_MS without a pointer or key (resumes from the "still watching?" button). A stopped
+// stream makes no requests at all: on the CloudFront Pro plan requests are the allowance (host README).
+let _liveStopped = null;
+let _liveLastInteraction = Date.now();
+const LIVE_IDLE_MS = 4 * 60 * 60 * 1000;
+
+// Tear the live element down (no player, no src, so no requests) without forgetting what was playing.
+function stopLive(reason) {
+  const el = document.getElementById("stream");
+  _liveStopped = reason;
+  clearTimeout(_liveRetry);
+  if (_liveHls) { _liveHls.destroy(); _liveHls = null; }
+  if (el && _liveOnError) { el.removeEventListener("error", _liveOnError); _liveOnError = null; }
+  if (el) { el.removeAttribute("src"); if (el.tagName === "VIDEO") el.load(); }
+  _liveUrl = null;
+  const resume = document.getElementById("live-resume");
+  if (resume) resume.hidden = reason !== "idle";
+}
+
+function resumeLive() {
+  _liveStopped = null;
+  _liveLastInteraction = Date.now();
+  const resume = document.getElementById("live-resume");
+  if (resume) resume.hidden = true;
+  if (_liveCam) setLiveSource(_liveCam, _liveBoxes, true);
+}
+
+function initLivePresence() {
+  const mark = () => { _liveLastInteraction = Date.now(); };
+  for (const type of ["pointerdown", "keydown", "touchstart", "wheel"]) {
+    document.addEventListener(type, mark, { passive: true });
+  }
+  document.addEventListener("visibilitychange", () => {
+    // A picture-in-picture window is still being watched when its tab is hidden.
+    if (document.hidden) { if (!_liveStopped && !document.pictureInPictureElement) stopLive("hidden"); }
+    else if (_liveStopped === "hidden") resumeLive();
+  });
+  const resume = document.getElementById("live-resume");
+  if (resume) {
+    resume.addEventListener("click", () => {
+      resumeLive();
+      tick();
+      document.getElementById("bbox-toggle")?.focus({ preventScroll: true });  // the button just hid itself
+    });
+  }
+  setInterval(() => {
+    if (!_liveStopped && !document.hidden && Date.now() - _liveLastInteraction > LIVE_IDLE_MS) stopLive("idle");
+  }, 60000);
+}
+
+// The dashboard's pollers (two requests every half second for the live panel alone) go through the
+// same CloudFront plan as the video: they pause with it while the tab is hidden or idle-stopped.
+function whenWatching(fn) {
+  return () => { if (!document.hidden && _liveStopped !== "idle") fn(); };
+}
 
 // Point #stream (an <img> for MJPEG, a <video> for HLS) at the camera/variant. The HLS player
 // never gives up: load errors retry forever, fatal errors restart or rebuild the player.
-// `force` rebuilds even when the URL is unchanged (the retry paths).
+// `force` rebuilds even when the URL is unchanged (the retry paths). A toggle or camera switch
+// while idle-stopped is a sign of life and resumes; a hidden tab stays stopped until it is shown.
 function setLiveSource(cam, boxes, force = false) {
   const el = document.getElementById("stream");
   if (!el) return;
+  _liveCam = cam;
+  _liveBoxes = boxes;
+  if (document.hidden && !document.pictureInPictureElement) { if (!_liveStopped) stopLive("hidden"); return; }
+  if (_liveStopped === "idle") { resumeLive(); return; }
   const url = liveSourceUrl(cam, boxes);
   const isVideo = el.tagName === "VIDEO";
   if (!force) {
@@ -1098,7 +1161,7 @@ function setLiveSource(cam, boxes, force = false) {
     const policy = (r) => ({ default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: r, errorRetry: r } });
     const hls = new Hls({
       lowLatencyMode: false,
-      liveSyncDurationCount: 3,
+      liveSyncDurationCount: 2,  // two of the host's two-second segments: five to six seconds behind the reef
       manifestLoadPolicy: policy(retry),
       playlistLoadPolicy: policy(retry),
       fragLoadPolicy: policy(fragRetry),
@@ -2770,6 +2833,7 @@ async function tickReports() {
 
 initDownloads();
 initReefToggle();
+initLivePresence();
 initBboxToggle();
 initTrendsToggle();
 initReportsToggle();
@@ -2778,15 +2842,15 @@ _initSpeciesModal();
 _initRoiModal();
 _initCelebrityModal();
 _initCameraToggle();
-setInterval(tick, 500);
-setInterval(tickHistory, 5000);
-setInterval(tickWaterQuality, 30000);
-setInterval(tickDrift, 30000);
-setInterval(tickAlerts, 15000);
-setInterval(tickCorrectionStats, 10000);
-setInterval(tickReef, 30000);
-setInterval(tickTrends, 60000);
-setInterval(tickReports, 60000);
+setInterval(whenWatching(tick), 500);
+setInterval(whenWatching(tickHistory), 5000);
+setInterval(whenWatching(tickWaterQuality), 30000);
+setInterval(whenWatching(tickDrift), 30000);
+setInterval(whenWatching(tickAlerts), 15000);
+setInterval(whenWatching(tickCorrectionStats), 10000);
+setInterval(whenWatching(tickReef), 30000);
+setInterval(whenWatching(tickTrends), 60000);
+setInterval(whenWatching(tickReports), 60000);
 tick();
 tickHistory();
 tickWaterQuality();
