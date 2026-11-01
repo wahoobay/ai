@@ -170,6 +170,10 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     )
     assert env["TZ"] == "America/New_York" and env["SENSESTREAM_DEPLOYMENT_URI"] == "wahoo_2"
     assert env["ORIGIN_VERIFY_SECRET"] == "origin-secret" and env["WB_IMAGE_TAG"] == "staging"
+    assert (
+        env["ENCODER_SCRIPT_SHA"]
+        == hashlib.sha256((GPU_HOST / "encoder.sh").read_bytes()).hexdigest()[:12]
+    )
     assert oct(env_file.stat().st_mode)[-3:] == "600"
     out = proc.stdout + proc.stderr
     assert "pw" not in out and FAKE_CAMERA_URL not in out and "origin-secret" not in out
@@ -345,9 +349,14 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,video,utility" in text
     assert "capabilities: [gpu, video]" in text and "encoder:" in text
     assert "./encoder.sh:/encoder.sh:ro" in text and "awslogs-stream: encoder" in text
+    assert (
+        "wahoobay.encoder-script: ${ENCODER_SCRIPT_SHA}" in text
+    )  # a changed script recreates the container
     if shutil.which("docker"):
         shutil.copytree(GPU_HOST, tmp_path / "gpu-host")
-        (tmp_path / "gpu-host" / ".env").write_text("WB_LOG_GROUP=g\nWB_REGION=us-east-1\n")
+        (tmp_path / "gpu-host" / ".env").write_text(
+            "WB_LOG_GROUP=g\nWB_REGION=us-east-1\nENCODER_SCRIPT_SHA=abc\n"
+        )
         subprocess.run(
             [
                 "docker",
@@ -366,6 +375,7 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
                 "WB_REGION": "us-east-1",
                 "CAMERA_SEAHIVE_URL": "rtsp://x",
                 "HLS_CDN_SECRET": "cdn",
+                "ENCODER_SCRIPT_SHA": "abc",
             },
             timeout=120,
         )
@@ -501,6 +511,9 @@ def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env(
     secrets = {"CAMERA_SEAHIVE_URL", "HLS_CDN_SECRET", "ORIGIN_VERIFY_SECRET", "DATABASE_URL"}
     assert not secrets & set(encoder["environment"])
     assert encoder["environment"] == {"NVIDIA_DRIVER_CAPABILITIES": "compute,video,utility"}
+    assert encoder["labels"] == {
+        "wahoobay.encoder-script": "${ENCODER_SCRIPT_SHA}"
+    }  # from boot.sh's .env
 
 
 def test_boot_points_the_worker_at_mediamtx_and_reads_only_from_it(tmp_path):
@@ -555,7 +568,11 @@ def _fake_bin(tmp_path: Path, ffmpeg: str) -> Path:
 
 def _encoder_env(**extra: str) -> dict[str, str]:
     # conftest points WORKER_URL at a dead port for every test; the encoder's defaults are what is under test
-    env = {k: v for k, v in os.environ.items() if k not in ("WORKER_URL", "MEDIAMTX_RTSP")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("WORKER_URL", "MEDIAMTX_RTSP", "ENCODER_FPS")
+    }
     return {**env, **extra}
 
 
@@ -583,8 +600,35 @@ def test_the_encoder_publishes_the_annotated_stream_through_nvenc(tmp_path):
     assert "rtsp://mediamtx:8554/seahive_boxes" in args
     assert "h264_nvenc" in args and "tcp" in args[args.index("-rtsp_transport") + 1]
     assert args[args.index("-b:v") + 1] == "3000k"
-    assert args[args.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*1)"
     assert "-an" in args and args[args.index("-pix_fmt") + 1] == "yuv420p"
+    # Timing (bring-up 2026-10-31): the MJPEG demuxer's nominal 25 fps survives decode and encode whatever the
+    # arrival rate, so the frames are stamped from the wall clock in the filter graph and output at a constant
+    # rate, with a real IDR every second of stream time: one-second segments in real time.
+    assert (
+        args[args.index("-vf") + 1] == "settb=AVTB,setpts='(RTCTIME-RTCSTART)/(TB*1000000)'"
+    )  # microseconds, so TB first
+    assert "-use_wallclock_as_timestamps" not in args
+    assert args[args.index("-fps_mode") + 1] == "cfr" and args[args.index("-r") + 1] == "15"
+    assert args[args.index("-g") + 1] == "15" and args[args.index("-forced-idr") + 1] == "1"
+    assert args[args.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*1)"
+    assert "-bf" in args and args[args.index("-bf") + 1] == "0"
+    # The output rate is a knob; the GOP follows it so segments stay one second.
+    subprocess.run(
+        ["sh", str(script)],
+        env=_encoder_env(
+            PATH=f"{fake}:{os.environ['PATH']}",
+            FFMPEG_ARGS=str(args_file),
+            SLEEP_LOG=str(tmp_path / "sleeps"),
+            ENCODER_ONCE="1",
+            ENCODER_FPS="12",
+        ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    args = args_file.read_text().split("\n")
+    assert args[args.index("-r") + 1] == "12" and args[args.index("-g") + 1] == "12"
 
 
 def test_the_encoder_restarts_ffmpeg_when_the_input_ends(tmp_path):

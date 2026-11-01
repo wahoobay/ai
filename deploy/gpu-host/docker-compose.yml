@@ -55,6 +55,8 @@ services:
       - ./encoder.sh:/encoder.sh:ro
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    labels:
+      wahoobay.encoder-script: ${ENCODER_SCRIPT_SHA}   # boot.sh writes the script's hash: a changed script recreates the container
     depends_on:
       - worker
       - mediamtx
