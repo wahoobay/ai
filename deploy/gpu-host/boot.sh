@@ -55,6 +55,13 @@ fi
 # Single-quoted values: compose interpolates $ in unquoted .env values, and a camera password may contain one.
 # (A single quote inside a value must already be percent-encoded, as RTSP URLs require.)
 q() { printf "'%s'" "$1"; }
+# One hash per bind-mounted file, each a label on its service (compose recreates a container when its label
+# changes). Without them a changed file never reaches the running container: git replaces the file, the mount
+# keeps the old inode, and a running loop has parsed its script anyway (the bring-up's two-second segments did not
+# apply until MediaMTX was recreated by hand). Computed here, not inside the heredoc, so a missing file is fatal.
+encoder_script_sha="$(sha256sum encoder.sh | cut -c1-12)"
+mediamtx_config_sha="$(sha256sum mediamtx.yml | cut -c1-12)"
+caddyfile_sha="$(sha256sum Caddyfile | cut -c1-12)"
 umask 077
 tmp="$(mktemp .env.XXXXXX)"
 cat > "$tmp" <<ENVEOF
@@ -83,9 +90,9 @@ WB_IMAGE_TAG=$(q "$WB_ENV")
 WB_ECR_REGISTRY=$(q "$WB_ECR_REGISTRY")
 WB_LOG_GROUP=$(q "$WB_LOG_GROUP")
 WB_REGION=$(q "$WB_REGION")
-# A label on the encoder service: compose recreates the container when the script changes (a bind-mounted edit
-# alone does not restart a running loop).
-ENCODER_SCRIPT_SHA=$(q "$(sha256sum encoder.sh | cut -c1-12)")
+ENCODER_SCRIPT_SHA=$(q "$encoder_script_sha")
+MEDIAMTX_CONFIG_SHA=$(q "$mediamtx_config_sha")
+CADDYFILE_SHA=$(q "$caddyfile_sha")
 ENVEOF
 mv -f "$tmp" .env
 chmod 600 .env

@@ -13,6 +13,8 @@ services:
     environment:
       MTX_PATHS_SEAHIVE_SOURCE: ${CAMERA_SEAHIVE_URL}   # the camera, pulled once; from the .env boot.sh writes
       MTX_HLSCDNSECRET: ${HLS_CDN_SECRET}   # CDN mode: requests with this bearer (Caddy adds it) share one session
+    labels:
+      wahoobay.config: ${MEDIAMTX_CONFIG_SHA}   # boot.sh writes the file's hash: a changed mediamtx.yml recreates the container
     restart: unless-stopped
     logging:
       driver: awslogs
@@ -85,6 +87,8 @@ services:
     environment:      # only its own secrets: .env also holds the camera URL and the database URL
       ORIGIN_VERIFY_SECRET: ${ORIGIN_VERIFY_SECRET}
       HLS_CDN_SECRET: ${HLS_CDN_SECRET}   # the bearer it adds on /hls/*
+    labels:
+      wahoobay.config: ${CADDYFILE_SHA}   # boot.sh writes the file's hash: a changed Caddyfile recreates the container
     depends_on:
       - worker
     restart: unless-stopped
