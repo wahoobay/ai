@@ -52,8 +52,8 @@ saw the worker's 15 fps play at 0.63× real time in 2.4-second segments). `boot.
 `.env` as `ENCODER_SCRIPT_SHA`, a label on the service, so compose recreates the container when the script changes
 (a bind-mounted edit alone does not restart a running loop).
 
-Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_FPS` (`15`; the GOP follows it,
-so segments stay one second), `ENCODER_BITRATE` (`3000k`), `ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE`
+Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_FPS` (`15`, an integer; the GOP
+follows it, so segments stay one second; probed only at 15, so probe another value on the host before using it), `ENCODER_BITRATE` (`3000k`), `ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE`
 (`8000k`), `WORKER_URL` (`http://worker:8081`), `MEDIAMTX_RTSP` (`rtsp://mediamtx:8554`). `ENCODER_ONCE=1` is a
 test hook; compose never sets it.
 

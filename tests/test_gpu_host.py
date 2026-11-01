@@ -171,9 +171,8 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     assert env["TZ"] == "America/New_York" and env["SENSESTREAM_DEPLOYMENT_URI"] == "wahoo_2"
     assert env["ORIGIN_VERIFY_SECRET"] == "origin-secret" and env["WB_IMAGE_TAG"] == "staging"
     assert (
-        len(env["ENCODER_SCRIPT_SHA"]) == 12
-        and env["ENCODER_SCRIPT_SHA"]
-        in hashlib.sha256((GPU_HOST / "encoder.sh").read_bytes()).hexdigest()
+        env["ENCODER_SCRIPT_SHA"]
+        == hashlib.sha256((GPU_HOST / "encoder.sh").read_bytes()).hexdigest()[:12]
     )
     assert oct(env_file.stat().st_mode)[-3:] == "600"
     out = proc.stdout + proc.stderr
@@ -569,7 +568,11 @@ def _fake_bin(tmp_path: Path, ffmpeg: str) -> Path:
 
 def _encoder_env(**extra: str) -> dict[str, str]:
     # conftest points WORKER_URL at a dead port for every test; the encoder's defaults are what is under test
-    env = {k: v for k, v in os.environ.items() if k not in ("WORKER_URL", "MEDIAMTX_RTSP")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("WORKER_URL", "MEDIAMTX_RTSP", "ENCODER_FPS")
+    }
     return {**env, **extra}
 
 
@@ -601,7 +604,10 @@ def test_the_encoder_publishes_the_annotated_stream_through_nvenc(tmp_path):
     # Timing (bring-up 2026-10-31): the MJPEG demuxer's nominal 25 fps survives decode and encode whatever the
     # arrival rate, so the frames are stamped from the wall clock in the filter graph and output at a constant
     # rate, with a real IDR every second of stream time: one-second segments in real time.
-    assert "RTCTIME" in args[args.index("-vf") + 1] and "-use_wallclock_as_timestamps" not in args
+    assert (
+        args[args.index("-vf") + 1] == "settb=AVTB,setpts='(RTCTIME-RTCSTART)/(TB*1000000)'"
+    )  # microseconds, so TB first
+    assert "-use_wallclock_as_timestamps" not in args
     assert args[args.index("-fps_mode") + 1] == "cfr" and args[args.index("-r") + 1] == "15"
     assert args[args.index("-g") + 1] == "15" and args[args.index("-forced-idr") + 1] == "1"
     assert args[args.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*1)"
