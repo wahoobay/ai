@@ -44,12 +44,18 @@ inside the VPC, and viewers reach the stream through CloudFront.
 ## The encoder
 
 `encoder` (`jrottenberg/ffmpeg:7.1.2-nvidia2404`) runs `encoder.sh`: one NVENC encode of the worker's annotated
-MJPEG, published to `rtsp://mediamtx:8554/seahive_boxes`, one keyframe per second. It shares the L4 with the
-worker (`capabilities: [gpu, video]`, `NVIDIA_DRIVER_CAPABILITIES: compute,video,utility`).
+MJPEG, published to `rtsp://mediamtx:8554/seahive_boxes` at a constant 15 fps with one IDR per second. It shares
+the L4 with the worker (`capabilities: [gpu, video]`, `NVIDIA_DRIVER_CAPABILITIES: compute,video,utility`).
+The frames are stamped from the wall clock in the filter graph, not by the demuxer: ffmpeg's MJPEG demuxer calls
+every stream 25 fps whatever the arrival rate, and through decode and encode that clock wins (the first bring-up
+saw the worker's 15 fps play at 0.63× real time in 2.4-second segments). `boot.sh` writes the script's hash into
+`.env` as `ENCODER_SCRIPT_SHA`, a label on the service, so compose recreates the container when the script changes
+(a bind-mounted edit alone does not restart a running loop).
 
-Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_BITRATE` (`3000k`),
-`ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE` (`8000k`), `WORKER_URL` (`http://worker:8081`),
-`MEDIAMTX_RTSP` (`rtsp://mediamtx:8554`). `ENCODER_ONCE=1` is a test hook; compose never sets it.
+Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_FPS` (`15`; the GOP follows it,
+so segments stay one second), `ENCODER_BITRATE` (`3000k`), `ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE`
+(`8000k`), `WORKER_URL` (`http://worker:8081`), `MEDIAMTX_RTSP` (`rtsp://mediamtx:8554`). `ENCODER_ONCE=1` is a
+test hook; compose never sets it.
 
 Measure at bring-up, with the dashboard watching the boxed variant:
 

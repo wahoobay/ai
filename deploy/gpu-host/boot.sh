@@ -83,6 +83,9 @@ WB_IMAGE_TAG=$(q "$WB_ENV")
 WB_ECR_REGISTRY=$(q "$WB_ECR_REGISTRY")
 WB_LOG_GROUP=$(q "$WB_LOG_GROUP")
 WB_REGION=$(q "$WB_REGION")
+# A label on the encoder service: compose recreates the container when the script changes (a bind-mounted edit
+# alone does not restart a running loop).
+ENCODER_SCRIPT_SHA=$(q "$(sha256sum encoder.sh | cut -c1-12)")
 ENVEOF
 mv -f "$tmp" .env
 chmod 600 .env
