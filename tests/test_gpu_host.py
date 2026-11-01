@@ -170,10 +170,14 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     )
     assert env["TZ"] == "America/New_York" and env["SENSESTREAM_DEPLOYMENT_URI"] == "wahoo_2"
     assert env["ORIGIN_VERIFY_SECRET"] == "origin-secret" and env["WB_IMAGE_TAG"] == "staging"
-    assert (
-        env["ENCODER_SCRIPT_SHA"]
-        == hashlib.sha256((GPU_HOST / "encoder.sh").read_bytes()).hexdigest()[:12]
-    )
+    # One hash per bind-mounted file, each a label on its service: a changed file recreates its container
+    # (a single-file bind mount keeps the old inode after git replaces the file).
+    for var, name in (
+        ("ENCODER_SCRIPT_SHA", "encoder.sh"),
+        ("MEDIAMTX_CONFIG_SHA", "mediamtx.yml"),
+        ("CADDYFILE_SHA", "Caddyfile"),
+    ):
+        assert env[var] == hashlib.sha256((GPU_HOST / name).read_bytes()).hexdigest()[:12], var
     assert oct(env_file.stat().st_mode)[-3:] == "600"
     out = proc.stdout + proc.stderr
     assert "pw" not in out and FAKE_CAMERA_URL not in out and "origin-secret" not in out
@@ -349,13 +353,16 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,video,utility" in text
     assert "capabilities: [gpu, video]" in text and "encoder:" in text
     assert "./encoder.sh:/encoder.sh:ro" in text and "awslogs-stream: encoder" in text
+    # A changed bind-mounted file recreates its container (the hashes come from boot.sh's .env).
+    assert "wahoobay.encoder-script: ${ENCODER_SCRIPT_SHA}" in text
     assert (
-        "wahoobay.encoder-script: ${ENCODER_SCRIPT_SHA}" in text
-    )  # a changed script recreates the container
+        "wahoobay.config: ${MEDIAMTX_CONFIG_SHA}" in text
+        and "wahoobay.config: ${CADDYFILE_SHA}" in text
+    )
     if shutil.which("docker"):
         shutil.copytree(GPU_HOST, tmp_path / "gpu-host")
         (tmp_path / "gpu-host" / ".env").write_text(
-            "WB_LOG_GROUP=g\nWB_REGION=us-east-1\nENCODER_SCRIPT_SHA=abc\n"
+            "WB_LOG_GROUP=g\nWB_REGION=us-east-1\nENCODER_SCRIPT_SHA=abc\nMEDIAMTX_CONFIG_SHA=abc\nCADDYFILE_SHA=abc\n"
         )
         subprocess.run(
             [
@@ -501,6 +508,9 @@ def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env(
         "MTX_PATHS_SEAHIVE_SOURCE": "${CAMERA_SEAHIVE_URL}",
         "MTX_HLSCDNSECRET": "${HLS_CDN_SECRET}",  # CDN mode: the bearer Caddy adds on /hls/*
     }
+    assert services["mediamtx"]["labels"] == {
+        "wahoobay.config": "${MEDIAMTX_CONFIG_SHA}"
+    }  # a changed file recreates it
     assert "hlsCDNSecret" not in yaml.safe_load((GPU_HOST / "mediamtx.yml").read_text())
     caddy = services["caddy"]
     assert "env_file" not in caddy  # .env also holds the camera URL and the database URL
@@ -508,6 +518,7 @@ def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env(
         "ORIGIN_VERIFY_SECRET": "${ORIGIN_VERIFY_SECRET}",
         "HLS_CDN_SECRET": "${HLS_CDN_SECRET}",
     }
+    assert caddy["labels"] == {"wahoobay.config": "${CADDYFILE_SHA}"}
     encoder = services["encoder"]
     assert "env_file" not in encoder
     secrets = {"CAMERA_SEAHIVE_URL", "HLS_CDN_SECRET", "ORIGIN_VERIFY_SECRET", "DATABASE_URL"}

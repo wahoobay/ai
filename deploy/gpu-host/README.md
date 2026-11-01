@@ -48,9 +48,12 @@ MJPEG, published to `rtsp://mediamtx:8554/seahive_boxes` at a constant 15 fps wi
 the L4 with the worker (`capabilities: [gpu, video]`, `NVIDIA_DRIVER_CAPABILITIES: compute,video,utility`).
 The frames are stamped from the wall clock in the filter graph, not by the demuxer: ffmpeg's MJPEG demuxer calls
 every stream 25 fps whatever the arrival rate, and through decode and encode that clock wins (the first bring-up
-saw the worker's 15 fps play at 0.63× real time in 2.4-second segments). `boot.sh` writes the script's hash into
-`.env` as `ENCODER_SCRIPT_SHA`, a label on the service, so compose recreates the container when the script changes
-(a bind-mounted edit alone does not restart a running loop).
+saw the worker's 15 fps play at 0.63× real time in 2.4-second segments). `boot.sh` writes the hash of each
+bind-mounted file into `.env` (`ENCODER_SCRIPT_SHA`, `MEDIAMTX_CONFIG_SHA`, `CADDYFILE_SHA`) as a label on its
+service, so compose recreates that container when the file changes. Without the label a changed file never
+reaches the running container: git replaces the file, the single-file bind mount keeps the old inode, and a
+running shell loop has parsed its script anyway (the bring-up's two-second segments did not apply until MediaMTX
+was recreated by hand).
 
 Knobs (environment of the `encoder` service; defaults in the script): `ENCODER_FPS` (`15`, an integer; the GOP
 follows it, so an IDR still comes every second, which divides any whole-second segment length; probed only at
