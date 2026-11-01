@@ -364,7 +364,7 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
         (tmp_path / "gpu-host" / ".env").write_text(
             "WB_LOG_GROUP=g\nWB_REGION=us-east-1\nENCODER_SCRIPT_SHA=abc\nMEDIAMTX_CONFIG_SHA=abc\nCADDYFILE_SHA=abc\n"
         )
-        subprocess.run(
+        proc = subprocess.run(
             [
                 "docker",
                 "compose",
@@ -374,6 +374,8 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
                 "-q",
             ],
             check=True,
+            capture_output=True,
+            text=True,
             env={
                 **os.environ,
                 "WB_ECR_REGISTRY": "r",
@@ -382,10 +384,16 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
                 "WB_REGION": "us-east-1",
                 "CAMERA_SEAHIVE_URL": "rtsp://x",
                 "HLS_CDN_SECRET": "cdn",
+                "ORIGIN_VERIFY_SECRET": "ov",
                 "ENCODER_SCRIPT_SHA": "abc",
+                "MEDIAMTX_CONFIG_SHA": "abc",
+                "CADDYFILE_SHA": "abc",
             },
             timeout=120,
         )
+        assert (
+            "is not set" not in proc.stderr
+        ), proc.stderr  # every ${...} the file uses is accounted for
 
 
 def test_the_systemd_unit_boots_the_host_after_docker():
