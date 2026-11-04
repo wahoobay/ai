@@ -82,16 +82,22 @@ as it was. Emptying the line puts the camera back: MediaMTX pulls it again, and 
 container (Compose leaves a running service of an inactive profile alone, even with `--remove-orphans`).
 
 The file should have the camera's shape, so the worker, the HLS segmenter and the 2 s segments behave as they do
-live: H.264, 1280×720, 15 fps, no B-frames, an IDR every second, no audio. To make one from a Spot AI export
-(`-ss` is the offset of the hour wanted within the export), with the replay service's own image:
+live: H.264, 1280×720, 15 fps, no B-frames, an IDR every second, no audio. Staging's recording was made from nine
+1080p60 clips of the pier camera, joined in the order of their on-screen clock (`-ss` on an input skips a stretch
+another clip already covers). `linuxserver/ffmpeg` runs natively on an Apple-silicon Mac, about 3.5 minutes for the
+26-minute file; the replay service's amd64 image works too, emulated:
 
 ```sh
-docker run --rm --platform linux/amd64 -v "$PWD":/w -w /w jrottenberg/ffmpeg:7.1.2-ubuntu2404 \
-  -ss 00:00:00 -i spot-export.mp4 -t 3600 -an -vf "scale=1280:720,fps=15" \
-  -c:v libx264 -preset medium -crf 23 -maxrate 2000k -bufsize 4000k \
-  -g 15 -keyint_min 15 -sc_threshold 0 -bf 0 -pix_fmt yuv420p -movflags +faststart seahive-2026-09-01.mp4
-aws s3 cp seahive-2026-09-01.mp4 s3://platform-wahoobay-models/replay/seahive-2026-09-01.mp4
+docker run --rm -v "$PWD":/w -w /w linuxserver/ffmpeg:latest -y \
+  -i fish1.mp4 -i fish2.mp4 -ss 102 -i fish3.mp4 -i fish4.mp4 -i fish8.mp4 -i fish9.mp4 -i fish7.mp4 -i fish5.mp4 -i fish6.mp4 \
+  -filter_complex "concat=n=9:v=1:a=0,fps=15,scale=1280:720:flags=lanczos,setsar=1,format=yuv420p[v]" -map "[v]" -an \
+  -c:v libx264 -preset medium -crf 23 -maxrate 2000k -bufsize 4000k -g 15 -keyint_min 15 -sc_threshold 0 -bf 0 \
+  -movflags +faststart pompano-pier-2024-06-16_07-11.mp4
+aws s3 cp pompano-pier-2024-06-16_07-11.mp4 s3://platform-wahoobay-models/replay/pompano-pier-2024-06-16_07-11.mp4
 ```
+
+For a single export (Spot AI keeps 90 days of the seahive camera), the same encoder options with one `-i` and
+`-vf "fps=15,scale=1280:720"` in place of the filter graph.
 
 Upload first, then merge the `replay.conf` change; the deploy then runs `boot.sh`. While a recording plays, the
 alert rules `pipeline_silence` and `frame_stats_stalled` fire on the dashboard, because nothing is written for them
