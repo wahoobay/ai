@@ -19,6 +19,19 @@
   const make = window.driver && window.driver.js && window.driver.js.driver;
 
   let active = null;
+  let watch = null;
+
+  // The page redraws some of what a step points at (the celebrities grid, the review panel) by replacing
+  // it, which leaves the cut-out and the card measuring an element that is no longer there (they jump to
+  // the top-left corner). Showing the step again looks its element up afresh.
+  function rehighlightIfReplaced(d) {
+    const el = d.getActiveElement();
+    if (el && el.id !== "driver-dummy-element" && !el.isConnected) {
+      d.moveTo(d.getActiveIndex());
+      return true;
+    }
+    return false;
+  }
 
   // The first of these that is on screen (driver.js centres a step whose element is missing).
   function first(...selectors) {
@@ -47,10 +60,13 @@
       popoverClass: "wb-tour",
       onDestroyed: () => {
         active = null;
+        window.clearInterval(watch);
         if (onEnd) onEnd();
       },
     });
     active.drive();
+    window.clearInterval(watch);
+    watch = window.setInterval(() => { if (active) rehighlightIfReplaced(active); }, 500);
   }
 
   async function me() {
@@ -88,7 +104,9 @@
   }
 
   // Panels fill in after their data arrives; redraw the cut-out once they have.
-  const settle = (el, step, opts) => { window.setTimeout(() => opts.driver.refresh(), 900); };
+  const settle = (el, step, opts) => {
+    window.setTimeout(() => { if (!rehighlightIfReplaced(opts.driver)) opts.driver.refresh(); }, 900);
+  };
 
   function homeSteps() {
     const steps = [
