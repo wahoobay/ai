@@ -1,7 +1,8 @@
 // Guided tours, drawn by driver.js (static/vendor): the home page's for a first-time visitor and the
 // review page's for a first-time reviewer, started from the "Take the tour" button. Booth mode
-// (booth.js) adds the welcome card, the reset to it after BOOTH_IDLE_MS without a touch, and keeps the
-// video playing. The words are for visitors who are not computer scientists: no "model", no
+// (booth.js) adds the welcome card, the reset to it after BOOTH_IDLE_MS without a touch, keeps the
+// video playing, and, once a visitor has had NUDGE_DELAY_MS on the dashboard after the tour, points at
+// the review page with a card that leaves the dashboard usable. The words are for visitors who are not computer scientists: no "model", no
 // "confidence", no keyboard shortcuts (a booth may be a touch screen).
 (function () {
   "use strict";
@@ -13,6 +14,8 @@
   const DEMO_COPY = root.dataset.env === "staging";
   const BOOTH_IDLE_MS = 90 * 1000;
   const WELCOMED = "wb.welcomed";   // this visitor has seen the welcome card (sessionStorage; the reset clears it)
+  const NUDGE_DELAY_MS = 30 * 1000;  // time on the dashboard, after the tour or "just look around", before the nudge
+  const NUDGED = "wb.nudged";        // this visitor answered the nudge (sessionStorage; the reset clears it)
   const make = window.driver && window.driver.js && window.driver.js.driver;
 
   let active = null;
@@ -26,7 +29,7 @@
     return undefined;
   }
 
-  function run(steps) {
+  function run(steps, onEnd) {
     if (!make) return;
     if (active) active.destroy();
     active = make({
@@ -42,7 +45,10 @@
       stageRadius: 12,
       smoothScroll: true,
       popoverClass: "wb-tour",
-      onDestroyed: () => { active = null; },
+      onDestroyed: () => {
+        active = null;
+        if (onEnd) onEnd();
+      },
     });
     active.drive();
   }
@@ -84,7 +90,7 @@
   // Panels fill in after their data arrives; redraw the cut-out once they have.
   const settle = (el, step, opts) => { window.setTimeout(() => opts.driver.refresh(), 900); };
 
-  function homeSteps(reviewer) {
+  function homeSteps() {
     const steps = [
       {
         element: () => first(".stream-wrap", ".live-embed"),
@@ -134,26 +140,18 @@
         },
       },
     ];
-    steps.push(reviewer
-      ? {
-        popover: {
-          title: "Your turn: help the AI learn",
-          description: "The AI learns fish names from people, a bit like iNaturalist: you look at a fish it found and say whether its guess is right. Want to try? It takes about a minute.",
-          doneBtnText: "Try it →",
-          onDoneClick: (el, step, opts) => { opts.driver.destroy(); window.location.href = reviewUrl; },
-        },
-      }
-      : {
-        popover: {
-          title: "That's the tour",
-          description: "Look around as long as you like. <b>Take the tour</b> at the top shows it again.",
-        },
-      });
+    // The dashboard is the visitor's to explore; the way to the review page comes later (the nudge).
+    steps.push({
+      popover: {
+        title: "Now it's yours",
+        description: "Look around as long as you like: switch the Reports tabs, or turn the boxes off on the video. <b>Take the tour</b> at the top shows this again.",
+      },
+    });
     return steps;
   }
 
-  async function startHome() {
-    run(homeSteps(await canReview()));
+  function startHome() {
+    run(homeSteps(), scheduleNudge);
   }
 
   // ---- the review page -------------------------------------------------------------
@@ -169,11 +167,11 @@
     return [
       {
         popover: {
-          title: "Help the AI learn fish",
-          description: "You'll see a photo from the camera, with boxes around what the AI thinks are fish. Your job is to say what each one is, or that you can't tell. "
+          title: "How experts check the AI",
+          description: "This is the page our experts and volunteers use to check the AI's work. Each photo from the camera has boxes around what the AI thinks are fish; for each one they confirm it, correct it, or say they can't tell. Try it yourself: "
             + (DEMO_COPY
-              ? "This is a demo copy of the site, so your answers never reach the real data."
-              : "Your answers are saved and help train the next version of the AI."),
+              ? "this is a demo copy of the site, so your answers never reach the real data."
+              : "your answers are saved and help train the next version of the AI."),
         },
       },
       {
@@ -227,6 +225,57 @@
 
   // ---- booth mode ------------------------------------------------------------------
 
+  function seen(key) {
+    try { return window.sessionStorage.getItem(key) === "1"; } catch (err) { return false; }
+  }
+
+  function remember(key) {
+    try { window.sessionStorage.setItem(key, "1"); } catch (err) { /* asked again next time */ }
+  }
+
+  // The nudge: a card under the review button, no overlay and no focus taken, so the dashboard stays the
+  // visitor's. Shown once per visitor, NUDGE_DELAY_MS after the tour ends or the welcome card is closed,
+  // only where the review button is (booth mode, an account that can review).
+  let nudgeTimer = null;
+
+  function scheduleNudge() {
+    if (!BOOTH || REVIEW_PAGE || seen(NUDGED)) return;
+    window.clearTimeout(nudgeTimer);
+    nudgeTimer = window.setTimeout(showNudge, NUDGE_DELAY_MS);
+  }
+
+  function showNudge() {
+    if (active) { nudgeTimer = window.setTimeout(showNudge, 5000); return; }   // a tour restarted: after it
+    const link = document.getElementById("tour-review-link");
+    if (!link || seen(NUDGED) || document.querySelector(".wb-nudge")) return;
+    const card = document.createElement("div");
+    card.className = "wb-nudge";
+    card.setAttribute("role", "status");
+    card.innerHTML = `
+      <p>Want to see how our experts confirm that the AI is correctly labeling our fish?</p>
+      <div class="wb-nudge-actions">
+        <a class="wb-nudge-go" href="${reviewUrl}">Show me →</a>
+        <button type="button" class="wb-nudge-close">Not now</button>
+      </div>`;
+    const done = () => {
+      remember(NUDGED);
+      card.remove();
+      link.classList.remove("wb-pulse");
+    };
+    card.querySelector(".wb-nudge-go").addEventListener("click", done);
+    card.querySelector(".wb-nudge-close").addEventListener("click", done);
+    link.classList.add("wb-pulse");
+    link.parentElement.append(card);
+    // On a narrow screen the button sits far right of where a card this wide fits: slide the card back
+    // onto the screen and keep its arrow under the button.
+    const box = card.getBoundingClientRect();
+    const shift = Math.min(box.right - (window.innerWidth - 12), box.left - 12);
+    if (shift > 0) {
+      card.style.left = `${-shift}px`;
+      card.style.setProperty("--wb-arrow", `${28 + shift}px`);
+    }
+  }
+
   function welcomeCard() {
     const card = document.createElement("div");
     card.className = "wb-welcome";
@@ -247,8 +296,8 @@
       try { window.sessionStorage.setItem(WELCOMED, "1"); } catch (err) { /* shown again next time */ }
     };
     card.querySelector(".wb-go").addEventListener("click", () => { close(); startHome(); });
-    card.querySelector(".wb-look").addEventListener("click", close);
-    card.addEventListener("click", (ev) => { if (ev.target === card) close(); });
+    card.querySelector(".wb-look").addEventListener("click", () => { close(); scheduleNudge(); });
+    card.addEventListener("click", (ev) => { if (ev.target === card) { close(); scheduleNudge(); } });
     document.body.append(card);
     card.querySelector(".wb-go").focus({ preventScroll: true });
   }
@@ -271,7 +320,10 @@
     window.setInterval(() => {
       if (touched && Date.now() - last > BOOTH_IDLE_MS) {
         if (active) active.destroy();
-        try { window.sessionStorage.removeItem(WELCOMED); } catch (err) { /* nothing to clear */ }
+        try {
+          window.sessionStorage.removeItem(WELCOMED);
+          window.sessionStorage.removeItem(NUDGED);
+        } catch (err) { /* nothing to clear */ }
         window.location.href = "/";   // the home page, with the welcome card, for the next visitor
         return;
       }
@@ -297,7 +349,16 @@
     let welcomed = false;
     try { welcomed = window.sessionStorage.getItem(WELCOMED) === "1"; } catch (err) { /* show it */ }
     if (!welcomed) welcomeCard();
-    if (tools && await canReview()) tools.append(boothLink(reviewUrl, "Try reviewing →"));
+    if (tools && await canReview()) {
+      const wrap = document.createElement("span");
+      wrap.className = "tour-review";
+      const link = boothLink(reviewUrl, "Try reviewing →");
+      link.id = "tour-review-link";
+      link.classList.add("tour-review-link");
+      link.addEventListener("click", () => remember(NUDGED));
+      wrap.append(link);
+      tools.append(wrap);
+    }
   }
 
   // ---- start -----------------------------------------------------------------------
