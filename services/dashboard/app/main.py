@@ -64,7 +64,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .alerts import SLO_RULES
 from .common_names import common as common_name
 from .common_names import reload_manifest_names
-from .config import autoplay_embed, settings
+from .config import autoplay_embed, replay_conf_path, replay_key, settings
 from .detection_images import annotate_frame, crop_roi, resize_frame
 from .exports import (
     export_alerts,
@@ -156,6 +156,9 @@ class DashboardCfg:
         self.stream_base_url = _env("STREAM_BASE_URL", "/api").rstrip("/") or "/api"
         # Empty = the MJPEG <img> above; set (e.g. /hls on AWS) and the page plays HLS through hls.js.
         self.live_hls_base_url = _env("LIVE_HLS_BASE_URL", "").rstrip("/")
+        # Replay (README "Replay"): while the GPU host plays a recording in the camera's place for this
+        # environment (ENV, from the stack), the page says so instead of "Live". Same file the host reads.
+        self.replaying = bool(replay_key(_env("ENV", "").strip(), replay_conf_path()))
         # Pier-cam worker — same code, different camera + GPU. Optional; if
         # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
         # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
@@ -702,6 +705,7 @@ def build_app() -> FastAPI:
                 "live_video_embed_url": autoplay_embed(cfg.live_video_embed_url),
                 "stream_base": cfg.stream_base_url,
                 "hls_base": cfg.live_hls_base_url,
+                "replaying": cfg.replaying,
                 "asset_version": _asset_version(),
                 "deployment": cfg.deployment_uri,
             },
