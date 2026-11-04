@@ -798,6 +798,32 @@ tests.
 
 ---
 
+## Guided tours and booth mode
+
+Both pages have a **Take the tour** button (`static/tour.js`, drawn by the vendored driver.js): six steps on
+the home page for a first-time visitor (the camera, what it sees now, who lives here, the named regulars, the
+water, "your turn"), six on `/review` for a first-time reviewer (pick a box, is the AI right, can't identify
+or no animal, next frame, your count). The home tour's last step opens `/review?tour=review` for reviewers.
+
+**Booth mode** is for a browser at an event where visitors try the site on their own. Sign that browser in to
+a **reviewer** account (never an admin one: a visitor could reach the accounts page), then open any page
+with `?booth=1` once; the browser remembers it, and `?booth=0` turns it off. In booth mode:
+
+- the home page opens with a welcome card ("Start the tour" / "or just look around"), once per visitor;
+- 90 seconds without a touch after someone has used it sends the browser back to the home page and the card;
+- the video never takes app.js's four-hour "still watching?" stop;
+- the frame-rate numbers, the operators' alerts, "Input drift", the account chip (and its sign-out) and the
+  theme picker are hidden, and on `/review` so are Browse, the date window, drawing, single boxes and the
+  keyboard hints; the review page always opens on whole frames;
+- on staging (`ENV=staging`) the review page says its answers never reach the real data: staging's database
+  is its own, and only production's answers train the AI.
+
+While `deploy/gpu-host/replay.conf` names a recording for the environment, the page and the tours say so
+(historical footage, the pier) instead of "live". A replaying environment records nothing, so its 24-hour
+panels empty a day after the recording starts; the home tour uses the Reports panel over 7 days.
+
+---
+
 ## Common issues
 
 ### "Can't reach the dashboard from my laptop"

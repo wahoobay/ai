@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-palette="blue" data-mode="light" data-tz="{{ tz }}">
+<html lang="en" data-palette="blue" data-mode="light" data-tz="{{ tz }}" data-env="{{ env_name }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,11 +7,15 @@
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/static/review.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/static/theme.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/vendor/driver.css?v=1.10.2">
+  <link rel="stylesheet" href="/static/tour.css?v={{ asset_version }}">
   <script src="/static/theme.js?v={{ asset_version }}"></script>
+  <script src="/static/booth.js?v={{ asset_version }}"></script>
 </head>
 <body class="rv-page" data-role="{{ role }}" data-display-name="{{ display_name }}">
   <header class="rv-top">
     <span class="rv-brand">Wahoo Bay · Review</span>
+    <span id="tour-tools" class="tour-tools"><button id="tour-start" class="tour-start" type="button" hidden>Take the tour</button></span>
     <nav id="rv-nav" class="rv-tabs" aria-label="Review views">
       <button type="button" data-lane="check">Check the model's guesses</button>
       <button type="button" data-lane="identify">Identify new fish</button>
@@ -39,5 +43,7 @@
   <script src="/static/review-single.js?v={{ asset_version }}"></script>
   <script src="/static/review-frame.js?v={{ asset_version }}"></script>
   <script src="/static/review-browse.js?v={{ asset_version }}"></script>
+  <script src="/static/vendor/driver.js.iife.js?v=1.10.2"></script>
+  <script src="/static/tour.js?v={{ asset_version }}"></script>
 </body>
 </html>

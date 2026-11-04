@@ -29,6 +29,10 @@ COPY services/dashboard/app /app/app
 # Schema migrations: `python -m app.migrate` (and the migrate Lambda) run them.
 COPY db /app/db
 
+# Whether the GPU host plays a recording in this environment's camera place (README "Replay"): the page
+# says "historical footage" instead of "Live" then (config.replay_key, ENV from the stack).
+COPY deploy/gpu-host/replay.conf /app/deploy/gpu-host/replay.conf
+
 # Catalogues the page and the review tool read: species sheet, celebrities, taxonomy.
 COPY assets /app/assets
 

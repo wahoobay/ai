@@ -32,7 +32,9 @@ header {
   border-bottom: 1px solid #1f3b4f;
 }
 
+.header-title { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; }
 header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
+header h1 .h1-note { margin-left: 8px; font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
 
 .stats { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; min-width: 0; }
 .stats span { white-space: nowrap; }
@@ -527,6 +529,7 @@ li.empty { color: var(--muted); font-style: italic; }
   main { grid-template-columns: 1fr; padding: 12px 14px; gap: 10px; }
   header { padding: 10px 14px; flex-wrap: wrap; gap: 6px; }
   header h1 { font-size: 16px; }
+  header h1 .h1-note { display: block; margin: 2px 0 0; font-size: 13px; }
   .stats { font-size: 11px; gap: 10px; }
   .current, .side-col section { padding: 10px 12px; }
 

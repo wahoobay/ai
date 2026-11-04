@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote
 
 
@@ -76,6 +77,36 @@ def settings(env: Mapping[str, str] = os.environ) -> Settings:
         export_prefix=env.get("EXPORT_PREFIX", "").strip() or site,
         database_url=database_url_from_env(env),
     )
+
+
+def replay_conf_path(env: Mapping[str, str] = os.environ, app_dir: Path | None = None) -> Path:
+    """deploy/gpu-host/replay.conf: the image copies it to /app/deploy/gpu-host/ (the app is /app/app), a
+    checkout has it at the repository root (the app is services/dashboard/app). REPLAY_CONF overrides both."""
+    explicit = env.get("REPLAY_CONF", "").strip()
+    if explicit:
+        return Path(explicit)
+    here = app_dir or Path(__file__).resolve().parent
+    # A slice, not parents[2]: /app/app has only two parents.
+    roots = (here.parent, *here.parents[2:3])
+    candidates = [root / "deploy" / "gpu-host" / "replay.conf" for root in roots]
+    return next((p for p in candidates if p.is_file()), candidates[0])
+
+
+def replay_key(env_name: str, path: Path) -> str:
+    """The recording replay.conf names for this environment, or "" when the camera plays: the GPU host's
+    own reading (boot.sh), the last `<env>=` line with its whitespace removed. No environment name (the
+    DGX, a laptop) or no file means the camera."""
+    if not env_name:
+        return ""
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return ""
+    found = ""
+    for line in lines:
+        if line.startswith(f"{env_name}="):
+            found = "".join(line[len(env_name) + 1 :].split())
+    return found
 
 
 def autoplay_embed(url: str) -> str:
