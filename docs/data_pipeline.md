@@ -43,6 +43,13 @@ For every frame, the live MJPEG stream is updated (annotated and raw
 versions both encoded and published). The smoother updates its tracks
 and produces the smoothed bboxes used for the live overlay.
 
+With `PERSIST_ENABLED=false` none of the four destinations is written
+(the worker does not even connect to Postgres) while the detector, the
+classifier, the smoother and the live stream run as usual. The GPU host
+sets it while a recording plays in the camera's place
+(`deploy/gpu-host/README.md`, "Replay"): a recording's fish are not
+today's fish.
+
 ### Where the negative-regions filter sits
 
 Detections suppressed by `NegativeRegionFilter` (matched a reef-hole

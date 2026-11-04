@@ -93,8 +93,8 @@ class WorkerApp:
 
         # PTZ poller is the only thing in the parent process that talks to
         # Postgres. The inference subprocess has its own pg connection for
-        # detection events, frame_stats, and saved_frames.
-        if cfg.ptz_poll_enabled:
+        # detection events, frame_stats, and saved_frames. Neither writes with PERSIST_ENABLED=false.
+        if cfg.ptz_poll_enabled and cfg.persist_enabled:
             try:
                 provenance = compute_provenance(cfg)
                 self._ptz_pg = PgWriter(

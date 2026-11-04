@@ -119,6 +119,7 @@ class Config:
     classifier_autocast: str
 
     # persistence
+    persist_enabled: bool  # false: detections are drawn on the live stream, never recorded (a replayed recording)
     database_url: str
     events_log_dir: str
     frames_dir: str  # legacy spelling; frames_url is what the saver uses
@@ -212,6 +213,7 @@ class Config:
             min_accept_accuracy=_float("MIN_ACCEPT_ACCURACY", 0.0),
             min_classify_det_conf=_float("MIN_CLASSIFY_DET_CONF", 0.40),
             classifier_autocast=_str("CLASSIFIER_AUTOCAST", "bfloat16"),
+            persist_enabled=_bool("PERSIST_ENABLED", True),
             database_url=database_url_from_env(),
             events_log_dir=_str("EVENTS_LOG_DIR", "/data/logs/events"),
             frames_dir=_str("FRAMES_DIR", "/data/frames"),

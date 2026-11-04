@@ -186,11 +186,16 @@ def run_inference_worker(
     saver = ImageSaver(cfg)
 
     pg: PgWriter | None = None
-    try:
-        pg = PgWriter(cfg.database_url, provenance=provenance, location_id=cfg.location_id)
-        log.info("inference subprocess: postgres connected")
-    except Exception as e:
-        log.warning("postgres unavailable in inference subprocess (%s); jsonl-only", e)
+    if not cfg.persist_enabled:
+        # A recording plays in the camera's place (deploy/gpu-host/replay.conf): its fish are drawn on the live
+        # stream, never recorded as today's (no database rows, no event log, no saved frames).
+        log.info("inference subprocess: PERSIST_ENABLED=false; detections are drawn, not recorded")
+    else:
+        try:
+            pg = PgWriter(cfg.database_url, provenance=provenance, location_id=cfg.location_id)
+            log.info("inference subprocess: postgres connected")
+        except Exception as e:
+            log.warning("postgres unavailable in inference subprocess (%s); jsonl-only", e)
 
     smoother: DetectionSmoother | None = None
     if cfg.tracker_enabled:
@@ -336,7 +341,7 @@ def run_inference_worker(
                     track_ids = [None] * len(detections)
 
                 # Persist raw events tagged with their track ids
-                if detections:
+                if detections and cfg.persist_enabled:
                     prov_dict = provenance.as_dict() if provenance else {}
                     for d, tid in zip(detections, track_ids, strict=False):
                         rec = {
@@ -361,8 +366,9 @@ def run_inference_worker(
                         except Exception:
                             log.exception("pg: detection insert failed (will retry)")
 
-                # Sub-sampled frame stats for drift monitoring
-                if item.frame_id % max(1, cfg.frame_stats_every_n_frames) == 0:
+                # Sub-sampled frame stats for drift monitoring. Only with a database to flush them to: without
+                # one the buffer would only grow.
+                if pg and item.frame_id % max(1, cfg.frame_stats_every_n_frames) == 0:
                     small = cv2.resize(frame_bgr, (160, 90), interpolation=cv2.INTER_AREA)
                     b, g, r = small[..., 0], small[..., 1], small[..., 2]
                     luma = 0.114 * b + 0.587 * g + 0.299 * r
@@ -392,15 +398,19 @@ def run_inference_worker(
                 # materialises — most frames don't trigger a save, so
                 # the common path stays zero-copy.
                 annotated = annotate(frame_bgr, display) if display else frame_bgr
-                job = saver.maybe_save(
-                    frame_bgr=frame_bgr,
-                    annotated_bgr=annotated,
-                    detections=detections,
-                    frame_id=item.frame_id,
-                    ts=item.ts,
-                    source_name=item.source_name,
-                    now_mono=time.monotonic(),
-                    track_ids=track_ids,
+                job = (
+                    saver.maybe_save(
+                        frame_bgr=frame_bgr,
+                        annotated_bgr=annotated,
+                        detections=detections,
+                        frame_id=item.frame_id,
+                        ts=item.ts,
+                        source_name=item.source_name,
+                        now_mono=time.monotonic(),
+                        track_ids=track_ids,
+                    )
+                    if cfg.persist_enabled
+                    else None
                 )
                 if job is not None:
                     # The save-worker thread writes after the slot is

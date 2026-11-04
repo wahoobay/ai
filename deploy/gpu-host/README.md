@@ -13,6 +13,7 @@ proxy CloudFront reaches. The design is the infra repository's
 | `mediamtx.yml` | MediaMTX: RTSP and HLS settings and the two paths (below) |
 | `boot.sh` | Reads `/etc/wahoobay/host.env` (written by the stack) and three secrets, writes `.env` (mode 600), ECR login, `compose up`, waits for `/healthz` |
 | `update.sh <ref>` | `git checkout <ref>` then `boot.sh`; what `scripts/deploy_env.sh` runs here through SSM |
+| `replay.conf` | Per environment, the recording that plays in the camera's place, or nothing for the camera ("Replay" below) |
 | `wahoobay-gpu-host.service` | systemd unit: `boot.sh` at every boot, retried on failure |
 
 | Service | Ports | Reached by |
@@ -21,8 +22,9 @@ proxy CloudFront reaches. The design is the infra repository's
 | `worker` | 8081 | the dashboard, the Lambdas and Caddy (security group) |
 | `encoder` | none | publishes to `mediamtx` (RTSP over TCP); reads the worker on 8081 |
 | `caddy` | 8080 | CloudFront's origin on the host |
+| `replay` | none | only while `replay.conf` names a recording: publishes it to `mediamtx` as `seahive` |
 
-The camera is pulled once, by MediaMTX (path `seahive`, source from `CAMERA_SEAHIVE_URL` in `.env`). The worker
+The camera is pulled once, by MediaMTX (path `seahive`, source from `SEAHIVE_SOURCE` in `.env`). The worker
 reads `rtsp://mediamtx:8554/seahive` and nothing else. The path `seahive_boxes` is published by the encoder.
 Viewers fetch plain HLS at `/hls/<path>/index.m3u8` (through CloudFront and Caddy). `boot.sh` ends with an
 `hls: <path> ready` or `hls: <path> not yet` line per path (ready means a 200), and `hls: seahive_boxes
@@ -64,6 +66,37 @@ follows it, so an IDR still comes every second, which divides any whole-second s
 15, so probe another value on the host before using it), `ENCODER_BITRATE` (`3000k`), `ENCODER_MAXRATE` (`4000k`), `ENCODER_BUFSIZE`
 (`8000k`), `WORKER_URL` (`http://worker:8081`), `MEDIAMTX_RTSP` (`rtsp://mediamtx:8554`). `ENCODER_ONCE=1` is a
 test hook; compose never sets it.
+
+## Replay
+
+An environment can show a recording instead of the camera. `replay.conf` names, per environment, an MP4 in the
+models bucket (`platform-wahoobay-models`, under `replay/`); empty means the camera. With a recording named,
+`boot.sh` fetches it to `/opt/wahoobay-data/replay/` (once: a recording keeps its name for life, and a new one
+gets a new key), writes `SEAHIVE_SOURCE=publisher`, `COMPOSE_PROFILES=replay` and `PERSIST_ENABLED=false` into
+`.env`, and the `replay` service (ffmpeg, `-re -stream_loop -1 -c copy`) publishes the file to the `seahive`
+path, looped, at its own pace. Everything downstream is unchanged: the worker detects and the encoder burns
+in the boxes, and both variants reach CloudFront as usual. The worker records nothing (no detections, frame stats,
+saved frames or event log), because a recording's fish are not today's fish. The pages still say Live (Dan's choice,
+2026-11-04). A recording that cannot be fetched fails the boot before anything changes, so the running stack stays
+as it was. Emptying the line puts the camera back: MediaMTX pulls it again, and `boot.sh` removes the replay
+container (Compose leaves a running service of an inactive profile alone, even with `--remove-orphans`).
+
+The file should have the camera's shape, so the worker, the HLS segmenter and the 2 s segments behave as they do
+live: H.264, 1280×720, 15 fps, no B-frames, an IDR every second, no audio. To make one from a Spot AI export
+(`-ss` is the offset of the hour wanted within the export), with the replay service's own image:
+
+```sh
+docker run --rm --platform linux/amd64 -v "$PWD":/w -w /w jrottenberg/ffmpeg:7.1.2-ubuntu2404 \
+  -ss 00:00:00 -i spot-export.mp4 -t 3600 -an -vf "scale=1280:720,fps=15" \
+  -c:v libx264 -preset medium -crf 23 -maxrate 2000k -bufsize 4000k \
+  -g 15 -keyint_min 15 -sc_threshold 0 -bf 0 -pix_fmt yuv420p -movflags +faststart seahive-2026-09-01.mp4
+aws s3 cp seahive-2026-09-01.mp4 s3://platform-wahoobay-models/replay/seahive-2026-09-01.mp4
+```
+
+Upload first, then merge the `replay.conf` change; the deploy then runs `boot.sh`. While a recording plays, the
+alert rules `pipeline_silence` and `frame_stats_stalled` fire on the dashboard, because nothing is written for them
+to read. They send no mail and resolve once the camera is back. The loop's seam (the file's last frame jumping to its
+first) shows once per loop; a recording that starts and ends on a quiet reef hides it.
 
 ## Segment length: the streaming-cost knob
 
