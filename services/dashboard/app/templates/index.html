@@ -1,17 +1,23 @@
 <!doctype html>
-<html lang="en" data-tz="{{ tz }}" data-review-tool="{{ 'true' if feature_review_tool else 'false' }}" data-stream-base="{{ stream_base }}" data-hls-base="{{ hls_base }}">
+<html lang="en" data-tz="{{ tz }}" data-review-tool="{{ 'true' if feature_review_tool else 'false' }}" data-stream-base="{{ stream_base }}" data-hls-base="{{ hls_base }}" data-replaying="{{ 'true' if replaying else 'false' }}" data-env="{{ env_name }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wahoo Bay · {{ 'Fish ID' if replaying else 'Live Fish ID' }}</title>
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/vendor/driver.css?v=1.10.2">
+  <link rel="stylesheet" href="/static/tour.css?v={{ asset_version }}">
+  <script src="/static/booth.js?v={{ asset_version }}"></script>
   <!-- Leaflet (OpenStreetMap tiles) for the Reports → Overview monitoring map -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
 </head>
 <body>
   <header>
+    <div class="header-title">
     {% if replaying %}<h1>Wahoo Bay · Fish ID <span class="h1-note">Live detections and tracking from historical footage</span></h1>{% else %}<h1>Wahoo Bay · Live Fish ID</h1>{% endif %}
+    <span id="tour-tools" class="tour-tools"><button id="tour-start" class="tour-start" type="button" hidden>Take the tour</button></span>
+    </div>
     <div id="stats" class="stats">
       <span id="stat-frames">frames: —</span>
       <span id="stat-fps">fps: —</span>
@@ -34,7 +40,7 @@
         <img id="stream" src="{{ stream_base }}/stream.mjpeg" alt="{{ 'historical footage' if replaying else 'live stream' }}">
         {% endif %}
         <div id="camera-toggle" class="camera-toggle" title="Switch camera">
-          <button class="cam-btn active" data-cam="seahivecam">🪸 SeaHIVE</button>
+          <button class="cam-btn active" data-cam="seahivecam">{{ '🌊 Pier, 2024' if replaying else '🪸 SeaHIVE' }}</button>
           <button class="cam-btn"        data-cam="pier_cam">🌊 Pier</button>
         </div>
         <button id="bbox-toggle" class="stream-overlay-btn" title="Toggle bounding boxes">🟦 boxes: on</button>
@@ -612,6 +618,8 @@
   <script src="/static/time-et.js?v={{ asset_version }}" defer></script>
   {% if hls_base %}<script src="/static/vendor/hls.min.js?v=1.6.16"></script>{% endif %}
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
+  <script src="/static/vendor/driver.js.iife.js?v=1.10.2" defer></script>
+  <script src="/static/tour.js?v={{ asset_version }}" defer></script>
   <script src="/static/auth.js?v={{ asset_version }}"></script>
 </body>
 </html>

@@ -110,6 +110,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             {
                 "display_name": user.display_name,
                 "role": effective_role(user.status, user.role),
+                "env_name": cfg.env_name,
                 "asset_version": version() if version else "",
             },
         )

@@ -32,6 +32,7 @@ header {
   border-bottom: 1px solid #1f3b4f;
 }
 
+.header-title { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; }
 header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
 header h1 .h1-note { margin-left: 8px; font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
 

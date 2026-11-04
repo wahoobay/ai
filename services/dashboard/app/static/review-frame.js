@@ -463,11 +463,11 @@ RV.views.frame = (() => {
   function render() {
     root().replaceChildren(
       RV.el("div", { class: "rv-frame-top" },
-        RV.el("button", { type: "button", class: "rv-link", onclick: toSingle },
+        RV.el("button", { type: "button", class: "rv-link rv-to-single", onclick: toSingle },
           "Single boxes ", kbd("F")),
-        RV.el("button", { type: "button", onclick: nextFrame }, "Next frame ", kbd("S")),
+        RV.el("button", { type: "button", class: "rv-next-frame", onclick: nextFrame }, "Next frame ", kbd("S")),
         RV.el("span", { class: "rv-muted", text: `${state.source_name} · ${RV.fmtTime(state.ts)}` }),
-        RV.el("button", { type: "button", class: drawing ? "on" : "",
+        RV.el("button", { type: "button", class: drawing ? "rv-draw on" : "rv-draw",
           disabled: Boolean(state.complete) && RV.role !== "admin", onclick: toggleDraw },
           drawing ? "Drawing: drag on the frame (Esc to cancel) " : "Draw a box ", kbd("D"))),
       RV.el("div", { class: "rv-layout rv-layout-frame" },

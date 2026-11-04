@@ -158,7 +158,9 @@ class DashboardCfg:
         self.live_hls_base_url = _env("LIVE_HLS_BASE_URL", "").rstrip("/")
         # Replay (README "Replay"): while the GPU host plays a recording in the camera's place for this
         # environment (ENV, from the stack), the page says so instead of "Live". Same file the host reads.
-        self.replaying = bool(replay_key(_env("ENV", "").strip(), replay_conf_path()))
+        # The stack's environment (staging, prod); empty off AWS (the DGX, a laptop).
+        self.env_name = _env("ENV", "").strip()
+        self.replaying = bool(replay_key(self.env_name, replay_conf_path()))
         # Pier-cam worker — same code, different camera + GPU. Optional; if
         # WORKER_URL_PIER is empty the dashboard's /api/stream_pier.mjpeg
         # etc. return 503 and the camera-toggle UI falls back to SEAHIVECAM.
@@ -683,6 +685,9 @@ def build_app() -> FastAPI:
             BASE_DIR / "templates" / "review.html",
             BASE_DIR / "static" / "theme.css",
             BASE_DIR / "static" / "theme.js",
+            BASE_DIR / "static" / "booth.js",
+            BASE_DIR / "static" / "tour.js",
+            BASE_DIR / "static" / "tour.css",
         ):
             try:
                 h.update(str(p.stat().st_mtime_ns).encode())
@@ -706,6 +711,7 @@ def build_app() -> FastAPI:
                 "stream_base": cfg.stream_base_url,
                 "hls_base": cfg.live_hls_base_url,
                 "replaying": cfg.replaying,
+                "env_name": cfg.env_name,
                 "asset_version": _asset_version(),
                 "deployment": cfg.deployment_uri,
             },
