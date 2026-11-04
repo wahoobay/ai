@@ -337,7 +337,6 @@
     idleReset();
     const tools = document.getElementById("tour-tools");
     if (REVIEW_PAGE) {
-      if (tools) tools.prepend(boothLink("/", "← Back to the camera"));
       if (DEMO_COPY) {
         const note = document.createElement("div");
         note.className = "wb-demo-note";
