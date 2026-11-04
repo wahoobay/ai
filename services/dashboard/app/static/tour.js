@@ -335,7 +335,6 @@
 
   async function booth() {
     idleReset();
-    const tools = document.getElementById("tour-tools");
     if (REVIEW_PAGE) {
       if (DEMO_COPY) {
         const note = document.createElement("div");
@@ -348,16 +347,21 @@
     let welcomed = false;
     try { welcomed = window.sessionStorage.getItem(WELCOMED) === "1"; } catch (err) { /* show it */ }
     if (!welcomed) welcomeCard();
-    if (tools && await canReview()) {
-      const wrap = document.createElement("span");
-      wrap.className = "tour-review";
-      const link = boothLink(reviewUrl, "Try reviewing →");
-      link.id = "tour-review-link";
-      link.classList.add("tour-review-link");
-      link.addEventListener("click", () => remember(NUDGED));
-      wrap.append(link);
-      tools.append(wrap);
-    }
+  }
+
+  // The way to the review page, beside "Take the tour" on the home page, for every account that can review
+  // (booth mode's nudge points at it).
+  async function reviewButton() {
+    const tools = document.getElementById("tour-tools");
+    if (!tools || !(await canReview())) return;
+    const wrap = document.createElement("span");
+    wrap.className = "tour-review";
+    const link = boothLink(reviewUrl, "Try reviewing →");
+    link.id = "tour-review-link";
+    link.classList.add("tour-review-link");
+    link.addEventListener("click", () => remember(NUDGED));
+    wrap.append(link);
+    tools.append(wrap);
   }
 
   // ---- start -----------------------------------------------------------------------
@@ -367,6 +371,7 @@
     button.hidden = false;
     button.addEventListener("click", () => (REVIEW_PAGE ? startReview() : startHome()));
   }
+  if (!REVIEW_PAGE) reviewButton();
   if (BOOTH) booth();
   if (REVIEW_PAGE && new URLSearchParams(window.location.search).get("tour") === "review") {
     window.history.replaceState(null, "", "/review");
