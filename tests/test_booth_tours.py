@@ -228,3 +228,18 @@ def test_the_title_and_the_tour_buttons_share_the_header_line():
     assert '<p class="header-note">Live detections and tracking from historical footage</p>' in html
     css = (STATIC / "style.css").read_text()
     assert ".header-line .tour-tools { flex: 1 1 0; min-width: 0; }" in css
+
+
+def test_a_step_whose_element_the_page_redraws_is_shown_again():
+    """renderCelebritiesTab (and the review panel) replace what a step points at; the tour must not keep
+    measuring the replaced element (its card jumped to the top-left corner, 2026-11-04)."""
+    js = (STATIC / "tour.js").read_text()
+    assert "!el.isConnected" in js and "d.moveTo(d.getActiveIndex())" in js
+    assert (
+        "watch = window.setInterval(() => { if (active) rehighlightIfReplaced(active); }, 500);"
+        in js
+    )
+    assert "if (!rehighlightIfReplaced(opts.driver)) opts.driver.refresh();" in js
+    assert (
+        "grid.innerHTML = " in (STATIC / "app.js").read_text()
+    )  # why: the grid is rebuilt, not updated
