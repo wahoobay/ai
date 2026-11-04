@@ -32,11 +32,17 @@ header {
   border-bottom: 1px solid #1f3b4f;
 }
 
-.header-title { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; }
+/* The tree beside two lines: the title with the tour buttons on the first, the replay note under them, so
+   the note never pushes the buttons onto a line of their own. */
+.header-title { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; min-width: 0; }
+.header-line { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; min-width: 0; }
+/* The buttons share the title's line and wrap among themselves (a phone keeps "Take the tour" beside the title). */
+.header-line h1 { flex: none; }
+.header-line .tour-tools { flex: 1 1 0; min-width: 0; }
+.header-note { grid-column: 2; margin: 2px 0 0; font-size: 14px; color: var(--muted); }
 /* The Wahoo Bay tree, white on the dark header, just before the title (decorative: the title names it). */
-.brand-mark { display: block; flex: none; width: 40px; height: 40px; margin-right: -6px; }
+.brand-mark { display: block; grid-row: 1 / span 2; width: 40px; height: 40px; }
 header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
-header h1 .h1-note { margin-left: 8px; font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
 
 .stats { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; min-width: 0; }
 .stats span { white-space: nowrap; }
@@ -532,7 +538,7 @@ li.empty { color: var(--muted); font-style: italic; }
   header { padding: 10px 14px; flex-wrap: wrap; gap: 6px; }
   header h1 { font-size: 16px; }
   .brand-mark { width: 32px; height: 32px; }
-  header h1 .h1-note { display: block; margin: 2px 0 0; font-size: 13px; }
+  .header-note { font-size: 13px; }
   .stats { font-size: 11px; gap: 10px; }
   .current, .side-col section { padding: 10px 12px; }
 

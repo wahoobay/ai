@@ -62,6 +62,8 @@ html:has(> body.driver-active), body.driver-active { overflow-x: clip; }
 /* Booth mode, the home page: the way to the review page, and the nudge that points at it after a visitor
    has had time on the dashboard. No overlay: the card covers only itself. */
 .tour-review { position: relative; display: inline-flex; }
+/* One way to the review page: the account chip's own "Review fish →" (auth.js) steps aside for it. */
+body:has(#tour-review-link) #identity-chip .chip-review { display: none; }
 .tour-link.tour-review-link {
   padding: 0 16px; border: 2px solid #4fc1ff; border-radius: 999px; color: #e8f1f8; text-decoration: none;
 }

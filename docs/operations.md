@@ -811,8 +811,8 @@ a **reviewer** account (never an admin one: a visitor could reach the accounts p
 with `?booth=1` once; the browser remembers it, and `?booth=0` turns it off. In booth mode:
 
 - the home page opens with a welcome card ("Start the tour" / "or just look around"), once per visitor;
-- for an account that can review, a "Try reviewing →" button sits in the header; 30 seconds after the tour
-  ends (or the welcome card is closed) it lights up, with a card under it: "Want to see how our experts
+- the "Try reviewing →" button beside "Take the tour" (there for every account that can review, booth or
+  not) lights up 30 seconds after the tour ends (or the welcome card is closed), with a card under it: "Want to see how our experts
   confirm that the AI is correctly labeling our fish?" ("Show me →" opens `/review?tour=review`, "Not now"
   closes it). No overlay, once per visitor;
 - 90 seconds without a touch after someone has used it sends the browser back to the home page and the card;

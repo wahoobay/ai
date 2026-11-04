@@ -207,3 +207,24 @@ def test_the_vendored_driver_js_is_the_published_release():
     for name in ("driver.js.iife.js", "driver.css"):
         assert f"`{_sri(STATIC / 'vendor' / name)}`" in readme, name
     assert "Version: 1.10.2" in readme
+
+
+def test_the_review_button_is_there_for_every_reviewer_and_the_nudge_only_in_booth_mode():
+    js = (STATIC / "tour.js").read_text()
+    assert "  if (!REVIEW_PAGE) reviewButton();\n  if (BOOTH) booth();\n" in js
+    start = js.index("async function reviewButton()")
+    assert "BOOTH" not in js[start : js.index("\n  }\n", start)]
+    assert "if (!BOOTH || REVIEW_PAGE || seen(NUDGED)) return;" in js
+    css = (STATIC / "tour.css").read_text()
+    assert "body:has(#tour-review-link) #identity-chip .chip-review { display: none; }" in css
+    assert '"chip-review"' in (STATIC / "auth.js").read_text()
+
+
+def test_the_title_and_the_tour_buttons_share_the_header_line():
+    html = (APP / "templates" / "index.html").read_text()
+    line = html[html.index('<div class="header-line">') :]
+    line = line[: line.index("</div>")]
+    assert "<h1>" in line and 'id="tour-tools"' in line and "header-note" not in line
+    assert '<p class="header-note">Live detections and tracking from historical footage</p>' in html
+    css = (STATIC / "style.css").read_text()
+    assert ".header-line .tour-tools { flex: 1 1 0; min-width: 0; }" in css
