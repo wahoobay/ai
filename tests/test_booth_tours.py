@@ -95,6 +95,27 @@ def test_booth_mode_resets_to_the_welcome_card_and_keeps_the_video_playing():
     assert 'root.dataset.env === "staging"' in js
 
 
+def test_the_home_tour_leaves_the_visitor_on_the_dashboard_and_nudges_later():
+    """The home tour ends on the dashboard; the review page is offered by a card under the review button,
+    NUDGE_DELAY_MS after the tour or the welcome card, once per visitor, without an overlay."""
+    js = (STATIC / "tour.js").read_text()
+    css = (STATIC / "tour.css").read_text()
+    assert "Now it's yours" in js and "Your turn" not in js and "onDoneClick" not in js
+    assert "const NUDGE_DELAY_MS = 30 * 1000" in js
+    assert "Want to see how our experts confirm that the AI is correctly labeling our fish?" in js
+    assert "run(homeSteps(), scheduleNudge)" in js
+    assert 'addEventListener("click", () => { close(); scheduleNudge(); })' in js
+    assert "if (!BOOTH || REVIEW_PAGE || seen(NUDGED)) return;" in js
+    assert (
+        "window.sessionStorage.removeItem(NUDGED)" in js
+    )  # the reset offers it to the next visitor
+    assert 'link.classList.add("wb-pulse")' in js and ".tour-review-link.wb-pulse" in css
+    nudge = css[css.index(".wb-nudge {") :]
+    nudge = nudge[: nudge.index("}")]
+    assert "position: absolute" in nudge and "inset" not in nudge  # covers only itself
+    assert "prefers-reduced-motion" in css
+
+
 def test_every_element_a_tour_points_at_exists():
     js = (STATIC / "tour.js").read_text()
     home = (APP / "templates" / "index.html").read_text()
@@ -159,6 +180,9 @@ def test_every_element_a_tour_points_at_exists():
         ".rv-meta",
         ".wb-go",
         ".wb-look",
+        ".wb-nudge",
+        ".wb-nudge-go",
+        ".wb-nudge-close",
         ".rv-main",
     }
     assert selectors <= known, selectors - known

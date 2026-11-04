@@ -33,6 +33,8 @@ header {
 }
 
 .header-title { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; }
+/* The Wahoo Bay tree, white on the dark header, just before the title (decorative: the title names it). */
+.brand-mark { display: block; flex: none; width: 40px; height: 40px; margin-right: -6px; }
 header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
 header h1 .h1-note { margin-left: 8px; font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
 
@@ -529,6 +531,7 @@ li.empty { color: var(--muted); font-style: italic; }
   main { grid-template-columns: 1fr; padding: 12px 14px; gap: 10px; }
   header { padding: 10px 14px; flex-wrap: wrap; gap: 6px; }
   header h1 { font-size: 16px; }
+  .brand-mark { width: 32px; height: 32px; }
   header h1 .h1-note { display: block; margin: 2px 0 0; font-size: 13px; }
   .stats { font-size: 11px; gap: 10px; }
   .current, .side-col section { padding: 10px 12px; }

@@ -802,14 +802,19 @@ tests.
 
 Both pages have a **Take the tour** button (`static/tour.js`, drawn by the vendored driver.js): six steps on
 the home page for a first-time visitor (the camera, what it sees now, who lives here, the named regulars, the
-water, "your turn"), six on `/review` for a first-time reviewer (pick a box, is the AI right, can't identify
-or no animal, next frame, your count). The home tour's last step opens `/review?tour=review` for reviewers.
+water, then "now it's yours"), six on `/review` for a first-time reviewer (how experts check the AI, pick a
+box, is the AI right, can't identify or no animal, next frame, your count). The home tour leaves the visitor
+on the dashboard; it does not send anyone to the review page.
 
 **Booth mode** is for a browser at an event where visitors try the site on their own. Sign that browser in to
 a **reviewer** account (never an admin one: a visitor could reach the accounts page), then open any page
 with `?booth=1` once; the browser remembers it, and `?booth=0` turns it off. In booth mode:
 
 - the home page opens with a welcome card ("Start the tour" / "or just look around"), once per visitor;
+- for an account that can review, a "Try reviewing →" button sits in the header; 30 seconds after the tour
+  ends (or the welcome card is closed) it lights up, with a card under it: "Want to see how our experts
+  confirm that the AI is correctly labeling our fish?" ("Show me →" opens `/review?tour=review`, "Not now"
+  closes it). No overlay, once per visitor;
 - 90 seconds without a touch after someone has used it sends the browser back to the home page and the card;
 - the video never takes app.js's four-hour "still watching?" stop;
 - the frame-rate numbers, the operators' alerts, "Input drift", the account chip (and its sign-out) and the
