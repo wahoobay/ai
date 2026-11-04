@@ -338,6 +338,7 @@ documents every variable; these are the ones that make a deployment a site.
 | `MAIL_BACKEND` | `console` | `console` (the message, link included, goes to the log), `smtp` (`MAIL_SMTP_*`), `ses` (Amazon SES through the process's own AWS role; `MAIL_FROM` required; what AWS uses), `manual` (held) |
 | `ROBOTS` | `disallow` | `/robots.txt`; `allow` only on the public production site |
 | `ORIGIN_VERIFY_SECRET` | empty | Set behind CloudFront: requests must carry `X-Origin-Verify` |
+| `PERSIST_ENABLED` | `true` | The worker records what it sees (detections, frame stats, saved frames, the event log). `false`: detections are drawn on the live stream only; the GPU host sets it while a recording plays (`deploy/gpu-host/README.md` "Replay") |
 | `SENSESTREAM_SYNTHETIC` | `false` | Write synthetic readings when no live source answers (local demos only) |
 | `JOBS_INTERVAL_S` | `60` | `run_jobs.sh`'s cadence (bare metal) |
 | `EXPORT_PREFIX`, `CAMERA_METADATA_PATH`, `NEGATIVE_REGIONS_PATH` | `LOCATION_ID`, `/data/…` | Export file names; the two per-camera JSON files |

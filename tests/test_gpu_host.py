@@ -34,6 +34,9 @@ case "$1 $2" in
       *) echo "unknown secret $id" >&2; exit 1 ;;
     esac ;;
   "ecr get-login-password") echo token ;;
+  "s3 cp")  # a recording replay.conf names: FAKE_S3_MISSING=1 for an object that is not there
+    [ "${{FAKE_S3_MISSING:-0}}" = "1" ] && {{ echo "fatal error: An error occurred (404) when calling the HeadObject operation" >&2; exit 1; }}
+    echo "fake mp4" > "${{@: -1}}" ;;
   *) echo "unexpected: aws $*" >&2; exit 1 ;;
 esac
 """
@@ -96,6 +99,8 @@ def _machine(tmp_path: Path, reuse: bool = False) -> tuple[Path, Path, dict[str,
             (bindir / name).write_text(body)
             (bindir / name).chmod(0o755)
         (tmp_path / "host.env").write_text(HOST_ENV)
+        # The tests boot the live camera unless they name a recording; the committed file has its own test.
+        (checkout / "deploy" / "gpu-host" / "replay.conf").write_text("staging=\nprod=\n")
     log = tmp_path / "calls.log"
     log.write_text("")
     for stale in tmp_path.glob("calls.log.*"):
@@ -106,14 +111,17 @@ def _machine(tmp_path: Path, reuse: bool = False) -> tuple[Path, Path, dict[str,
         "FAKE_LOG": str(log),
         "WB_HOST_ENV": str(tmp_path / "host.env"),
         "WB_CHECKOUT": str(checkout),
+        "WB_DATA_DIR": str(tmp_path / "data"),
         "BOOT_HEALTH_TIMEOUT_S": "5",
         "BOOT_HEALTH_INTERVAL_S": "0",
     }
     return checkout, log, env
 
 
-def _boot(tmp_path: Path, reuse: bool = False, **extra: str):
+def _boot(tmp_path: Path, reuse: bool = False, replay_conf: str | None = None, **extra: str):
     checkout, log, env = _machine(tmp_path, reuse)
+    if replay_conf is not None:
+        (checkout / "deploy" / "gpu-host" / "replay.conf").write_text(replay_conf)
     proc = subprocess.run(
         ["bash", str(checkout / "deploy" / "gpu-host" / "boot.sh")],
         capture_output=True,
@@ -141,7 +149,7 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
     assert proc.returncode == 0, proc.stderr
     text = env_file.read_text()
     assert (
-        f"CAMERA_SEAHIVE_URL='{FAKE_CAMERA_URL}'" in text
+        f"SEAHIVE_SOURCE='{FAKE_CAMERA_URL}'" in text
     )  # single-quoted: compose must not interpolate a $ in a password
     env = dict(
         (k, v.strip("'"))
@@ -382,7 +390,8 @@ def test_compose_runs_the_built_worker_image_on_the_gpu_with_cloudwatch_logs(tmp
                 "WB_IMAGE_TAG": "staging",
                 "WB_LOG_GROUP": "g",
                 "WB_REGION": "us-east-1",
-                "CAMERA_SEAHIVE_URL": "rtsp://x",
+                "SEAHIVE_SOURCE": "rtsp://x",
+                "REPLAY_FILE": "r.mp4",
                 "HLS_CDN_SECRET": "cdn",
                 "ORIGIN_VERIFY_SECRET": "ov",
                 "ENCODER_SCRIPT_SHA": "abc",
@@ -497,6 +506,7 @@ def test_no_file_on_the_host_carries_the_camera_url():
         "encoder.sh",
         "boot.sh",
         "README.md",
+        "replay.conf",
     ):
         path = GPU_HOST / name
         if path.exists():
@@ -506,14 +516,14 @@ def test_no_file_on_the_host_carries_the_camera_url():
 def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env():
     text = (GPU_HOST / "docker-compose.yml").read_text()
     assert "bluenviron/mediamtx:1.21.3" in text
-    assert "MTX_PATHS_SEAHIVE_SOURCE: ${CAMERA_SEAHIVE_URL}" in text
+    assert "MTX_PATHS_SEAHIVE_SOURCE: ${SEAHIVE_SOURCE}" in text
     assert (
         '"8554:' not in text and '"8888:' not in text
     )  # reached only by the worker, the encoder and Caddy
     assert "./mediamtx.yml:/mediamtx.yml:ro" in text
     services = yaml.safe_load(text)["services"]
     assert services["mediamtx"]["environment"] == {
-        "MTX_PATHS_SEAHIVE_SOURCE": "${CAMERA_SEAHIVE_URL}",
+        "MTX_PATHS_SEAHIVE_SOURCE": "${SEAHIVE_SOURCE}",
         "MTX_HLSCDNSECRET": "${HLS_CDN_SECRET}",  # CDN mode: the bearer Caddy adds on /hls/*
     }
     assert services["mediamtx"]["labels"] == {
@@ -529,7 +539,7 @@ def test_compose_runs_mediamtx_on_the_internal_network_with_the_camera_from_env(
     assert caddy["labels"] == {"wahoobay.config": "${CADDYFILE_SHA}"}
     encoder = services["encoder"]
     assert "env_file" not in encoder
-    secrets = {"CAMERA_SEAHIVE_URL", "HLS_CDN_SECRET", "ORIGIN_VERIFY_SECRET", "DATABASE_URL"}
+    secrets = {"SEAHIVE_SOURCE", "HLS_CDN_SECRET", "ORIGIN_VERIFY_SECRET", "DATABASE_URL"}
     assert not secrets & set(encoder["environment"])
     assert encoder["environment"] == {"NVIDIA_DRIVER_CAPABILITIES": "compute,video,utility"}
     assert encoder["labels"] == {
@@ -542,9 +552,7 @@ def test_boot_points_the_worker_at_mediamtx_and_reads_only_from_it(tmp_path):
     assert proc.returncode == 0, proc.stderr
     env = env_file.read_text()
     assert "VIDEO_SOURCE='rtsp://mediamtx:8554/seahive'" in env
-    assert (
-        f"CAMERA_SEAHIVE_URL='{FAKE_CAMERA_URL}'" in env
-    )  # consumed only by compose, for MediaMTX
+    assert f"SEAHIVE_SOURCE='{FAKE_CAMERA_URL}'" in env  # consumed only by compose, for MediaMTX
     assert "FALLBACK_VIDEO_SOURCE=''" in env  # the worker never opens a second pull of the camera
     assert env.count(FAKE_CAMERA_URL) == 1
 
@@ -671,3 +679,237 @@ def test_the_encoder_restarts_ffmpeg_when_the_input_ends(tmp_path):
     assert sleep_log.read_text().split() == [
         "5"
     ]  # the pause before the next attempt, even after a failure
+
+
+def _env_of(env_file: Path) -> dict[str, str]:
+    return dict(
+        (k, v.strip("'"))
+        for k, v in (
+            line.split("=", 1)
+            for line in env_file.read_text().splitlines()
+            if "=" in line and not line.startswith("#")
+        )
+    )
+
+
+REPLAY_STAGING = "staging=replay/seahive-2026-09-01.mp4\nprod=\n"
+
+
+def test_boot_plays_the_recording_replay_conf_names_in_the_cameras_place(tmp_path):
+    """replay.conf names, per environment, a recording in the models bucket. boot.sh fetches it to the host,
+    MediaMTX's seahive path takes a publisher instead of pulling the camera, the replay service (compose profile
+    `replay`) plays it there, and the worker draws its detections without recording them."""
+    proc, env_file, log = _boot(tmp_path, replay_conf=REPLAY_STAGING)
+    assert proc.returncode == 0, proc.stderr
+    env = _env_of(env_file)
+    assert env["SEAHIVE_SOURCE"] == "publisher" and env["COMPOSE_PROFILES"] == "replay"
+    assert env["REPLAY_FILE"] == "seahive-2026-09-01.mp4" and env["PERSIST_ENABLED"] == "false"
+    assert (
+        env["VIDEO_SOURCE"] == "rtsp://mediamtx:8554/seahive"
+    )  # the worker reads the same path either way
+    assert env["SOURCE_LABEL_PRIMARY"] == "seahivecam"  # the camera's no-fish zones still apply
+    assert FAKE_CAMERA_URL not in env_file.read_text()  # nothing pulls the camera
+    calls = log.read_text()
+    assert "aws s3 cp --only-show-errors s3://models-bucket/replay/seahive-2026-09-01.mp4" in calls
+    assert (tmp_path / "data" / "replay" / "seahive-2026-09-01.mp4").read_text() == "fake mp4\n"
+    assert calls.index("s3 cp") < calls.index("compose up -d")
+    assert "compose rm" not in calls
+    assert "replay: seahive plays seahive-2026-09-01.mp4" in proc.stdout
+    assert "recording: streaming" in proc.stdout and "camera: streaming" not in proc.stdout
+    # A recording is never replaced under its name: the copy on the host is used from then on.
+    proc, _env, log = _boot(tmp_path, reuse=True, replay_conf=REPLAY_STAGING)
+    assert proc.returncode == 0 and "s3 cp" not in log.read_text()
+
+
+def test_boot_back_on_the_camera_removes_the_recordings_player(tmp_path):
+    """Compose leaves a running service of an inactive profile alone, even with --remove-orphans (checked
+    against Compose 2.40): with no recording named, boot.sh removes the replay service itself."""
+    proc, env_file, log = _boot(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    env = _env_of(env_file)
+    assert env["SEAHIVE_SOURCE"] == FAKE_CAMERA_URL and env["COMPOSE_PROFILES"] == ""
+    assert env["REPLAY_FILE"] == "" and env["PERSIST_ENABLED"] == "true"
+    calls = log.read_text()
+    assert "s3 cp" not in calls
+    assert calls.index("compose up -d") < calls.index("docker compose rm -sf replay")
+
+
+def test_boot_reads_only_its_own_environments_line(tmp_path):
+    proc, env_file, log = _boot(
+        tmp_path, replay_conf="staging=\nprod=replay/seahive-2026-09-01.mp4\n"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _env_of(env_file)["SEAHIVE_SOURCE"] == FAKE_CAMERA_URL and "s3 cp" not in log.read_text()
+
+
+def test_boot_stops_before_touching_the_stack_when_the_recording_is_missing(tmp_path):
+    proc, _env, log = _boot(tmp_path, replay_conf=REPLAY_STAGING, FAKE_S3_MISSING="1")
+    assert proc.returncode == 1
+    assert (
+        "s3://models-bucket/replay/seahive-2026-09-01.mp4" in proc.stderr
+        and "replay.conf" in proc.stderr
+    )
+    calls = log.read_text()
+    assert (
+        "compose pull" not in calls and "compose up" not in calls
+    )  # the running stack is left as it is
+    assert not list(
+        (tmp_path / "data" / "replay").iterdir()
+    )  # no partial file left to be taken for the recording
+
+
+def test_the_committed_replay_conf_names_recordings_in_the_models_bucket():
+    lines = [
+        line
+        for line in (GPU_HOST / "replay.conf").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    entries = dict(line.split("=", 1) for line in lines)
+    assert set(entries) == {"staging", "prod"} and len(entries) == len(lines)
+    for env, key in entries.items():
+        assert key == "" or (
+            key.startswith("replay/") and key.endswith(".mp4") and " " not in key
+        ), env
+    assert entries["prod"] == ""  # production shows the camera
+
+
+def test_compose_plays_a_recording_into_the_seahive_path_only_with_the_replay_profile():
+    services = yaml.safe_load((GPU_HOST / "docker-compose.yml").read_text())["services"]
+    replay = services["replay"]
+    assert replay["profiles"] == ["replay"]
+    assert (
+        replay["image"] == "jrottenberg/ffmpeg:7.1.2-ubuntu2404"
+    )  # no GPU: the stream is copied, not encoded
+    args = replay["command"]
+    assert args[args.index("-i") + 1] == "/replay/${REPLAY_FILE}"
+    assert "-re" in args and args[args.index("-stream_loop") + 1] == "-1"  # its own pace, looped
+    assert args[args.index("-c") + 1] == "copy" and args[-1] == "rtsp://mediamtx:8554/seahive"
+    assert args[args.index("-rtsp_transport") + 1] == "tcp"
+    assert replay["volumes"] == ["/opt/wahoobay-data/replay:/replay:ro"]
+    assert "env_file" not in replay and "environment" not in replay  # no secret reaches it
+    assert replay["logging"]["options"]["awslogs-stream"] == "replay"
+    assert all("profiles" not in s for name, s in services.items() if name != "replay")
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not on the PATH")
+def test_the_replay_service_keeps_mediamtxs_seahive_playlist_live_past_the_end_of_the_file(
+    tmp_path,
+):
+    """The real images: a four-second recording at the camera's shape (720p, 15 fps, an IDR every second), the
+    replay service's own arguments from the compose file, MediaMTX with this mediamtx.yml and a publisher source.
+    The seahive playlist answers, and keeps advancing after the file has ended twice over: the loop holds."""
+    replay = yaml.safe_load((GPU_HOST / "docker-compose.yml").read_text())["services"]["replay"]
+    image = replay["image"]
+    rec = tmp_path / "replay"
+    rec.mkdir()
+    subprocess.run(
+        ["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{rec}:/out", image]
+        + [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=15",
+        ]
+        + [
+            "-t",
+            "4",
+            "-c:v",
+            "libx264",
+            "-g",
+            "15",
+            "-bf",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "/out/rec.mp4",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=600,
+    )
+    port = _free_port()
+    tag = f"{os.getpid()}-{port}"
+    net, mtx, player = (
+        f"wb-test-replay-{tag}",
+        f"wb-test-replay-mtx-{tag}",
+        f"wb-test-replay-ff-{tag}",
+    )
+    args = [a.replace("${REPLAY_FILE}", "rec.mp4") for a in replay["command"]]
+
+    def get(path: str) -> tuple[int, str]:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", path, headers={"Authorization": "Bearer cdn"})
+            r = conn.getresponse()
+            return r.status, r.read().decode(errors="replace")
+        finally:
+            conn.close()
+
+    def playlist() -> tuple[int, str]:  # the multivariant playlist names the media playlist
+        status, body = get("/seahive/index.m3u8")
+        media = [line for line in body.splitlines() if line and not line.startswith("#")]
+        return get(f"/seahive/{media[-1]}") if status == 200 and media else (status, body)
+
+    try:
+        subprocess.run(
+            ["docker", "network", "create", net], check=True, capture_output=True, timeout=60
+        )
+        subprocess.run(
+            ["docker", "run", "-d", "--name", mtx, "--network", net, "--network-alias", "mediamtx"]
+            + [
+                "-v",
+                f"{GPU_HOST / 'mediamtx.yml'}:/mediamtx.yml:ro",
+                "-e",
+                "MTX_PATHS_SEAHIVE_SOURCE=publisher",
+            ]
+            + [
+                "-e",
+                "MTX_HLSCDNSECRET=cdn",
+                "-p",
+                f"127.0.0.1:{port}:8888",
+                "bluenviron/mediamtx:1.21.3",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+        subprocess.run(
+            ["docker", "run", "-d", "--name", player, "--network", net, "--platform", "linux/amd64"]
+            + ["-v", f"{rec}:/replay:ro", image]
+            + args,
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+        sequences = []
+        deadline = time.monotonic() + 60
+        while len(sequences) < 2 and time.monotonic() < deadline:
+            try:
+                status, body = playlist()
+            except (OSError, http.client.HTTPException):
+                status, body = 0, ""
+            segments = [line for line in body.splitlines() if line.endswith(".mp4")]
+            if status == 200 and segments:
+                sequences.append(segments[-1])  # the newest segment
+                if len(sequences) == 1:
+                    time.sleep(10)  # 2.5 times the recording's length
+                    continue
+            time.sleep(0.5)
+        logs = subprocess.run(["docker", "logs", player], capture_output=True, text=True).stderr
+        assert len(sequences) == 2, f"no seahive playlist; replay said: {logs[-800:]}"
+        assert sequences[1] != sequences[0], (
+            sequences,
+            logs[-800:],
+        )  # new segments after the file ended
+        running = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", player],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert running == "true", logs[-800:]
+    finally:
+        subprocess.run(["docker", "rm", "-f", player, mtx], capture_output=True, timeout=60)
+        subprocess.run(["docker", "network", "rm", net], capture_output=True, timeout=60)

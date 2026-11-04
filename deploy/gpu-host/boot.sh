@@ -10,6 +10,7 @@
 #   4. wait for the worker's /healthz (the first start fetches weights and compiles the classifier);
 #   5. report whether the camera streams and whether MediaMTX serves its HLS playlists.
 # The camera is pulled once, by MediaMTX; the worker reads rtsp://mediamtx:8554/seahive and nothing else.
+# When replay.conf names a recording for this environment, the recording plays there instead (README "Replay").
 set -euo pipefail
 
 HOST_ENV="${WB_HOST_ENV:-/etc/wahoobay/host.env}"
@@ -52,6 +53,30 @@ if [ -z "$video_source" ]; then
   exit 1
 fi
 
+# Replay (README "Replay"): replay.conf may name, for this environment, a recording in the models bucket. MediaMTX's
+# seahive path then takes a publisher instead of pulling the camera, the replay service plays the recording there,
+# looped, and the worker draws its detections without recording them. A recording is never replaced under its
+# name (a new one gets a new key), so a copy already on the host is the one named. Fetched before anything else
+# changes: a missing recording fails the boot with the running stack as it was.
+replay_key="$(sed -n "s/^${WB_ENV}=//p" replay.conf 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+replay_dir="${WB_DATA_DIR:-/opt/wahoobay-data}/replay"
+if [ -n "$replay_key" ]; then
+  replay_file="$(basename "$replay_key")"
+  if [ ! -s "$replay_dir/$replay_file" ]; then
+    mkdir -p "$replay_dir"
+    part="$replay_dir/.$replay_file.part"
+    if ! aws s3 cp --only-show-errors "s3://${WB_MODELS_BUCKET}/${replay_key}" "$part"; then
+      rm -f "$part"
+      echo "replay.conf names s3://${WB_MODELS_BUCKET}/${replay_key} for ${WB_ENV}, which could not be fetched; upload it (README \"Replay\") or empty the line" >&2
+      exit 1
+    fi
+    mv -f "$part" "$replay_dir/$replay_file"
+  fi
+  seahive_source=publisher compose_profiles=replay persist_enabled=false source_word=recording
+else
+  replay_file="" seahive_source="$video_source" compose_profiles="" persist_enabled=true source_word=camera
+fi
+
 # Single-quoted values: compose interpolates $ in unquoted .env values, and a camera password may contain one.
 # (A single quote inside a value must already be percent-encoded, as RTSP URLs require.)
 q() { printf "'%s'" "$1"; }
@@ -70,7 +95,11 @@ LOCATION_ID=$(q "$WB_LOCATION_ID")
 TZ=$(q "$WB_TZ")
 SENSESTREAM_DEPLOYMENT_URI=$(q "$WB_DEPLOYMENT_URI")
 DATABASE_URL=$(q "$database_url")
-CAMERA_SEAHIVE_URL=$(q "$video_source")
+# What MediaMTX's seahive path plays: the camera, or `publisher` while the replay service plays REPLAY_FILE.
+SEAHIVE_SOURCE=$(q "$seahive_source")
+REPLAY_FILE=$(q "$replay_file")
+COMPOSE_PROFILES=$(q "$compose_profiles")
+PERSIST_ENABLED=$(q "$persist_enabled")
 VIDEO_SOURCE='rtsp://mediamtx:8554/seahive'
 SOURCE_LABEL_PRIMARY='seahivecam'
 FALLBACK_VIDEO_SOURCE=''
@@ -105,7 +134,10 @@ aws ecr get-login-password --region "$WB_REGION" | docker login --username AWS -
 docker image prune -f >/dev/null
 docker compose pull -q
 docker compose up -d --remove-orphans
+# Back on the camera: compose leaves a running service of an inactive profile alone, even with --remove-orphans.
+[ -n "$replay_key" ] || docker compose rm -sf replay >/dev/null
 docker image prune -f >/dev/null
+[ -z "$replay_key" ] || echo "replay: seahive plays ${replay_file} (looped) in the camera's place; the worker records nothing"
 
 timeout_s="${BOOT_HEALTH_TIMEOUT_S:-600}"
 interval_s="${BOOT_HEALTH_INTERVAL_S:-10}"
@@ -131,12 +163,12 @@ ready_attempts=$(( ready_timeout_s / step ))
 n=0
 while :; do
   if body="$(curl -sf -m 5 http://127.0.0.1:8081/readyz 2>/dev/null)"; then
-    echo "camera: streaming (${body})"
+    echo "${source_word}: streaming (${body})"
     break
   fi
   n=$((n + 1))
   if [ "$n" -ge "$ready_attempts" ]; then
-    echo "camera: no frame yet after ${ready_timeout_s}s; the worker keeps retrying the source. See: docker compose logs worker"
+    echo "${source_word}: no frame yet after ${ready_timeout_s}s; the worker keeps retrying the source. See: docker compose logs worker"
     break
   fi
   sleep "$interval_s"

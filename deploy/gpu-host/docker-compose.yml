@@ -11,7 +11,7 @@ services:
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     environment:
-      MTX_PATHS_SEAHIVE_SOURCE: ${CAMERA_SEAHIVE_URL}   # the camera, pulled once; from the .env boot.sh writes
+      MTX_PATHS_SEAHIVE_SOURCE: ${SEAHIVE_SOURCE}   # the camera, pulled once, or `publisher` for the replay service; from the .env boot.sh writes
       MTX_HLSCDNSECRET: ${HLS_CDN_SECRET}   # CDN mode: requests with this bearer (Caddy adds it) share one session
     labels:
       wahoobay.config: ${MEDIAMTX_CONFIG_SHA}   # boot.sh writes the file's hash: a changed mediamtx.yml recreates the container
@@ -76,6 +76,28 @@ services:
         awslogs-group: ${WB_LOG_GROUP}
         awslogs-region: ${WB_REGION}
         awslogs-stream: encoder
+        awslogs-create-group: "true"
+
+  replay:
+    # Only while replay.conf names a recording for this environment (boot.sh then writes COMPOSE_PROFILES=replay
+    # and SEAHIVE_SOURCE=publisher into .env): plays the recording into the seahive path in the camera's place, at
+    # its own pace, looped, copied rather than encoded. boot.sh fetches it to the host (README "Replay").
+    image: jrottenberg/ffmpeg:7.1.2-ubuntu2404
+    profiles: [replay]
+    command:
+      [-hide_banner, -loglevel, warning, -re, -stream_loop, "-1", -i, "/replay/${REPLAY_FILE}", -map, "0:v:0",
+       -c, copy, -f, rtsp, -rtsp_transport, tcp, "rtsp://mediamtx:8554/seahive"]
+    volumes:
+      - /opt/wahoobay-data/replay:/replay:ro
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: ${WB_LOG_GROUP}
+        awslogs-region: ${WB_REGION}
+        awslogs-stream: replay
         awslogs-create-group: "true"
 
   caddy:
