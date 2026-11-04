@@ -330,6 +330,18 @@ def db_unavailable() -> JSONResponse:
     )
 
 
+class RevalidatedStatic(StaticFiles):
+    """Static files with Cache-Control: no-cache. CloudFront's /static/* behaviour (the managed
+    CachingOptimized policy) leaves the ?v= query out of its cache key and keeps an object a day, so a
+    deploy's new CSS and JS stayed behind the old ones (2026-11-04). no-cache holds CloudFront to the
+    policy's one-second minimum and has browsers revalidate (ETag, 304) instead of reusing a stale copy."""
+
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def build_app() -> FastAPI:
     cfg = DashboardCfg()
     # Every page tells the browser the site's zone (<html data-tz>), so the
@@ -569,7 +581,7 @@ def build_app() -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
-    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+    app.mount("/static", RevalidatedStatic(directory=str(BASE_DIR / "static")), name="static")
 
     if cfg.origin_verify_secret:
 
