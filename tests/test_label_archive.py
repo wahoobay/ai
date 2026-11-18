@@ -10,10 +10,20 @@ import json
 import os
 from datetime import timedelta
 
+import psycopg
 import pytest
 from app import label_archive
 from app.exports import export_labeled_corrections
-from app.label_archive import UnknownAccount, archive_labels, collect, content_hash, slug
+from app.label_archive import (
+    ARCHIVED_TABLES,
+    NOT_ARCHIVED,
+    UnknownAccount,
+    archive_labels,
+    collect,
+    content_hash,
+    read_only_transaction,
+    slug,
+)
 from review_fixtures import T0, add_item, add_verdict, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
@@ -256,7 +266,7 @@ async def test_latest_is_written_last(rdb, tmp_path, monkeypatch):
         real_put(url, data, content_type)
 
     monkeypatch.setattr(label_archive, "put", put)
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeError, match="disk full"):
         await archive_labels(rdb)
 
     assert not (base / "latest.json").exists()
@@ -286,3 +296,130 @@ async def test_accounts_without_a_url_is_an_error(rdb, monkeypatch):
     monkeypatch.delenv("LABEL_ARCHIVE_URL", raising=False)
     with pytest.raises(RuntimeError, match="LABEL_ARCHIVE_URL"):
         await archive_labels(rdb)
+
+
+# ----- final-review fixes ---------------------------------------------------------------
+
+
+async def test_one_failing_frame_does_not_hold_up_the_snapshot(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path)
+    seeded = await _alice_with_frame_files(rdb, tmp_path)
+    image = seeded["frame"]["image_path"]
+    real_open_read = label_archive.open_read
+
+    def open_read(url):
+        if url.endswith(image):
+            raise PermissionError("AccessDenied")
+        return real_open_read(url)
+
+    monkeypatch.setattr(label_archive, "open_read", open_read)
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        await archive_labels(rdb)
+
+    [snap] = _snapshots(base)
+    assert json.loads((base / "latest.json").read_text())["snapshot"] == snap.name
+    assert json.loads((snap / "manifest.json").read_text())["frames_failed"] == [image]
+
+
+async def test_one_unknown_account_does_not_stop_the_others(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path, accounts=("nobody", "alice"))
+    await _alice_with_frame_files(rdb, tmp_path)
+
+    with pytest.raises(RuntimeError, match="nobody"):
+        await archive_labels(rdb)
+
+    assert (base / "latest.json").is_file()
+
+
+async def test_a_recreated_account_does_not_move_latest(rdb, tmp_path, monkeypatch):
+    # After a staging reset, an account with the same username is a different account:
+    # its (new, nearly empty) work must not become the archive's latest.
+    base = _archive(monkeypatch, tmp_path)
+    await _alice_with_frame_files(rdb, tmp_path)
+    await archive_labels(rdb)
+    latest = (base / "latest.json").read_text()
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE users SET created_at = created_at - interval '1 day' WHERE username = 'alice'"
+        )
+
+    with pytest.raises(RuntimeError, match="alice"):
+        await archive_labels(rdb)
+
+    assert (base / "latest.json").read_text() == latest
+    assert len(_snapshots(base)) == 1
+
+
+async def test_every_user_table_is_archived_or_deliberately_left_out(rdb):
+    # A new table with a user_id column must be a decision: archived (it holds review
+    # work) or left out (credentials, contact details). Never archived by default.
+    async with rdb.connection() as conn:
+        cur = await conn.execute(
+            """SELECT c.table_name FROM information_schema.columns c
+                 JOIN information_schema.tables t
+                   ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                WHERE c.table_schema = 'public' AND c.column_name = 'user_id'
+                  AND t.table_type = 'BASE TABLE'"""
+        )
+        tables = {row[0] for row in await cur.fetchall()}
+    assert tables == set(ARCHIVED_TABLES) | set(NOT_ARCHIVED)
+
+
+async def test_a_frame_known_only_to_its_event_is_archived(rdb, tmp_path):
+    frame = await seed_frame(rdb, tmp_path, boxes=TWO_BOXES[:1], save=False)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE detection_events SET image_path = %s WHERE id = %s",
+            (frame["image_path"], frame["event_ids"][0]),
+        )
+    alice = await make_user(rdb, "alice")
+    await add_verdict(rdb, frame["event_ids"][0], alice, name="Seriola zonata")
+
+    snap = await collect(rdb, "alice")
+
+    assert snap.frame_paths == [frame["image_path"]]
+
+
+async def test_relative_frame_paths_resolve_against_frames_url(rdb, tmp_path, monkeypatch):
+    # Production stores keys relative to FRAMES_URL, as the worker writes them.
+    base = _archive(monkeypatch, tmp_path)
+    store = tmp_path / "store"
+    key = "wahoobay/2026/10/26/11/20261026T113452Z_f0000526807_seahivecam.jpg"
+    coco = key.replace(".jpg", ".json")
+    (store / key).parent.mkdir(parents=True)
+    (store / key).write_bytes(b"jpeg")
+    (store / coco).write_bytes(b"{}")
+    monkeypatch.setenv("FRAMES_URL", f"file://{store}")
+    seeded = await _alice_with_work(rdb, tmp_path)
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE saved_frames SET image_path = %s, coco_path = %s WHERE id = %s",
+            (key, coco, seeded["frame"]["saved_frame_id"]),
+        )
+
+    out = await archive_labels(rdb)
+
+    assert (base / "frames" / key).read_bytes() == b"jpeg"
+    assert (base / "frames" / coco).read_bytes() == b"{}"
+    assert (
+        out["accounts"]["alice"]["frames_copied"],
+        out["accounts"]["alice"]["frames_missing"],
+    ) == (2, 0)
+
+
+async def test_collect_reads_in_a_read_only_transaction(rdb):
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        async with rdb.connection() as conn, read_only_transaction(conn):
+            await conn.execute("INSERT INTO job_runs (job, ok, detail) VALUES ('x', true, '{}')")
+
+
+def test_an_account_is_the_same_whatever_the_sessions_time_zone():
+    # created_at is written in the database session's time zone; the identity check must
+    # not mistake a configuration change for a new account.
+    def snap(created_at):
+        account = json.dumps({"id": 7, "created_at": created_at}).encode()
+        return label_archive.AccountSnapshot("roy", "roy", {"account.json": account}, [], {})
+
+    utc = label_archive._identity(snap("2026-10-29 22:00:00.5+00:00"))
+    eastern = label_archive._identity(snap("2026-10-29 18:00:00.5-04:00"))
+    assert utc == eastern

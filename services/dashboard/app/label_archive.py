@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -47,21 +48,16 @@ VERDICTS_SQL = """
      ORDER BY c.id
 """
 
-# Every other table an account owns rows in, except users itself and any table that
-# holds a credential (user_sessions, user_tokens: their token_hash columns).
-TABLES_SQL = """
-    SELECT t.table_name
-      FROM information_schema.tables t
-     WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
-       AND t.table_name NOT IN ('users', 'detection_corrections')
-       AND EXISTS (SELECT 1 FROM information_schema.columns c
-                    WHERE c.table_schema = 'public' AND c.table_name = t.table_name
-                      AND c.column_name = 'user_id')
-       AND NOT EXISTS (SELECT 1 FROM information_schema.columns c
-                        WHERE c.table_schema = 'public' AND c.table_name = t.table_name
-                          AND c.column_name ~* '(token|password|hash|secret)')
-     ORDER BY 1
-"""
+# The other tables of review work, by name: an allow-list, so a new table with a user_id
+# column is never archived by default (the archive is versioned and never deleted, so a
+# leaked email or credential would stay). tests/test_label_archive.py fails until every
+# user_id table is in one of these two lists.
+ARCHIVED_TABLES = ("review_added_boxes", "review_skips")
+NOT_ARCHIVED = (
+    "detection_corrections",  # archived as verdicts.jsonl.gz, with each verdict's detection and frame
+    "user_sessions",  # credentials (token_hash), IP address, browser
+    "user_tokens",  # credentials (token_hash)
+)
 
 # The frames behind the boxes the account drew, which a verdict may not cover.
 ADDED_BOX_FRAMES_SQL = """
@@ -79,6 +75,22 @@ CONTENT_TYPES = {
     ".jpeg": "image/jpeg",
     ".png": "image/png",
 }
+
+
+class AccountChanged(RuntimeError):
+    """The account with the listed username is not the one archived (a staging reset made a
+    new account with the same name): latest.json is left as it is until someone decides."""
+
+
+class ArchiveFailed(RuntimeError):
+    """One or more accounts or frames failed; the rest were archived."""
+
+
+@asynccontextmanager
+async def read_only_transaction(conn):
+    async with conn.transaction():
+        await conn.execute("SET TRANSACTION READ ONLY")
+        yield conn
 
 
 class UnknownAccount(ValueError):
@@ -113,8 +125,7 @@ async def collect(pool: AsyncConnectionPool, username: str) -> AccountSnapshot:
     files: dict[str, bytes] = {}
     counts: dict[str, int] = {}
     paths: set[str] = set()
-    async with pool.connection() as conn, conn.transaction():
-        await conn.execute("SET TRANSACTION READ ONLY")
+    async with pool.connection() as conn, read_only_transaction(conn):
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"SELECT {', '.join(ACCOUNT_COLUMNS)} FROM users WHERE username = %s", (username,)
@@ -130,11 +141,13 @@ async def collect(pool: AsyncConnectionPool, username: str) -> AccountSnapshot:
         files["verdicts.jsonl.gz"] = _jsonl_gz(verdicts)
         counts["verdicts"] = len(verdicts)
         for line in verdicts:
-            frame: dict[str, Any] = json.loads(line)["saved_frame"] or {}
+            row: dict[str, Any] = json.loads(line)
+            # A frame no saved_frames row matches is still the event's own image_path, as in
+            # the CSV's COALESCE(sf.image_path, e.image_path).
+            frame = row["saved_frame"] or {"image_path": row["event"].get("image_path")}
             paths.update(p for p in (frame.get("image_path"), frame.get("coco_path")) if p)
 
-        cur = await conn.execute(TABLES_SQL)
-        for (table,) in await cur.fetchall():
+        for table in ARCHIVED_TABLES:
             cur = await conn.execute(
                 f'SELECT row_to_json(x)::text AS j FROM "{table}" x WHERE user_id = %s ORDER BY j',
                 (uid,),
@@ -173,25 +186,36 @@ def _accounts() -> list[str]:
     return [str(u) for u in json.loads(raw)] if raw else []
 
 
-def _copy_frames(base: str, paths: list[str]) -> tuple[int, list[str]]:
-    """Copy each frame not yet in the archive; a frame gone from storage is reported, not fatal
-    (it would otherwise fail every run forever)."""
-    copied, missing = 0, []
+def _copy_frames(base: str, paths: list[str]) -> tuple[int, list[str], list[str]]:
+    """Copy each frame not yet in the archive. A frame gone from storage is reported, not
+    fatal (it would otherwise fail every run forever); a frame that fails another way is
+    reported and fails the run, but never holds up the verdicts' snapshot."""
+    copied, missing, failed = 0, [], []
     for path in paths:
         dst = join(base, "frames/" + path.lstrip("/"))
-        if exists(dst):
-            continue
         try:
+            if exists(dst):
+                continue
             data = open_read(frame_url(path))
+            put(dst, data, _content_type(path))
+            copied += 1
         except FileNotFoundError:
             missing.append(path)
-            continue
-        put(dst, data, _content_type(path))
-        copied += 1
-    return copied, missing
+        except Exception as e:  # noqa: BLE001 - reported per frame, raised once at the end
+            failed.append(f"{path}: {type(e).__name__}: {e}")
+    return copied, missing, failed
 
 
-def _write_snapshot(base: str, snap: AccountSnapshot, digest: str, missing: list[str]) -> str:
+def _identity(snap: AccountSnapshot) -> dict[str, Any]:
+    """The account's id and creation time (in UTC: the text depends on the session's zone)."""
+    account = json.loads(snap.files["account.json"])
+    created = datetime.fromisoformat(account["created_at"]).astimezone(UTC).isoformat()
+    return {"id": account["id"], "created_at": created}
+
+
+def _write_snapshot(
+    base: str, snap: AccountSnapshot, digest: str, missing: list[str], failed: list[str]
+) -> str:
     """The snapshot's files, then its manifest, then latest.json last: a run that dies
     part-way never leaves a half-written snapshot named as the latest."""
     stamp = _stamp()
@@ -208,9 +232,10 @@ def _write_snapshot(base: str, snap: AccountSnapshot, digest: str, missing: list
             for name, data in sorted(snap.files.items())
         },
         "frames_missing": missing,
+        "frames_failed": [f.split(": ", 1)[0] for f in failed],
     }
     put(join(folder, "manifest.json"), json.dumps(manifest, indent=1).encode(), "application/json")
-    latest = {"snapshot": stamp, "sha256": digest}
+    latest = {"snapshot": stamp, "sha256": digest, "account": _identity(snap)}
     put(join(base, "latest.json"), json.dumps(latest).encode(), "application/json")
     return stamp
 
@@ -230,20 +255,41 @@ async def archive_labels(pool: AsyncConnectionPool) -> dict[str, Any]:
     if not url:
         raise RuntimeError("LABEL_ARCHIVE_ACCOUNTS is set but LABEL_ARCHIVE_URL is not")
     results: dict[str, Any] = {}
-    for username in accounts:
-        snap = await collect(pool, username)
-        base = join(url, snap.slug)
-        digest = content_hash(snap.files)
-        copied, missing = await asyncio.to_thread(_copy_frames, base, snap.frame_paths)
-        latest = await asyncio.to_thread(_latest, base)
-        stamp = None
-        if latest.get("sha256") != digest:
-            stamp = await asyncio.to_thread(_write_snapshot, base, snap, digest, missing)
-        results[snap.slug] = {
-            "snapshot": stamp,
-            "unchanged": stamp is None,
-            "counts": snap.counts,
-            "frames_copied": copied,
-            "frames_missing": len(missing),
-        }
+    errors: list[str] = []
+    for username in accounts:  # one account's failure never stops the others
+        try:
+            results[slug(username)] = await _archive_account(pool, url, username, errors)
+        except Exception as e:  # noqa: BLE001 - collected, raised once at the end
+            errors.append(f"{username}: {type(e).__name__}: {e}")
+    if errors:
+        raise ArchiveFailed("; ".join(errors))
     return {"accounts": results}
+
+
+async def _archive_account(
+    pool: AsyncConnectionPool, url: str, username: str, errors: list[str]
+) -> dict[str, Any]:
+    snap = await collect(pool, username)
+    base = join(url, snap.slug)
+    latest = await asyncio.to_thread(_latest, base)
+    archived = latest.get("account")
+    if archived and archived != _identity(snap):
+        raise AccountChanged(
+            f"the account named {username!r} is {_identity(snap)}, not the archived {archived}; "
+            "latest.json is left as it is"
+        )
+    digest = content_hash(snap.files)
+    copied, missing, failed = await asyncio.to_thread(_copy_frames, base, snap.frame_paths)
+    stamp = None
+    if latest.get("sha256") != digest:
+        stamp = await asyncio.to_thread(_write_snapshot, base, snap, digest, missing, failed)
+    if failed:
+        errors.append(f"{username}: {len(failed)} frame(s) not copied, first {failed[0]}")
+    return {
+        "snapshot": stamp,
+        "unchanged": stamp is None,
+        "counts": snap.counts,
+        "frames_copied": copied,
+        "frames_missing": len(missing),
+        "frames_failed": len(failed),
+    }
