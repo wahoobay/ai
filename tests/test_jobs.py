@@ -135,3 +135,19 @@ def test_status_reports_the_last_runs_and_the_pollers(pg_url, monkeypatch):
     # A status report is a read: it is not itself recorded as a run.
     assert [r["job"] for r in detail["job_runs"]].count("status") == 0
     assert query(pg_url, "SELECT count(*) FROM job_runs WHERE job = 'status'") == [(0,)]
+
+
+def test_the_lambda_fails_when_the_archive_fails(pg_url, monkeypatch, tmp_path):
+    """A failed archive must reach the jobs function's Errors alarm, so the handler raises;
+    the other jobs keep returning their result."""
+    import pytest
+    from app.lambda_entry import handler
+
+    _site(monkeypatch, pg_url)
+    assert handler({"job": "migrate"}, None)["ok"] is True
+    monkeypatch.setenv("LABEL_ARCHIVE_ACCOUNTS", '["nobody"]')
+    monkeypatch.setenv("LABEL_ARCHIVE_URL", f"file://{tmp_path}/archive")
+
+    with pytest.raises(RuntimeError, match="nobody"):
+        handler({"job": "archive_labels"}, None)
+    assert handler({"job": "no_such_job"}, None)["ok"] is False

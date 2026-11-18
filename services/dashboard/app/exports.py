@@ -667,12 +667,23 @@ def export_topk_long(pool: AsyncConnectionPool, hours: int, min_accuracy: float)
 # ---------------------------------------------------------------------------
 
 
-def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool = False):
+def export_labeled_corrections(
+    pool: AsyncConnectionPool,
+    include_identity: bool = False,
+    user_ids: list[int] | None = None,
+):
     # The frame is matched on camera + frame_id + ts. frame_id restarts at 1
     # with every worker restart, so frame_id + camera alone can name a
     # different frame. When one frame was saved under several reasons, the
-    # lowest id wins.
-    where_sql = "" if include_identity else "WHERE " + hide_pending_spot_checks("c")
+    # lowest id wins. user_ids limits the rows to those accounts' answers
+    # (the label archive, one account at a time).
+    conditions, params = [], []
+    if not include_identity:
+        conditions.append(hide_pending_spot_checks("c"))
+    if user_ids is not None:
+        conditions.append("c.user_id = ANY(%s)")
+        params.append(list(user_ids))
+    where_sql = "WHERE " + " AND ".join(conditions) if conditions else ""
     sql = f"""
         SELECT c.id AS correction_id,
                c.created_at,
@@ -740,7 +751,7 @@ def export_labeled_corrections(pool: AsyncConnectionPool, include_identity: bool
         "config_hash",
         "pipeline_git_sha",
     ]
-    return _stream(pool, sql, tuple(), _without_identity(cols, include_identity))
+    return _stream(pool, sql, tuple(params), _without_identity(cols, include_identity))
 
 
 # ---------------------------------------------------------------------------

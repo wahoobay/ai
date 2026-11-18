@@ -1,6 +1,6 @@
 """Periodic work, run from an event rather than inside the web process.
 
-    python -m app.jobs refresh_matviews|alert_rules|migrate|seed|import_legacy|status|all
+    python -m app.jobs refresh_matviews|alert_rules|archive_labels|migrate|seed|import_legacy|status|all
     app.lambda_entry.handler({"job": "..."})   the jobs and migrate Lambdas
 
 The dashboard holds no loops: the materialized-view refresh and the alert rules
@@ -104,6 +104,14 @@ async def import_legacy(pool: AsyncConnectionPool) -> dict[str, Any]:
     )
 
 
+async def archive_labels(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Keep the listed review accounts' work under LABEL_ARCHIVE_URL (infra spec 2026-11-18);
+    imported here, as legacy_import is, so the module needs common.storage only when it runs."""
+    from . import label_archive
+
+    return await label_archive.archive_labels(pool)
+
+
 async def status(pool: AsyncConnectionPool) -> dict[str, Any]:
     """What is going on inside: the schema revision, the last job runs, the pollers,
     row counts. A read for the platform's verify script; not recorded as a run."""
@@ -142,6 +150,7 @@ JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "reseed": reseed_sample,
     "import_legacy": import_legacy,
     "status": status,
+    "archive_labels": archive_labels,
 }
 READ_ONLY = {"status"}  # not recorded in job_runs
 ALL = ("refresh_matviews", "alert_rules")
