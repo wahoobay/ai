@@ -7,11 +7,13 @@ import csv
 import gzip
 import io
 import json
+import os
 from datetime import timedelta
 
 import pytest
+from app import label_archive
 from app.exports import export_labeled_corrections
-from app.label_archive import UnknownAccount, collect, content_hash, slug
+from app.label_archive import UnknownAccount, archive_labels, collect, content_hash, slug
 from review_fixtures import T0, add_item, add_verdict, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
@@ -157,3 +159,130 @@ async def test_unchanged_work_hashes_the_same(rdb, tmp_path):
 def test_slug():
     assert slug("roy camop in germany") == "roy-camop-in-germany"
     assert slug("  A.B__c ") == "a-b-c"
+
+
+# ----- the archive_labels job: snapshots and frames under LABEL_ARCHIVE_URL -----
+
+
+def _archive(monkeypatch, tmp_path, accounts=("alice",)):
+    root = tmp_path / "archive"
+    monkeypatch.delenv("FRAMES_URL", raising=False)  # the fixtures' frames are absolute paths
+    monkeypatch.setenv("LABEL_ARCHIVE_URL", f"file://{root}")
+    monkeypatch.setenv("LABEL_ARCHIVE_ACCOUNTS", json.dumps(list(accounts)))
+    return root / "alice"
+
+
+async def _alice_with_frame_files(rdb, tmp_path) -> dict:
+    seeded = await _alice_with_work(rdb, tmp_path)
+    image = seeded["frame"]["image_path"]
+    with open(image + ".coco.json", "w") as f:  # the worker saves a COCO sidecar with each frame
+        f.write("{}")
+    return seeded
+
+
+def _snapshots(base) -> list:
+    return sorted(p for p in (base / "snapshots").iterdir() if p.is_dir())
+
+
+async def test_first_run_writes_a_snapshot_and_copies_frames(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path)
+    seeded = await _alice_with_frame_files(rdb, tmp_path)
+
+    out = await archive_labels(rdb)
+
+    [snap] = _snapshots(base)
+    assert {p.relative_to(snap).as_posix() for p in snap.rglob("*") if p.is_file()} == {
+        "account.json",
+        "verdicts.jsonl.gz",
+        "tables/review_added_boxes.jsonl.gz",
+        "tables/review_skips.jsonl.gz",
+        "labeled_corrections.csv",
+        "frames.txt",
+        "manifest.json",
+    }
+    latest = json.loads((base / "latest.json").read_text())
+    assert latest["snapshot"] == snap.name
+    manifest = json.loads((snap / "manifest.json").read_text())
+    assert latest["sha256"] == manifest["sha256"]
+    assert manifest["counts"] == {"verdicts": 2, "review_added_boxes": 1, "review_skips": 1}
+    assert (base / "frames" / seeded["frame"]["image_path"].lstrip("/")).is_file()
+    result = out["accounts"]["alice"]
+    assert result["snapshot"] == snap.name and result["unchanged"] is False
+    assert (result["frames_copied"], result["frames_missing"]) == (2, 0)
+
+
+async def test_an_unchanged_account_writes_nothing_new(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path)
+    await _alice_with_frame_files(rdb, tmp_path)
+
+    await archive_labels(rdb)
+    out = await archive_labels(rdb)
+
+    assert out["accounts"]["alice"]["unchanged"] is True
+    assert out["accounts"]["alice"]["snapshot"] is None
+    assert out["accounts"]["alice"]["frames_copied"] == 0
+    assert len(_snapshots(base)) == 1
+
+
+async def test_a_changed_verdict_keeps_the_earlier_snapshot(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path)
+    seeded = await _alice_with_frame_files(rdb, tmp_path)
+    await archive_labels(rdb)
+    [first] = _snapshots(base)
+    before = {p: p.read_bytes() for p in first.rglob("*") if p.is_file()}
+
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE detection_corrections SET corrected_name = 'Seriola rivoliana' WHERE user_id = %s",
+            (seeded["alice"],),
+        )
+    monkeypatch.setattr(label_archive, "_stamp", lambda: "2099-01-01T000000Z")
+    await archive_labels(rdb)
+
+    snaps = _snapshots(base)
+    assert [s.name for s in snaps] == [first.name, "2099-01-01T000000Z"]
+    assert {p: p.read_bytes() for p in first.rglob("*") if p.is_file()} == before
+    assert json.loads((base / "latest.json").read_text())["snapshot"] == "2099-01-01T000000Z"
+
+
+async def test_latest_is_written_last(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path)
+    await _alice_with_frame_files(rdb, tmp_path)
+    real_put = label_archive.put
+
+    def put(url, data, content_type):
+        if url.endswith("/manifest.json"):
+            raise OSError("disk full")
+        real_put(url, data, content_type)
+
+    monkeypatch.setattr(label_archive, "put", put)
+    with pytest.raises(OSError):
+        await archive_labels(rdb)
+
+    assert not (base / "latest.json").exists()
+
+
+async def test_a_missing_frame_is_reported_not_fatal(rdb, tmp_path, monkeypatch):
+    base = _archive(monkeypatch, tmp_path)
+    seeded = await _alice_with_frame_files(rdb, tmp_path)
+    image = seeded["frame"]["image_path"]
+    os.remove(image)
+
+    out = await archive_labels(rdb)
+
+    assert out["accounts"]["alice"]["frames_missing"] == 1
+    [snap] = _snapshots(base)
+    assert json.loads((snap / "manifest.json").read_text())["frames_missing"] == [image]
+
+
+async def test_no_accounts_is_a_no_op(rdb, monkeypatch):
+    monkeypatch.delenv("LABEL_ARCHIVE_ACCOUNTS", raising=False)
+    monkeypatch.delenv("LABEL_ARCHIVE_URL", raising=False)
+    assert await archive_labels(rdb) == {"accounts": {}}
+
+
+async def test_accounts_without_a_url_is_an_error(rdb, monkeypatch):
+    monkeypatch.setenv("LABEL_ARCHIVE_ACCOUNTS", '["alice"]')
+    monkeypatch.delenv("LABEL_ARCHIVE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="LABEL_ARCHIVE_URL"):
+        await archive_labels(rdb)

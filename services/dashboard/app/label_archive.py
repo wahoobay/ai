@@ -10,17 +10,22 @@ and the job writes a new snapshot only when something changed.
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
+from common.storage import exists, join, open_read, put
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from .exports import export_labeled_corrections
+from .frames import frame_url
 
 ACCOUNT_COLUMNS = ("id", "username", "display_name", "role", "status", "created_at")
 
@@ -63,6 +68,17 @@ ADDED_BOX_FRAMES_SQL = """
     SELECT s.image_path, s.coco_path FROM saved_frames s
      WHERE s.id IN (SELECT saved_frame_id FROM review_added_boxes WHERE user_id = %s)
 """
+
+
+CONTENT_TYPES = {
+    ".json": "application/json",
+    ".gz": "application/gzip",
+    ".csv": "text/csv",
+    ".txt": "text/plain",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
 
 
 class UnknownAccount(ValueError):
@@ -139,3 +155,95 @@ async def collect(pool: AsyncConnectionPool, username: str) -> AccountSnapshot:
     frame_paths = sorted(paths)
     files["frames.txt"] = "".join(p + "\n" for p in frame_paths).encode()
     return AccountSnapshot(username, slug(username), files, frame_paths, counts)
+
+
+# ----- the archive_labels job ---------------------------------------------------------
+
+
+def _content_type(name: str) -> str:
+    return CONTENT_TYPES.get(os.path.splitext(name)[1].lower(), "application/octet-stream")
+
+
+def _stamp() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
+
+
+def _accounts() -> list[str]:
+    raw = os.environ.get("LABEL_ARCHIVE_ACCOUNTS", "").strip()
+    return [str(u) for u in json.loads(raw)] if raw else []
+
+
+def _copy_frames(base: str, paths: list[str]) -> tuple[int, list[str]]:
+    """Copy each frame not yet in the archive; a frame gone from storage is reported, not fatal
+    (it would otherwise fail every run forever)."""
+    copied, missing = 0, []
+    for path in paths:
+        dst = join(base, "frames/" + path.lstrip("/"))
+        if exists(dst):
+            continue
+        try:
+            data = open_read(frame_url(path))
+        except FileNotFoundError:
+            missing.append(path)
+            continue
+        put(dst, data, _content_type(path))
+        copied += 1
+    return copied, missing
+
+
+def _write_snapshot(base: str, snap: AccountSnapshot, digest: str, missing: list[str]) -> str:
+    """The snapshot's files, then its manifest, then latest.json last: a run that dies
+    part-way never leaves a half-written snapshot named as the latest."""
+    stamp = _stamp()
+    folder = join(base, f"snapshots/{stamp}")
+    for name, data in snap.files.items():
+        put(join(folder, name), data, _content_type(name))
+    manifest = {
+        "account": snap.username,
+        "exported_at": stamp,
+        "sha256": digest,
+        "counts": snap.counts,
+        "files": {
+            name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            for name, data in sorted(snap.files.items())
+        },
+        "frames_missing": missing,
+    }
+    put(join(folder, "manifest.json"), json.dumps(manifest, indent=1).encode(), "application/json")
+    latest = {"snapshot": stamp, "sha256": digest}
+    put(join(base, "latest.json"), json.dumps(latest).encode(), "application/json")
+    return stamp
+
+
+def _latest(base: str) -> dict[str, Any]:
+    url = join(base, "latest.json")
+    return json.loads(open_read(url)) if exists(url) else {}
+
+
+async def archive_labels(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Keep LABEL_ARCHIVE_ACCOUNTS' work under LABEL_ARCHIVE_URL/<slug>/: a new snapshot
+    when anything changed, and every frame behind it."""
+    accounts = _accounts()
+    if not accounts:
+        return {"accounts": {}}
+    url = os.environ.get("LABEL_ARCHIVE_URL", "").strip()
+    if not url:
+        raise RuntimeError("LABEL_ARCHIVE_ACCOUNTS is set but LABEL_ARCHIVE_URL is not")
+    results: dict[str, Any] = {}
+    for username in accounts:
+        snap = await collect(pool, username)
+        base = join(url, snap.slug)
+        digest = content_hash(snap.files)
+        copied, missing = await asyncio.to_thread(_copy_frames, base, snap.frame_paths)
+        latest = await asyncio.to_thread(_latest, base)
+        stamp = None
+        if latest.get("sha256") != digest:
+            stamp = await asyncio.to_thread(_write_snapshot, base, snap, digest, missing)
+        results[snap.slug] = {
+            "snapshot": stamp,
+            "unchanged": stamp is None,
+            "counts": snap.counts,
+            "frames_copied": copied,
+            "frames_missing": len(missing),
+        }
+    return {"accounts": results}

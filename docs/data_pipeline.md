@@ -562,6 +562,33 @@ to retention policy:
 This is a stakeholder decision (Wahoo Bay + FAU). Documented as an
 outstanding decision in `PLAN.md`.
 
+## Label archive
+
+The `archive_labels` job (`app/label_archive.py`) keeps the work of the review
+accounts in `LABEL_ARCHIVE_ACCOUNTS` outside the database. That is everything
+those accounts did: verdicts, added boxes and skips. It exists because staging's
+database is a demo copy, and Roy's verdicts there are the only reviewer work worth
+keeping (infra spec `2026-11-18-staging-label-archive-design.md`). The list of
+accounts lives in `infra`, at `ai.label_archive_accounts` in the location file.
+
+Each run reads inside a read-only transaction. It writes under
+`LABEL_ARCHIVE_URL/<account slug>/`; on AWS that is
+`s3://platform-wahoobay-models/labels/<env>/`.
+
+- `snapshots/<UTC stamp>/` is written only when something changed:
+  - `verdicts.jsonl.gz`: each verdict with its detection and saved frame
+  - `tables/<table>.jsonl.gz`: the account's rows in the other tables
+  - `labeled_corrections.csv`: the training-set builder's input
+  - `account.json`: the account, with no email
+  - `frames.txt` and `manifest.json`
+- `latest.json` names the newest snapshot. It is written last.
+- `frames/<frame path>` holds each frame and COCO sidecar behind that work.
+
+Earlier snapshots are never overwritten and nothing is deleted. A frame missing
+from storage is listed in the manifest and does not fail the run. Any other
+failure fails the Lambda invocation, so the jobs function's Errors alarm emails.
+The job runs at the environment's job cadence: every 30 minutes on staging.
+
 ---
 
 ## What we DON'T collect from the public/visitor side

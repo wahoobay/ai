@@ -14,8 +14,15 @@ from typing import Any
 
 from .jobs import run_job
 
+# Jobs whose failure must fail the invocation, so the function's Errors alarm emails:
+# the label archive is the only copy of reviewers' work outside staging. The other jobs
+# keep returning their result (a failed alert-rules run is recorded in job_runs).
+RAISE_ON_FAILURE = {"archive_labels"}
+
 
 def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     result = run_job(str((event or {}).get("job", "")))
     print(json.dumps(result, default=str), flush=True)
+    if not result["ok"] and result["job"] in RAISE_ON_FAILURE:
+        raise RuntimeError(json.dumps(result["detail"], default=str))
     return result
