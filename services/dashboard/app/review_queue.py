@@ -448,7 +448,12 @@ def _validate(
     width: int,
     height: int,
     adjudication: bool,
+    bulk: bool = False,
 ) -> dict:
+    if bulk and body.outcome != "species":
+        raise Invalid("only a species can be marked with the rest")
+    if bulk and blind:
+        raise Invalid("a second opinion can't be marked with the rest")
     bbox = None
     if body.bbox is not None:
         if body.outcome == "no_animal":
@@ -473,7 +478,12 @@ def _validate(
         if not body.label or not catalogue.entry(body.label, body.life_stage):
             raise Invalid("pick a species from the list")
         name, life_stage = body.label, body.life_stage
-        if not adjudication:
+        if bulk:
+            # Whole-frame "mark the rest": the label the volunteer just gave,
+            # applied to every unanswered box (only mark_rest sets this; the
+            # public body's Literal refuses 'bulk').
+            label_source = "bulk"
+        elif not adjudication:
             label_source = body.label_source
             if label_source not in ("hint", "search"):
                 raise Invalid("say whether the species came from a hint or the search")
@@ -668,6 +678,7 @@ async def submit_verdict(
     spot_rate: float,
     rng: random.Random,
     adjudication: bool = False,
+    bulk: bool = False,
 ) -> dict:
     role = effective_role(user.status, user.role)
     async with conn.transaction():
@@ -826,6 +837,7 @@ async def submit_verdict(
             width=width,
             height=height,
             adjudication=adjudication,
+            bulk=bulk,
         )
 
         if body.review_item_id is None and not adjudication:

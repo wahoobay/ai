@@ -223,7 +223,7 @@ RV.views.browse = (() => {
     const fmt = (b) => (b.pairs < a.min_pairs
       ? `not enough spot-checks yet (${b.pairs} of ${a.min_pairs})`
       : `${Math.round(100 * b.percent)}% agree · alpha ${b.alpha === null ? "n/a" : b.alpha.toFixed(2)} · ${b.pairs} pairs`);
-    const how = { model_guess: "accepted the model's guess", hint: "clicked a hint", search: "searched", none: "gave no species" };
+    const how = { model_guess: "accepted the model's guess", hint: "clicked a hint", search: "searched", bulk: "marked with the rest", none: "gave no species" };
     panel.append(RV.el("p", { text: `Overall: ${fmt(a.overall)}` }),
       RV.el("ul", {}, Object.entries(a.by_label_source).map(([k, b]) =>
         RV.el("li", { text: `When the first volunteer ${how[k] || k}: ${fmt(b)}` }))));

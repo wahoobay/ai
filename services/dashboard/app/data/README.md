@@ -111,7 +111,7 @@ crop path. Ready to filter into a fine-tuning training split.
 |---|---|
 | `correction_id`, `created_at`, `confidence` | when the verdict was given and how sure the reviewer was |
 | `corrected_name`, `corrected_species_id`, `not_a_fish`, `unidentifiable`, `life_stage` | the human label (`not_a_fish` = no animal in the box; `unidentifiable` = an animal whose species can't be told) |
-| `is_endorsement`, `label_source` | whether the label matches the model's guess; how it was chosen (`model_guess`, `hint`, `search`) |
+| `is_endorsement`, `label_source` | whether the label matches the model's guess; how it was chosen (`model_guess`, `hint`, `search`, or `bulk`: marked with the rest of its frame in whole-frame review) |
 | `corrected_bbox` | the box as the reviewer fixed it, `x1,y1,x2,y2`; empty when they did not move it (use `bbox`) |
 | `review_item_id`, `is_adjudication` | the review-queue item it answered; whether an administrator settled a disagreement |
 | `bbox`, `det_conf`, `track_id` | the model's box and detection context |
