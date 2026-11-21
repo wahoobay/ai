@@ -190,27 +190,64 @@ async def frame_state(
         await fetch_all(
             conn,
             """
-        SELECT id, event_id, pass, status, claimed_by, claimed_until, hints
+        SELECT id, event_id, pass, status, claimed_by, claimed_until, hints, added_at
           FROM review_items WHERE event_id = ANY(%s)""",
             (ids,),
         )
         if ids
         else []
     )
-    mine = (
+    # This volunteer's latest answer on each box: which boxes are theirs, and
+    # the box they drew on it, which a change made from the frame keeps.
+    my_latest = (
+        {
+            r["event_id"]: r
+            for r in await fetch_all(
+                conn,
+                """
+        SELECT DISTINCT ON (event_id) event_id, corrected_bbox FROM detection_corrections
+         WHERE event_id = ANY(%s) AND user_id = %s
+         ORDER BY event_id, created_at DESC, id DESC""",
+                (ids, user.id),
+            )
+        }
+        if ids
+        else {}
+    )
+    mine = set(my_latest)
+    # What submit_verdict's no-item path (and reopen_payload) check before
+    # taking a changed answer: a second opinion this volunteer gave stays
+    # blind, and another volunteer's answer on the box closes it to them.
+    own_spot = (
+        {
+            r["event_id"]
+            for r in await fetch_all(
+                conn,
+                """
+        SELECT DISTINCT c.event_id FROM detection_corrections c
+          JOIN review_items ri ON ri.id = c.review_item_id
+         WHERE c.event_id = ANY(%s) AND c.user_id = %s AND ri.pass = 2""",
+                (ids, user.id),
+            )
+        }
+        if mine
+        else set()
+    )
+    answered_by_others = (
         {
             r["event_id"]
             for r in await fetch_all(
                 conn,
                 """
         SELECT DISTINCT event_id FROM detection_corrections
-         WHERE event_id = ANY(%s) AND user_id = %s""",
+         WHERE event_id = ANY(%s) AND user_id IS NOT NULL AND user_id <> %s""",
                 (ids, user.id),
             )
         }
-        if ids
+        if mine
         else set()
     )
+    admin = _is_admin(user)
     now = datetime.now(UTC)
     boxes = []
     for n, e in enumerate(events, 1):
@@ -231,6 +268,10 @@ async def frame_state(
             ),
             None,
         )
+        claimed_by_other = any(
+            i["status"] == "claimed" and i["claimed_by"] != user.id and i["claimed_until"] > now
+            for i in its
+        )
         r = resolved.get(e["id"])
         if r is None:
             state = "locked" if held_by_other else "needs_answer"
@@ -242,12 +283,23 @@ async def frame_state(
             state = "answered_hidden"
         else:
             state = "answered"
+        mine_here = e["id"] in mine
+        my_bbox = my_latest[e["id"]]["corrected_bbox"] if mine_here else None
         box = {
             "n": n,
             "event_id": e["id"],
             "bbox": list(e["bbox"]),
             "state": state,
-            "mine": e["id"] in mine,
+            "mine": mine_here,
+            "own_spot": e["id"] in own_spot,
+            "my_bbox": list(my_bbox) if my_bbox else None,
+            "can_change": (
+                state == "answered"
+                and mine_here
+                and e["id"] not in own_spot
+                and (admin or e["id"] not in answered_by_others)
+                and not claimed_by_other
+            ),
             "review_item_id": my_item["id"] if my_item else None,
             "zoom": {
                 "url": f"/api/review/boxes/{e['id']}/zoom.jpg",
@@ -268,6 +320,32 @@ async def frame_state(
                 common=catalogue.common_name(r.species),
                 status=r.status,
             )
+            if box["can_change"]:
+                # What a change made in the frame offers: the model's guess and
+                # the hints of the box's latest first-pass item, the same list
+                # submit_verdict checks a hint against on the no-item path.
+                guess = catalogue.accepted(e["best_species_id"])
+                if guess:
+                    box["model"] = {
+                        "name": guess,
+                        "p": e["best_accuracy"],
+                        "common": catalogue.common_name(guess),
+                    }
+                firsts = sorted(
+                    (i for i in its if i["pass"] == 1),
+                    key=lambda i: (i["added_at"], i["id"]),
+                    reverse=True,
+                )
+                if firsts and firsts[0]["hints"]:
+                    box["hints"] = [
+                        {
+                            "name": h["name"],
+                            "p": h.get("p"),
+                            "common": catalogue.common_name(h["name"]),
+                        }
+                        for h in firsts[0]["hints"]
+                        if h.get("name") != guess
+                    ][:3]
         elif state == "needs_answer":
             guess = catalogue.accepted(e["best_species_id"])
             if guess:

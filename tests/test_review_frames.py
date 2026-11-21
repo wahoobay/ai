@@ -922,3 +922,89 @@ async def test_mark_rest_over_http(rdb, rclient, tmp_path):
     assert rclient.get(f"/api/review/frames/{sf}").json()["blocking"] == []
     bad = rclient.post(url, headers=CSRF, json={"label": "Not a species"})
     assert bad.status_code == 400 and bad.json()["error"] == "pick a species from the list"
+
+
+# ---- 2026-11-21: changing your answer in the frame -----------------------------
+
+
+async def test_answered_box_offers_change_only_when_the_server_would_take_it(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES)
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    e = f["event_ids"]
+    hints = [{"name": "Pomatomus saltatrix", "p": 0.4}, {"name": "Seriola zonata", "p": 0.3}]
+    await add_item(rdb, f, 0, status="done", hints=hints)
+    await add_verdict(rdb, e[0], me, name="Seriola zonata")  # mine alone: changeable
+    await add_verdict(rdb, e[1], me, name="Seriola zonata")
+    await add_verdict(rdb, e[1], other, name="Pomatomus saltatrix")  # someone else too
+    first = await add_verdict(rdb, e[2], other, name="Seriola zonata")
+    spot = await add_item(
+        rdb, f, 2, pass_=2, status="done", exclude_user_id=other, first_correction_id=first
+    )
+    await add_verdict(rdb, e[2], me, name="Seriola zonata", item_id=spot)  # my second opinion
+    await add_verdict(rdb, e[3], other, name="Seriola zonata")  # not mine
+    by_n = {b["n"]: b for b in (await _state(rdb, f, as_user(me), cat))["boxes"]}
+    assert by_n[1]["can_change"] is True and by_n[1]["own_spot"] is False
+    assert by_n[1]["model"]["name"] == "Seriola zonata"
+    assert [h["name"] for h in by_n[1]["hints"]] == ["Pomatomus saltatrix"]  # guess left out
+    assert by_n[2]["can_change"] is False
+    assert by_n[3]["own_spot"] is True and by_n[3]["can_change"] is False
+    assert by_n[4]["can_change"] is False and by_n[4]["own_spot"] is False
+    # an administrator may change an answer someone else has also given
+    boss = await make_user(rdb, "boss", role="admin")
+    await add_verdict(rdb, e[1], boss, name="Seriola zonata")
+    admins = {b["n"]: b for b in (await _state(rdb, f, as_user(boss, role="admin"), cat))["boxes"]}
+    assert admins[2]["can_change"] is True
+
+
+async def test_an_answer_someone_else_is_answering_cannot_change(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    first = await add_verdict(rdb, f["event_ids"][0], me, name="Seriola zonata")
+    await add_item(
+        rdb,
+        f,
+        0,
+        pass_=2,
+        status="claimed",
+        claimed_by=other,
+        claimed_until=datetime.now(UTC) + timedelta(minutes=5),
+        exclude_user_id=me,
+        first_correction_id=first,
+    )
+    [box] = (await _state(rdb, f, as_user(me), cat))["boxes"]
+    assert box["state"] == "answered" and box["can_change"] is False
+
+
+async def test_my_bbox_is_my_latest_corrected_box(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:2])
+    me = await make_user(rdb, "me")
+    e = f["event_ids"]
+    await add_verdict(rdb, e[0], me, name="Seriola zonata", bbox=[10, 10, 90, 90], created_at=T0)
+    await add_verdict(rdb, e[0], me, name="Seriola zonata", bbox=[12, 12, 100, 100])
+    by_n = {b["n"]: b for b in (await _state(rdb, f, as_user(me), cat))["boxes"]}
+    assert by_n[1]["my_bbox"] == [12, 12, 100, 100]
+    assert by_n[2]["my_bbox"] is None
+
+
+async def test_a_change_from_the_frame_keeps_the_frame_view(rdb, tmp_path, cat):
+    """The page re-answers a box it shows as can_change through the no-item path."""
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    me = await make_user(rdb, "me")
+    eid = f["event_ids"][0]
+    await _mark(rdb, f, as_user(me), cat, label="Seriola zonata")
+    [box] = (await _state(rdb, f, as_user(me), cat))["boxes"]
+    assert box["can_change"] is True
+    async with rdb.connection() as conn:
+        await submit_verdict(
+            conn,
+            user=as_user(me),
+            body=VerdictIn(
+                event_id=eid, outcome="species", label="Pomatomus saltatrix", label_source="search"
+            ),
+            catalogue=cat,
+            spot_rate=0.0,
+            rng=random.Random(0),
+        )
+    [box] = (await _state(rdb, f, as_user(me), cat))["boxes"]
+    assert box["label"] == "Pomatomus saltatrix" and box["can_change"] is True
+    assert [r[4] for r in await _rows(rdb, eid)] == ["bulk", "search"]
