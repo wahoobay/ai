@@ -206,6 +206,9 @@ async def pending_entries(conn, *, user, catalogue) -> list[dict]:
     return [entry_json(r, catalogue) for r in rows]
 
 
+PENDING_SUFFIX = " (new, waiting for approval)"  # what the review UI adds to such a name
+
+
 async def pending_species_events(conn, event_ids: list[int] | None = None) -> dict[int, str]:
     """Each box (of `event_ids`, or every one) with an answer linked to a pending suggestion,
     mapped to that suggestion's common name (the latest such answer's). The Python sibling of

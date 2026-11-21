@@ -11,9 +11,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from app.exports import export_corrections, export_labeled_corrections
 from app.public_queries import LATEST_VERDICT
-from app.review_browse import agreement, progress_summary
+from app.review_browse import BrowseFilters, agreement, browse, progress_summary
 from app.review_catalogue import CatalogueStore
-from app.review_frames import MarkRestIn, mark_rest
+from app.review_frames import MarkRestIn, frame_state, mark_rest
 from app.review_labels import resolve_all
 from app.review_pool import PoolSettings, ReviewPool
 from app.review_queue import (
@@ -1313,3 +1313,62 @@ async def test_admin_routes_over_http(rdb, rclient, tmp_path):
     species = rclient.get("/api/review/species").json()["species"]
     # on everyone's list now, without the suffix
     assert [e["common"] for e in species if e["name"] == "Gymnothorax moringa"] == ["Spotted Moray"]
+
+
+# ---- what the review UI shows ---------------------------------------------------------------
+
+WAITING = " (new, waiting for approval)"
+
+
+async def test_the_frame_names_a_pending_species(rdb, tmp_path, cat):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    user = as_user(w["roy"])
+
+    async def boxes():
+        async with rdb.connection() as conn:
+            state = await frame_state(
+                conn,
+                saved_frame_id=w["frames"][w["pending"]]["saved_frame_id"],
+                user=user,
+                catalogue=cat,
+            )
+        return {b["event_id"]: b for b in state["boxes"]}
+
+    shown = await boxes()
+    assert shown[w["pending"]]["common"] == "Juvenile Banded Rudderfish" + WAITING
+    assert shown[w["pending"]]["pending_species"] is True
+    assert shown[w["pending"]]["state"] == "answered"
+    await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
+    shown = await boxes()
+    assert WAITING not in shown[w["pending"]]["common"]
+    assert shown[w["pending"]]["pending_species"] is False
+    # a box answered from the list never carries the flag
+    async with rdb.connection() as conn:
+        other = await frame_state(
+            conn,
+            saved_frame_id=w["frames"][w["control"]]["saved_frame_id"],
+            user=user,
+            catalogue=cat,
+        )
+    assert [b["pending_species"] for b in other["boxes"]] == [False]
+
+
+async def test_browse_names_a_pending_species(rdb, tmp_path, cat):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+
+    async def commons():
+        async with rdb.connection() as conn:
+            result = await browse(
+                conn,
+                catalogue=cat,
+                user=as_user(w["roy"]),
+                filters=BrowseFilters(status="any"),
+                page=0,
+            )
+        return {c["event_id"]: c["common"] for c in result["cells"]}
+
+    before = await commons()
+    assert before[w["pending"]] == "Juvenile Banded Rudderfish" + WAITING
+    assert WAITING not in before[w["control"]]
+    await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
+    assert WAITING not in (await commons())[w["pending"]]
