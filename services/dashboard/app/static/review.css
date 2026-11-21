@@ -96,6 +96,11 @@
 .rv-side button.rv-link, .rv-frame-top button.rv-link { background: none; border: none; color: var(--accent);
   padding: 2px 4px; }
 .rv-check { display: inline-flex; gap: 4px; align-items: center; }
+/* Mark the rest (2026-11-21): one wide action above the checklist, and its one question. */
+.rv-side button.rv-mark-rest { width: 100%; text-align: left; border-color: var(--accent); }
+.rv-mark-confirm { background: var(--rv-note-bg); border-left: 3px solid var(--accent); padding: 6px 10px;
+  border-radius: 4px; }
+.rv-mark-confirm p { margin: 0 0 6px; }
 .rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--rv-line); border-radius: 6px; }
 .rv-note { background: var(--rv-note-bg); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
   margin: 0; font-size: 13px; }
