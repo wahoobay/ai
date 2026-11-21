@@ -11,7 +11,8 @@ This script reads the workbook and emits two artifacts in ``assets/``:
   * ``species_manifest.json`` — one record per (life-stage row) ⨯ (camera),
     with all the fields needed for downstream tools: ``family``, ``genus``,
     ``species``, ``binomial``, ``common_name``, ``life_stage`` parsed from the
-    common-name prefix (juvenile / intermediate / adult / unknown),
+    common name (juvenile / intermediate / adult / initial phase / terminal
+    phase / unknown),
     ``first_seen`` date, ``cam_wahoo`` / ``cam_pier`` flags, ``drive_id``,
     ``drive_url``, ``source_sheet``, ``source_row``.
   * ``species_manifest.csv`` — same data, flattened, easy to open in Excel
@@ -50,6 +51,11 @@ except ImportError as e:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 XLSX_PATH = REPO_ROOT / "assets" / "species.xlsx"
 OUT_JSON = REPO_ROOT / "assets" / "species_manifest.json"
+# Species the CamOps' Species Log does not list yet, added here so they can be
+# picked in the review tool (the sheet is theirs; this file is ours). Columns:
+# common_name, scientific_name, family, note. Life stage comes from the common
+# name, as for the sheet.
+ADDITIONS_CSV = REPO_ROOT / "assets" / "species_additions.csv"
 OUT_CSV = REPO_ROOT / "assets" / "species_manifest.csv"
 CLASSIFIER_LABELS = REPO_ROOT / "data" / "models" / "labels.json"
 
@@ -67,6 +73,14 @@ LIFE_STAGE_PATTERNS = [
     (re.compile(r"^sub-?adult\b", re.I), "subadult"),
     (re.compile(r"^adult\b", re.I), "adult"),
     (re.compile(r"^hybrid\b", re.I), "hybrid"),
+    # Anywhere in the name, as the sheet also writes them: "Redband Parrotfish
+    # Juvenile", "Blue Tang (Juvenile)". Parrotfish, wrasses and hogfish change
+    # colour between phases ("Yellowtail Parrotfish TP", "Yellowtail/Redfin PF
+    # (IP)", "Hogfish (Initial phase)"); each phase is a choice of its own in the
+    # review tool (Roy, 2026-11-21: no "Yellowtail Parrotfish IP" to pick).
+    (re.compile(r"\bjuvenile\b", re.I), "juvenile"),
+    (re.compile(r"\b(?:IP|initial phase)\b", re.I), "initial phase"),
+    (re.compile(r"\b(?:TP|terminal phase)\b", re.I), "terminal phase"),
 ]
 
 
@@ -78,7 +92,7 @@ class ManifestRecord:
     subspecies: str | None
     binomial: str | None  # "Genus species" (or just "Genus" if species unknown)
     common_name: str
-    life_stage: str  # juvenile | intermediate | adult | hybrid | unknown
+    life_stage: str  # juvenile | intermediate | adult | hybrid | initial/terminal phase | unknown
     first_seen: str | None  # ISO date "YYYY-MM-DD" or None
     cam_wahoo: bool
     cam_pier: bool
@@ -270,6 +284,43 @@ def extract_records(wb) -> list[ManifestRecord]:
     return records
 
 
+def load_additions(path: Path) -> list[ManifestRecord]:
+    """Rows from the additions file, as records like the sheet's (no file, no rows)."""
+    if not path.exists():
+        return []
+    records: list[ManifestRecord] = []
+    with path.open(newline="") as f:
+        for row_no, row in enumerate(csv.DictReader(f), start=2):
+            common = (row.get("common_name") or "").strip()
+            sci = (row.get("scientific_name") or "").strip()
+            genus, species, subspecies, binomial = parse_binomial(sci)
+            if not common or not genus:
+                continue
+            display_text, display_html = format_display_label(common, genus, species)
+            records.append(
+                ManifestRecord(
+                    family=(row.get("family") or "").strip() or None,
+                    genus=genus,
+                    species=species,
+                    subspecies=subspecies,
+                    binomial=binomial,
+                    common_name=common,
+                    life_stage=parse_life_stage(common),
+                    first_seen=None,
+                    cam_wahoo=True,
+                    cam_pier=False,
+                    drive_id=None,
+                    drive_url=None,
+                    source_sheet="additions",
+                    source_row=row_no,
+                    raw_sci_name=sci,
+                    display_label=display_text,
+                    display_label_html=display_html,
+                )
+            )
+    return records
+
+
 def coverage_summary(records: list[ManifestRecord]) -> dict:
     classifier_classes: set[str] = set()
     if CLASSIFIER_LABELS.exists():
@@ -307,7 +358,7 @@ def main() -> None:
         sys.exit(f"missing spreadsheet: {XLSX_PATH}")
 
     wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
-    records = extract_records(wb)
+    records = extract_records(wb) + load_additions(ADDITIONS_CSV)
 
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUT_JSON.write_text(json.dumps([asdict(r) for r in records], indent=2))
