@@ -314,15 +314,19 @@ RV.views.frame = (() => {
 
   // ---- the side panel ----------------------------------------------------------
 
-  function pickerAndButtons(hints, onSpecies, onCant, onNone) {
+  // `newSpecies`, when given, is the "Not on the list? Add a species" block
+  // (answerControls), placed after the picker; only then does the picker offer
+  // species waiting for approval, which a drawn box can't take (spec 2026-11-21).
+  function pickerAndButtons(hints, onSpecies, onCant, onNone, newSpecies) {
     const out = [];
     const slot = RV.el("div", { class: "rv-picker" });
     picker = new RV.SpeciesPicker(slot, (entry) => {
       const source = hintName && entry.name === hintName ? "hint" : "search";
       hintName = null;
       onSpecies(entry, source);
-    });
+    }, { pending: Boolean(newSpecies) });
     out.push(RV.el("div", { class: "rv-label", text: "Pick the species" }), slot);
+    if (newSpecies) out.push(newSpecies);
     if (hints && hints.length) {
       out.push(RV.el("div", { class: "rv-chips" }, hints.map((h) => RV.el("button", {
         type: "button", class: "rv-chip", onclick: () => {
@@ -405,9 +409,21 @@ RV.views.frame = (() => {
           "✓ Looks right ", kbd("A")),
         RV.el("div", { class: "rv-stage", id: "rv-frame-stage" })));
     }
+    // Ruling P4: these controls serve only a box waiting for an answer and this
+    // volunteer's own changeable answer -- never a blind second opinion (modelPanel
+    // sends those to the single view) nor a drawn box (addedPanel) -- so a new
+    // species may be added and used here (spec 2026-11-21).
     out.push(...pickerAndButtons(b.hints,
-      (entry, source) => answerModel("species", { label: entry.name, life_stage: entry.life_stage, label_source: source }),
-      () => answerModel("unidentifiable", {}), () => answerModel("no_animal", {})));
+      (entry, source) => answerModel("species", RV.answerExtra(entry, source)),
+      () => answerModel("unidentifiable", {}), () => answerModel("no_animal", {}),
+      RV.addSpeciesBlock((entry) => {
+        // Only the box the form was opened on: not one selected since.
+        if (!selected || selected.kind !== "model" || selected.id !== b.event_id) {
+          RV.toast("The new species was added. Pick it from the search to answer a box with it.");
+          return undefined;
+        }
+        return answerModel("species", RV.answerExtra(entry));
+      })));
     return out;
   }
 
@@ -568,11 +584,13 @@ RV.views.frame = (() => {
       const r = await RV.post("/api/review/verdicts", body);
       if (!r.ok) {
         RV.toast(r.data.error || "That answer wasn't saved.");
-        if (r.data.error === "pick a species from the list") await RV.loadCatalogue();
+        if (RV.STALE_SPECIES.has(r.data.error)) await RV.loadCatalogue();
         if (r.status === 409 || r.status === 403) await reload(false);
         return;
       }
-      if (outcome === "accept" || outcome === "species") {
+      // A species waiting for approval can't mark the rest (spec 2026-11-21), so an
+      // answer with one leaves what M offers as it was.
+      if ((outcome === "accept" || outcome === "species") && !extra.species_suggestion_id) {
         // What "mark the rest" offers next in this frame.
         const label = outcome === "accept" ? b.model.name : extra.label;
         const lifeStage = extra.life_stage || null;

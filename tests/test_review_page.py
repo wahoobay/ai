@@ -1085,3 +1085,408 @@ def test_the_frame_says_how_to_mark_the_rest_until_a_species_is_given(tmp_path):
     assert HINT in out["first"] and HINT in out["afterNone"]
     assert HINT not in out["afterSpecies"]
     assert "Mark the 2 unanswered boxes as Smallmouth grunt" in out["afterSpecies"]
+
+
+# ---- 2026-11-21: reviewers add a species from the picker and answer with it ----------
+# Spec 2026-11-21 (reviewer species suggestions), "Answering with a suggestion": POST the
+# suggestion, then the verdict. SUGGEST_STUB goes after FRAME_STUB: elements keep their
+# listeners and attributes, so a test can click the link, fill the form and submit it.
+
+SUGGEST_STUB = r"""
+  const plainEl = document.createElement;
+  document.createElement = (tag) => Object.assign(plainEl(tag), {
+    on: {}, attrs: {}, focus() {}, select() {}, blur() {},
+    addEventListener(type, fn) { this.on[type] = fn; },
+    setAttribute(k, v) { this.attrs[k] = v; } });
+  const kids = (n) => (n && n.children) || [];
+  const textOf = (n) => (!n || typeof n !== "object") ? ""
+    : (n.textContent || n.text || "") + kids(n).map(textOf).join("");
+  const find = (n, pred) => {
+    if (!n || typeof n !== "object") return null;
+    if (pred(n)) return n;
+    for (const c of kids(n)) { const f = find(c, pred); if (f) return f; }
+    return null;
+  };
+  const attr = (root, k, v) => find(root, (n) => n.attrs && n.attrs[k] === v);
+  const ADD = "Not on the list? Add a species";
+  const addLink = (root) => find(root, (n) => n.tag === "button" && textOf(n) === ADD);
+  const submitForm = (root) => find(root, (n) => n.tag === "form").on.submit({ preventDefault() {} });
+  // Open the form under the picker in `root` and fill it in.
+  const openForm = (root, fields) => {
+    addLink(root).on.click({});
+    for (const [name, value] of Object.entries(fields || {})) attr(root, "name", name).value = value;
+  };
+  // What the picker in `root` offers for `query`.
+  const offered = (root, query) => {
+    const input = attr(root, "type", "search");
+    input.value = query;
+    input.on.input();
+    return textOf(attr(root, "role", "listbox"));
+  };
+  const ENTRY = { key: "suggestion:9", name: "Pseudupeneus maculatus", life_stage: "juvenile",
+    common: "Spotted Goatfish (waiting for approval)", suggestion_id: 9, pending: true,
+    in_species_log: false, in_classifier: false };
+  const listed = RV.catalogue.slice();
+  globalThis.suggestReply = { status: 200, data: ENTRY };
+  globalThis.mine = [];
+  const pageFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const reply = (status, data) => ({ status, ok: status < 400, json: async () => data });
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (url === "/api/review/species-suggestions") {
+      calls.push({ url, body });
+      await globalThis.gate;               // a test may hold the reply back
+      return reply(globalThis.suggestReply.status, globalThis.suggestReply.data);
+    }
+    if (url === "/api/review/species-suggestions/mine") {
+      calls.push({ url, body });
+      return reply(200, { suggestions: globalThis.mine });
+    }
+    if (url === "/api/review/species") {
+      calls.push({ url, body });
+      return reply(200, { species: [...listed, ENTRY] });
+    }
+    if (url === "/api/review/verdicts" && globalThis.verdictReply) {
+      calls.push({ url, body });
+      return reply(globalThis.verdictReply.status, globalThis.verdictReply.data);
+    }
+    return pageFetch(url, opts);
+  };
+  const sent = () => calls.filter((c) => c.body && !c.url.endsWith("/open"));
+  // A box the queue served to the single view.
+  const payload = (pass) => ({ item: { id: 11, event_id: 101, pass },
+    box: { bbox: [10, 10, 50, 50], model_bbox: [10, 10, 50, 50], saved_frame_id: 7 },
+    frame: { url: "/f.jpg", width: 1280, height: 720 }, zoom: { url: "/z.jpg", region: [0, 0, 200, 200] },
+    other_boxes: [], model: null, hints: [], counts_toward: null, editable: true });
+"""
+
+SUGGESTION = {
+    "common_name": "Spotted Goatfish",
+    "scientific_name": "Pseudupeneus maculatus",
+    "life_stage": "juvenile",
+    "note": None,
+}
+SUGGESTED_ANSWER = {
+    "label": "Pseudupeneus maculatus",
+    "life_stage": "juvenile",
+    "label_source": "suggested",
+    "species_suggestion_id": 9,
+}
+FILLED = (
+    '{ common_name: " Spotted Goatfish ", scientific_name: "Pseudupeneus maculatus", '
+    'life_stage: "juvenile" }'
+)
+
+
+@needs_node
+def test_adding_a_species_answers_the_frame_box_with_it(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      await RV.views.frame.enter({{ savedFrameId: 7 }});    // box 1 is selected
+      const root = document.getElementById("rv-frame");
+      openForm(root, {FILLED});
+      submitForm(root); submitForm(root);                  // a double click sends it once
+      await settle();
+      const asked = calls.map((c) => c.url).filter((u) => u.startsWith("/api/review/species")
+        || u === "/api/review/verdicts");
+      return {{ sent: sent(), asked, m: key("m") }};
+    """,
+        tmp_path,
+    )
+    suggestion, verdict = out["sent"]
+    assert suggestion == {"url": "/api/review/species-suggestions", "body": SUGGESTION}
+    assert verdict == {
+        "url": "/api/review/verdicts",
+        "body": {
+            "event_id": 101,
+            "review_item_id": 11,
+            "outcome": "species",
+            **SUGGESTED_ANSWER,
+            "not_sure": False,
+        },
+    }
+    # Your suggestions are read when the form opens; the list is reloaded before answering.
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        "/api/review/species-suggestions",
+        "/api/review/species",
+        "/api/review/verdicts",
+    ]
+    assert out["m"] is False  # a species waiting for approval never marks the rest
+
+
+@needs_node
+def test_drawn_boxes_have_no_add_a_species_link(tmp_path):
+    src = _read("review-frame.js")
+    assert "RV.addSpeciesBlock(" in _function_body(src, "answerControls")
+    for name in ("addedPanel", "pickerAndButtons"):
+        body = _function_body(src, name)
+        assert "suggestSpecies" not in body and "addSpeciesBlock" not in body, name
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      RV.catalogue = [...listed, ENTRY];
+      const frameFetch = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {
+        const r = await frameFetch(url, opts);
+        if (!url.endsWith("/open")) return r;
+        const data = await r.json();
+        data.added = [{ id: 5, bbox: [400, 300, 480, 360], mine: true, by: "you", outcome: "species",
+          label: "Haemulon chrysargyreum", common: "Smallmouth grunt", life_stage: null,
+          not_sure: false, zoom_url: "/a.jpg" }];
+        return { status: 200, ok: true, json: async () => data };
+      };
+      await RV.views.frame.enter({ savedFrameId: 7 });    // box 1, drawn by the model
+      const root = document.getElementById("rv-frame");
+      const model = { link: Boolean(addLink(root)), offers: offered(root, "spotted") };
+      find(root, (n) => n.tag === "li" && textOf(n).startsWith("+ drawn by you")).on.click({});
+      const drawnBox = { link: Boolean(addLink(root)), offers: offered(root, "spotted") };
+      return { model, drawnBox };
+    """,
+        tmp_path,
+    )
+    assert out["model"] == {
+        "link": True,
+        "offers": "Spotted Goatfish (waiting for approval)Pseudupeneus maculatus · juvenile",
+    }
+    assert out["drawnBox"] == {"link": False, "offers": ""}
+
+
+@needs_node
+def test_picking_a_pending_entry_answers_with_its_suggestion(tmp_path):
+    out = run_node(
+        [_read("review-core.js")],
+        """
+      return [RV.answerExtra({ pending: true, suggestion_id: 4, name: "x", life_stage: null }),
+        RV.answerExtra({ key: "Haemulon plumierii|", name: "Haemulon plumierii", life_stage: null },
+          "hint")];
+    """,
+        tmp_path,
+    )
+    assert out == [
+        {"label": "x", "life_stage": None, "label_source": "suggested", "species_suggestion_id": 4},
+        {"label": "Haemulon plumierii", "life_stage": None, "label_source": "hint"},
+    ]
+    assert "RV.answerExtra(entry, source)" in _function_body(
+        _read("review-single.js"), "pickSpecies"
+    )
+    assert "RV.answerExtra(entry, source)" in _function_body(
+        _read("review-frame.js"), "answerControls"
+    )
+
+
+@needs_node
+def test_the_form_shows_the_server_refusal(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      globalThis.suggestReply = { status: 409, data: { error: "already on the list as Bluefish" } };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const root = document.getElementById("rv-frame");
+      openForm(root, { common_name: "   " });
+      submitForm(root); await settle();                    // no common name: nothing is sent
+      const alert = attr(root, "role", "alert");
+      const empty = { said: alert.textContent, shown: !alert.hidden, sent: sent().length };
+      attr(root, "name", "common_name").value = "Bluefish";
+      submitForm(root); await settle();
+      const button = find(root, (n) => n.tag === "button" && textOf(n) === "Add and answer this box");
+      return { empty, said: alert.textContent, shown: !alert.hidden, sent: sent(),
+        ready: !button.disabled };
+    """,
+        tmp_path,
+    )
+    assert out["empty"] == {"said": "write the fish's common name", "shown": True, "sent": 0}
+    assert out["said"] == "already on the list as Bluefish" and out["shown"]
+    assert [c["url"] for c in out["sent"]] == ["/api/review/species-suggestions"]  # no verdict
+    assert out["ready"]  # the button works again
+
+
+def test_the_add_species_form_is_busy_guarded():
+    _assert_busy_guarded(_function_body(_read("review-core.js"), "addSpecies"), "addSpecies")
+
+
+@needs_node
+def test_your_suggestions_say_what_became_of_each(tmp_path):
+    out = run_node(
+        [_read("review-core.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      RV.catalogue = [...listed, { key: "Coryphopterus glaucofraenum|", name: "Coryphopterus glaucofraenum",
+        common: "Bridled Goby", life_stage: null }];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      const none = { scientific_name: null, life_stage: null, decision_note: null, rejected_to_name: null,
+        rejected_to_stage: null, approved_common: null };
+      globalThis.mine = [
+        { ...none, id: 4, common_name: "Spotted Goatfish", life_stage: "juvenile",
+          status_text: "waiting for approval" },
+        { ...none, id: 3, common_name: "spotted goatfish", status_text: "added",
+          approved_common: "Spotted Goatfish" },
+        { ...none, id: 2, common_name: "Banded goby", status_text: "not added",
+          rejected_to_name: "Coryphopterus glaucofraenum", decision_note: "It's a bridled goby." },
+        { ...none, id: 1, common_name: "Blur", status_text: "not added" },
+      ];
+      const holder = document.createElement("div");
+      RV.suggestSpecies(holder, () => {});
+      await settle();
+      return find(holder, (n) => n.tag === "ul").children.map(textOf);
+    """,
+        tmp_path,
+    )
+    assert out == [
+        "Spotted Goatfish (juvenile) · waiting for approval",
+        "spotted goatfish · added as Spotted Goatfish",
+        "Banded goby · not added; your answers now say Bridled GobyIt's a bridled goby.",
+        "Blur · not added; your answers now say can't identify",
+    ]
+
+
+@needs_node
+def test_adding_a_species_answers_the_single_box_but_never_a_second_opinion(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-single.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      RV.catalogue = [...listed, ENTRY];
+      const root = document.getElementById("rv-single");
+      await RV.views.single.enter({{ payload: payload(2) }});     // a blind second opinion
+      const blind = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
+      await RV.views.single.enter({{ payload: payload(1) }});
+      const first = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
+      openForm(root, {FILLED});
+      submitForm(root); await settle();
+      return {{ blind, first, sent: sent() }};
+    """,
+        tmp_path,
+    )
+    assert out["blind"] == {"link": False, "offers": ""}
+    assert (
+        out["first"]["link"] and "Spotted Goatfish (waiting for approval)" in out["first"]["offers"]
+    )
+    suggestion, verdict = out["sent"]
+    assert suggestion == {"url": "/api/review/species-suggestions", "body": SUGGESTION}
+    assert verdict == {
+        "url": "/api/review/verdicts",
+        "body": {
+            "event_id": 101,
+            "review_item_id": 11,
+            "outcome": "species",
+            **SUGGESTED_ANSWER,
+            "not_sure": False,
+        },
+    }
+
+
+# The volunteer moved on while the suggestion was being saved: the frame selects box 2,
+# or the single view shows the next box. The new species answers neither.
+MOVE_ON = {
+    "single": (
+        "await RV.views.single.enter({ payload: payload(1) });",
+        "await RV.views.single.enter({ payload: { ...payload(1), item: { id: 12, event_id: 102, pass: 1 } } });",
+    ),
+    "frame": (
+        "await RV.views.frame.enter({ savedFrameId: 7 });",
+        "await RV.views.frame.enter({ savedFrameId: 7, selectEventId: 102 });",
+    ),
+}
+
+
+@needs_node
+@pytest.mark.parametrize("view", ["single", "frame"])
+def test_a_box_left_while_the_species_is_being_added_is_not_answered_with_it(view, tmp_path):
+    enter, move_on = MOVE_ON[view]
+    out = run_node(
+        [_read("review-core.js"), _read(f"review-{view}.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      let reply;
+      globalThis.gate = new Promise((r) => {{ reply = r; }});
+      {enter}
+      const root = document.getElementById("rv-{view}");
+      openForm(root, {FILLED});
+      submitForm(root); await settle();
+      {move_on}
+      reply(); await settle();
+      return {{ sent: sent().map((c) => c.url), toast: document.getElementById("rv-toast").textContent }};
+    """,
+        tmp_path,
+    )
+    assert out["sent"] == ["/api/review/species-suggestions"]
+    assert (
+        out["toast"]
+        == "The new species was added. Pick it from the search to answer a box with it."
+    )
+
+
+@needs_node
+@pytest.mark.parametrize("view", ["single", "frame"])
+def test_a_new_species_decided_meanwhile_reloads_the_list_and_keeps_the_box(view, tmp_path):
+    """The species list loaded before an admin approved (or rejected) the volunteer's new
+    species: the verdict's 409 names that, and the page reloads the list instead of
+    moving on from a box that is still theirs."""
+    enter = (
+        "await RV.views.single.enter({ payload: payload(1) });"
+        if view == "single"
+        else "await RV.views.frame.enter({ savedFrameId: 7 });"
+    )
+    out = run_node(
+        [_read("review-core.js"), _read(f"review-{view}.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      RV.catalogue = [...listed, ENTRY];
+      globalThis.verdictReply = {{ status: 409,
+        data: {{ error: "that species suggestion was already decided; pick from the list" }} }};
+      {enter}
+      const root = document.getElementById("rv-{view}");
+      offered(root, "spotted");
+      find(root, (n) => n.tag === "li" && textOf(n).startsWith("Spotted Goatfish")).on.mousedown(
+        {{ preventDefault() {{}} }});
+      await settle();
+      return calls.map((c) => c.url.split("?")[0]).filter((u) => !u.endsWith("/open"));
+    """,
+        tmp_path,
+    )
+    assert out[:2] == ["/api/review/verdicts", "/api/review/species"]
+    assert "/api/review/next" not in out
+
+
+@needs_node
+def test_looks_right_never_offers_a_stage_waiting_for_approval(tmp_path):
+    """A new stage of a listed species (a striped parrotfish juvenile) waits for approval;
+    "Looks right" on that species asks only for the listed stages, which the server takes."""
+    out = run_node(
+        [_read("review-core.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      const parrot = (stage) => ({ key: `Scarus iseri|${stage}`, name: "Scarus iseri",
+        life_stage: stage, common: "Striped Parrotfish" });
+      RV.catalogue = [parrot("initial phase"), parrot("terminal phase"),
+        { key: "suggestion:3", name: "Scarus iseri", life_stage: "juvenile", pending: true,
+          suggestion_id: 3, common: "Striped Parrotfish juvenile (waiting for approval)" }];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      RV.acceptGuessFlow({ name: "Scarus iseri", common: "Striped Parrotfish" }, "rv-stage", () => {});
+      const chips = find(document.getElementById("rv-stage"), (n) => n.className === "rv-chips");
+      return chips.children.map(textOf);
+    """,
+        tmp_path,
+    )
+    assert out == ["initial phase", "terminal phase"]
+
+
+def test_the_form_offers_the_servers_stages():
+    from app.species_suggestions import STAGES
+
+    m = re.search(r"RV\.STAGES = \[([^\]]*)\];", _read("review-core.js"))
+    assert m and re.findall(r'"([^"]+)"', m.group(1)) == [s for s in STAGES if s]
+    assert None in STAGES  # the form's "none"
