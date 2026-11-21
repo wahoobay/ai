@@ -487,7 +487,14 @@ RV.views.frame = (() => {
     } else {
       out.push(...addedPanel(selected.kind === "added" ? addedBox(selected.id) : null));
     }
-    if (canMark()) out.push(markRestBlock());
+    if (canMark()) {
+      out.push(markRestBlock());
+    } else if (!lastAnswer && !state.complete && waiting() > 1) {
+      // Until a species is given here, say how marking the rest works: "No
+      // animal" and "Can't identify" don't set what M would mark (Dan, 2026-11-21).
+      out.push(RV.el("p", { class: "rv-muted rv-mark-hint",
+        text: "Answer one box with a species, then press M to mark the rest the same way." }));
+    }
     out.push(checklist());
     const blocked = state.blocking.length > 0;
     out.push(RV.el("button", { type: "button", class: "rv-primary", disabled: Boolean(state.complete) || blocked,

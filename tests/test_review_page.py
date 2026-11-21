@@ -1056,3 +1056,32 @@ def test_the_toast_explains_boxes_the_mark_did_not_reach(tmp_path):
         "Marked 1 box as Smallmouth grunt. 1 couldn't be marked; "
         "it may be taken by another volunteer. See the frame."
     )
+
+
+HINT = "Answer one box with a species, then press M to mark the rest the same way."
+
+
+@needs_node
+def test_the_frame_says_how_to_mark_the_rest_until_a_species_is_given(tmp_path):
+    """Dan, 2026-11-21: two "No animal" answers and no sign the feature
+    existed. Until a species is given in the frame, the panel says how."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + """
+      const text = (n) => (!n || typeof n !== "object") ? ""
+        : (n.textContent || n.text || "") + (n.children || []).map(text).join(" ");
+      const shown = () => text(document.getElementById("rv-frame"));
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const first = shown();
+      key("n"); await settle();                 // "No animal" is not a species
+      const afterNone = shown();
+      key("a"); await settle();                 // "Looks right" is
+      const afterSpecies = shown();
+      return { first, afterNone, afterSpecies };
+    """,
+        tmp_path,
+    )
+    assert HINT in out["first"] and HINT in out["afterNone"]
+    assert HINT not in out["afterSpecies"]
+    assert "Mark the 2 unanswered boxes as Smallmouth grunt" in out["afterSpecies"]
