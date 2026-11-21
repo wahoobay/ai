@@ -596,6 +596,7 @@ RV.views.frame = (() => {
     busy = true;
     confirmingMark = false;
     const answer = lastAnswer;
+    const asked = waiting();   // what the question named
     try {
       const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/mark-rest`,
         { label: answer.label, life_stage: answer.life_stage, not_sure: answer.not_sure });
@@ -606,8 +607,14 @@ RV.views.frame = (() => {
         return;
       }
       const { marked, skipped } = r.data;
+      // A box another volunteer took after the question was asked is never
+      // tried (the server re-reads the frame), so count against the question.
+      const missed = Math.max(asked - marked, skipped || 0);
       let message = `Marked ${marked} box${marked === 1 ? "" : "es"} as ${answer.common || answer.label}.`;
-      if (skipped) message += ` ${skipped} ${skipped === 1 ? "was" : "were"} taken by someone else.`;
+      if (missed) {
+        message += ` ${missed} couldn't be marked; ${missed === 1 ? "it" : "they"} may be taken by`
+          + ` another volunteer. See the frame.`;
+      }
       RV.toast(message);
       await RV.refreshMine();
       await reload(false);
@@ -726,11 +733,14 @@ RV.views.frame = (() => {
     }
   }
 
-  function onFrameKey(key) {
+  function onFrameKey(key, ev) {
     if (!state) return false;
     const k = key.length === 1 ? key.toLowerCase() : key;
     if (k === "Escape" && confirmingMark) { cancelMark(); return true; }
-    if (k === "m" || (k === "Enter" && confirmingMark)) {
+    // Enter on a focused button or link is that control's own key (Cancel
+    // included): only Enter with nothing in focus confirms the mark.
+    const onControl = Boolean(ev && ev.target && ["BUTTON", "A"].includes(ev.target.tagName));
+    if (k === "m" || (k === "Enter" && confirmingMark && !onControl)) {
       // M asks first ("Mark N boxes as ...?"); M again, or Enter, marks them.
       if (!canMark()) return false;
       if (confirmingMark) markRest(); else askMark();

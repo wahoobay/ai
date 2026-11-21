@@ -931,7 +931,7 @@ FRAME_STUB = r"""
     let data = { ok: true };
     const m = url.match(/^\/api\/review\/frames\/(\d+)\/open$/);
     if (m) data = frame(Number(m[1]));
-    else if (url.endsWith("/mark-rest")) data = { marked: 2, skipped: 1 };
+    else if (url.endsWith("/mark-rest")) data = globalThis.markReply || { marked: 2, skipped: 0 };
     else if (url === "/api/review/mine/recent") data = { session_count: 0, recent: [] };
     return { status: 200, ok: true, json: async () => data };
   };
@@ -1013,3 +1013,46 @@ def test_changing_an_answer_stays_on_that_box_in_the_frame(tmp_path):
 def test_a_second_opinion_you_gave_keeps_the_single_view_change():
     panel = _function_body(_read("review-frame.js"), "modelPanel")
     assert "b.own_spot" in panel and "reopenEventId: b.event_id" in panel
+
+
+@needs_node
+def test_enter_on_a_focused_button_never_confirms_the_mark(tmp_path):
+    """Final review, Important 1: with the question up, Enter pressed while a
+    button has focus (Cancel, Next frame, a chip) is that button's own key."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + """
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      key("a"); await settle();
+      key("m"); await settle();
+      const handled = RV.keyHandlers.frame("Enter", { target: { tagName: "BUTTON" } });
+      await settle();
+      return { handled, marks: posted().filter((c) => c.url.endsWith("/mark-rest")).length };
+    """,
+        tmp_path,
+    )
+    assert out == {"handled": False, "marks": 0}
+
+
+@needs_node
+def test_the_toast_explains_boxes_the_mark_did_not_reach(tmp_path):
+    """Final review, 2 and 3: the question named two boxes; one was taken by
+    another volunteer before the mark landed (the server never tried it, so it
+    is not in `skipped`). The toast says so, without guessing at blame."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + """
+      globalThis.markReply = { marked: 1, skipped: 0 };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      key("a"); await settle();
+      key("m"); key("m"); await settle();
+      return document.getElementById("rv-toast").textContent;
+    """,
+        tmp_path,
+    )
+    assert out == (
+        "Marked 1 box as Smallmouth grunt. 1 couldn't be marked; "
+        "it may be taken by another volunteer. See the frame."
+    )
