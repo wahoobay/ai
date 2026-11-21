@@ -292,6 +292,21 @@ async def test_merged_catalogue_leaves_the_callers_transaction_alone(rdb, cat):
     assert (await _row(rdb, e["suggestion_id"]))["note"] == "kept"
 
 
+async def test_species_photos_read_the_file_catalogue(rdb, rclient, monkeypatch):
+    """Ruling P1a: approved suggestions carry no photos, so a thumbnail costs no database
+    round trip for the merge."""
+    import app.routes_review as routes_review
+
+    async def no_merge(conn, base):
+        raise AssertionError("the photo route merged the catalogue")
+
+    await make_user(rdb, "roy")
+    login(rclient, "roy")
+    monkeypatch.setattr(routes_review, "merged_catalogue", no_merge)
+    r = rclient.get("/api/review/species/Seriola_zonata/photo.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+
+
 async def test_my_list_says_what_happened(rdb, cat):
     roy, ann = await make_user(rdb, "roy"), await make_user(rdb, "ann")
     a = await _suggest(rdb, roy, cat, common_name="Spotted Moray")

@@ -275,7 +275,9 @@ def build_review_router(cfg, state, templates) -> APIRouter:
 
     @router.get("/api/review/species/{name_slug}/photo.jpg")
     async def species_photo(name_slug: str, user=Depends(reviewer)):
-        found = (await _catalogue()).photo(name_slug)
+        # The file catalogue, not _catalogue(): approved suggestions carry no photos, so
+        # merging them would only cost a database round trip per thumbnail (Ruling P1a).
+        found = (await state["review_catalogue"].aget()).photo(name_slug)
         if found is None:
             return JSONResponse({"error": "no photo for that species"}, status_code=404)
         return await _jpeg(render_frame, str(found[0]), 320)
