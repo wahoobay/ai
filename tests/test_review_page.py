@@ -95,6 +95,7 @@ FRAME_MUTATING_HANDLERS = (
     "toSingle",
     "nextFrame",
     "reopenFrame",
+    "markRest",
 )
 
 
@@ -900,3 +901,115 @@ def test_change_my_answer_also_refuses_while_the_single_view_is_busy():
     onclick_start = body.rindex("onclick:", 0, at)
     between = body[onclick_start:at]
     assert "RV.views.single.isBusy()" in between
+
+
+# ---- 2026-11-21: mark the rest (M) and changing an answer in the frame ----------
+
+FRAME_STUB = r"""
+  globalThis.Node = Object;
+  document.createTextNode = (t) => ({ text: t });
+  document.createElementNS = (ns, tag) => document.createElement(tag);
+  const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const box = (n, state, extra) => Object.assign({ n, event_id: 100 + n, bbox: [10 * n, 10, 10 * n + 8, 18],
+    state, mine: false, own_spot: false, my_bbox: null, can_change: false, review_item_id: null,
+    zoom: { url: "/z.jpg" }, outcome: null, label: null, common: null, model: null, hints: null,
+    counts_toward: null }, extra);
+  const GRUNT = { name: "Haemulon chrysargyreum", common: "Smallmouth grunt", p: 0.8 };
+  const frame = (id) => ({ saved_frame_id: id, source_name: "seahive", ts: "2026-06-16T12:00:00Z",
+    frame: { url: "/f.jpg", width: 1280, height: 720 }, added: [], complete: null, blocking: [1, 2, 4],
+    boxes: [box(1, "needs_answer", { model: GRUNT, review_item_id: 11 }), box(2, "needs_answer"),
+      box(3, "answered", { mine: true, can_change: true, outcome: "species", label: "Haemulon aurolineatum",
+        common: "Tomtate", model: GRUNT, my_bbox: [31, 11, 40, 19] }),
+      box(4, "locked")] });
+  RV.catalogue = [{ key: "Haemulon chrysargyreum|", name: "Haemulon chrysargyreum",
+    common: "Smallmouth grunt", life_stage: null }];
+  RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    calls.push({ url, body });
+    let data = { ok: true };
+    const m = url.match(/^\/api\/review\/frames\/(\d+)\/open$/);
+    if (m) data = frame(Number(m[1]));
+    else if (url.endsWith("/mark-rest")) data = { marked: 2, skipped: 1 };
+    else if (url === "/api/review/mine/recent") data = { session_count: 0, recent: [] };
+    return { status: 200, ok: true, json: async () => data };
+  };
+  const key = (k) => RV.keyHandlers.frame(k);
+  const posted = () => calls.filter((c) => !c.url.endsWith("/open") && c.url !== "/api/review/mine/recent");
+"""
+
+
+@needs_node
+def test_m_marks_the_rest_with_the_last_answer_after_asking_once(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + """
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const before = key("m");                 // nothing answered in this frame yet
+      key("a"); await settle();                // "Looks right" on box 1
+      key("m"); await settle();                // asks first ...
+      const asked = posted().length;
+      key("Escape"); key("Enter"); await settle();   // ... cancelled, and Enter alone does nothing
+      key("m"); key("m"); await settle();      // asked again, and confirmed
+      key("m"); key("Enter"); await settle();  // Enter confirms too
+      return { before, asked, posted: posted() };
+    """,
+        tmp_path,
+    )
+    accept, mark, mark2 = out["posted"]
+    assert out["before"] is False
+    assert accept == {
+        "url": "/api/review/verdicts",
+        "body": {"event_id": 101, "review_item_id": 11, "outcome": "accept", "not_sure": False},
+    }
+    assert out["asked"] == 1  # the first M only asked
+    body = {"label": "Haemulon chrysargyreum", "life_stage": None, "not_sure": False}
+    assert mark == mark2 == {"url": "/api/review/frames/7/mark-rest", "body": body}
+
+
+@needs_node
+def test_the_last_answer_is_forgotten_in_another_frame(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + """
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      key("a"); await settle();
+      await RV.views.frame.enter({ savedFrameId: 8 });
+      const handled = key("m"); key("m"); await settle();
+      return { handled, marks: posted().filter((c) => c.url.endsWith("/mark-rest")).length };
+    """,
+        tmp_path,
+    )
+    assert out == {"handled": False, "marks": 0}
+
+
+@needs_node
+def test_changing_an_answer_stays_on_that_box_in_the_frame(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + """
+      await RV.views.frame.enter({ savedFrameId: 7, selectEventId: 103 });
+      key("c"); await settle();                // change box 3 to "can't identify" ...
+      key("n"); await settle();                // ... and again: still box 3, still this frame
+      const shown = RV.view;
+      return { posted: posted(), opens: calls.filter((c) => c.url.endsWith("/open")).length };
+    """,
+        tmp_path,
+    )
+    first, second = out["posted"]
+    assert first["url"] == "/api/review/verdicts"
+    assert first["body"]["event_id"] == 103 and first["body"]["review_item_id"] is None
+    assert first["body"]["outcome"] == "unidentifiable"
+    assert first["body"]["bbox"] == [31, 11, 40, 19]  # the box drawn on the earlier answer is kept
+    assert second["body"]["event_id"] == 103 and second["body"]["outcome"] == "no_animal"
+    assert "bbox" not in second["body"]  # a box goes with no 'no animal' answer
+    assert out["opens"] == 3  # entered once, reloaded after each change
+
+
+def test_a_second_opinion_you_gave_keeps_the_single_view_change():
+    panel = _function_body(_read("review-frame.js"), "modelPanel")
+    assert "b.own_spot" in panel and "reopenEventId: b.event_id" in panel

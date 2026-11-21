@@ -28,10 +28,24 @@ RV.views.frame = (() => {
   let hintName = null;
   let notSure = false;
   let busy = false;
+  // "Mark the rest" (2026-11-21): the species this volunteer last gave in
+  // this frame ({label, life_stage, not_sure, common}), forgotten on entering
+  // another frame; and whether M has asked "Mark N boxes as ...?" yet.
+  let lastAnswer = null;
+  let confirmingMark = false;
 
   const kbd = (key) => RV.el("kbd", { text: key });
   const inside = (bb, x, y) => x >= bb[0] && x <= bb[2] && y >= bb[1] && y <= bb[3];
   const modelBox = (id) => state.boxes.find((b) => b.event_id === id);
+  // A box this volunteer may answer now: one waiting for an answer, or their
+  // own answer the server would let them change from here (can_change).
+  const changeable = (b) => b.state === "needs_answer" || (b.state === "answered" && b.can_change);
+  // Selecting a model box starts from the box drawn on this volunteer's own
+  // answer, if they moved it, so changing that answer keeps the box.
+  function boxTarget(b) {
+    const bb = (b.my_bbox || b.bbox).slice();
+    return { kind: "model", id: b.event_id, bbox: bb, original: bb.slice() };
+  }
   const addedBox = (id) => state.added.find((a) => a.id === id);
   const STATE_CLASS = { needs_answer: "rv-fb-pending", answered: "rv-fb-done",
     answered_hidden: "rv-fb-done", locked: "rv-fb-locked" };
@@ -71,6 +85,8 @@ RV.views.frame = (() => {
         RV.show("single", arg.payload ? { payload: arg.payload } : { result: r });
         return;
       }
+      if (!state || state.saved_frame_id !== id) lastAnswer = null;   // a new frame needs an answer first
+      confirmingMark = false;
       state = r.data;
       RV.held = null;            // the frame's claims now include it
       RV.openFrameId = id;
@@ -85,7 +101,7 @@ RV.views.frame = (() => {
   function selectBox(eventId) {
     const b = modelBox(eventId);
     if (!b) return false;
-    selected = { kind: "model", id: b.event_id, bbox: b.bbox.slice(), original: b.bbox.slice() };
+    selected = boxTarget(b);
     hintName = null;
     notSure = false;
     return true;
@@ -106,6 +122,7 @@ RV.views.frame = (() => {
     if (!r.ok) { RV.toast(r.data.error || "Couldn't refresh the frame."); return; }
     if (RV.openFrameId !== id) { RV.post(`/api/review/frames/${id}/release`); return; }
     state = r.data;
+    confirmingMark = false;
     if (!keepSelection) selectFirst();
     render();
   }
@@ -135,7 +152,7 @@ RV.views.frame = (() => {
 
   function selectFirst() {
     const box = state.boxes.find((b) => b.state === "needs_answer");
-    selected = box ? { kind: "model", id: box.event_id, bbox: box.bbox.slice(), original: box.bbox.slice() } : null;
+    selected = box ? boxTarget(box) : null;
     // Cleared here too, not just in select(): otherwise a "not sure"
     // left checked (or a hint mid-pick) on the box just answered would
     // silently carry over onto whichever box reload()'s selectFirst()
@@ -148,6 +165,7 @@ RV.views.frame = (() => {
     selected = target;
     hintName = null;
     notSure = false;
+    confirmingMark = false;
     render();
   }
 
@@ -157,7 +175,7 @@ RV.views.frame = (() => {
     if (selected.kind === "new") return true;
     if (selected.kind === "model") {
       const b = modelBox(selected.id);
-      return Boolean(b && b.state === "needs_answer");
+      return Boolean(b && changeable(b));
     }
     const a = addedBox(selected.id);
     return Boolean(a && (a.mine || RV.role === "admin"));
@@ -177,7 +195,7 @@ RV.views.frame = (() => {
     const rect = (bb, cls) => RV.svg("rect", { x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1], class: cls });
     for (const b of state.boxes) {
       const isSel = selected && selected.kind === "model" && selected.id === b.event_id;
-      const bb = isSel ? selected.bbox : b.bbox;
+      const bb = isSel ? selected.bbox : (b.my_bbox || b.bbox);
       nodes.push(rect(bb, "rv-fb " + (isSel ? "rv-fb-selected" : STATE_CLASS[b.state])));
       const mark = b.state === "locked" ? " · busy" : b.state.startsWith("answered") ? " ✓" : "";
       nodes.push(label(bb[0], bb[1], `${b.n}${mark}`));
@@ -223,7 +241,7 @@ RV.views.frame = (() => {
       if (inside(a.bbox, px, py)) return { kind: "added", id: a.id, bbox: a.bbox.slice(), original: a.bbox.slice() };
     }
     for (const b of [...state.boxes].reverse()) {
-      if (inside(b.bbox, px, py)) return { kind: "model", id: b.event_id, bbox: b.bbox.slice(), original: b.bbox.slice() };
+      if (inside(b.my_bbox || b.bbox, px, py)) return boxTarget(b);
     }
     return null;
   }
@@ -340,7 +358,13 @@ RV.views.frame = (() => {
       RV.el("div", { class: "rv-thumb" }, RV.el("img", { src: b.zoom.url, alt: `Box ${b.n}, zoomed` }))];
     if (b.state === "answered") {
       out.push(RV.el("p", { text: `Answered: ${answerText(b.outcome, b.label, b.common)}${b.mine ? " (by you)" : ""}.` }));
-      if (b.mine) {
+      if (b.mine && b.can_change) {
+        // Changed here, in the frame (2026-11-21): the same controls as an
+        // unanswered box; the answer goes through the no-item path.
+        out.push(RV.el("div", { class: "rv-label", text: "Change it" }), ...answerControls(b));
+      } else if (b.mine && b.own_spot) {
+        // A second opinion this volunteer gave stays blind: the single view
+        // applies those rules, so the change happens there, as before.
         out.push(RV.el("button", { type: "button", onclick: () => {
           // Controller ruling 2 (Task 4): the one way out of a frame with no
           // guard on it -- pin it like every other request-sending action.
@@ -348,6 +372,8 @@ RV.views.frame = (() => {
           if (RV.views.single && RV.views.single.isBusy && RV.views.single.isBusy()) return;   // Task 6 review: a reopen refused mid-save would strand the answered box
           RV.show("single", { reopenEventId: b.event_id });
         } }, "Change my answer"));
+      } else if (b.mine) {
+        out.push(RV.el("p", { class: "rv-muted", text: "This answer can't be changed here any more." }));
       }
       return out;
     }
@@ -361,6 +387,15 @@ RV.views.frame = (() => {
     }
     const progress = RV.progressBar(b.counts_toward);
     if (progress) out.push(progress);
+    out.push(...answerControls(b));
+    return out;
+  }
+
+  // "Looks right" (when the model guessed), the species picker and hints,
+  // "Can't identify" and "No animal": for a box waiting for an answer, and
+  // for one of this volunteer's own answers they are changing.
+  function answerControls(b) {
+    const out = [];
     if (b.model) {
       out.push(RV.el("div", { class: "rv-guess" },
         RV.el("div", { class: "rv-guess-text" },
@@ -374,6 +409,34 @@ RV.views.frame = (() => {
       (entry, source) => answerModel("species", { label: entry.name, life_stage: entry.life_stage, label_source: source }),
       () => answerModel("unidentifiable", {}), () => answerModel("no_animal", {})));
     return out;
+  }
+
+  // ---- mark the rest (2026-11-21) ------------------------------------------------
+
+  const waiting = () => state.boxes.filter((b) => b.state === "needs_answer").length;
+
+  function canMark() {
+    return Boolean(state && lastAnswer && !state.complete && waiting() > 0
+      && RV.openFrameId === state.saved_frame_id);
+  }
+
+  function askMark() { confirmingMark = true; renderPanel(); }
+
+  function cancelMark() { confirmingMark = false; renderPanel(); }
+
+  function markRestBlock() {
+    const n = waiting();
+    const name = lastAnswer.common || lastAnswer.label;
+    const boxes = `${n} unanswered box${n === 1 ? "" : "es"}`;
+    if (!confirmingMark) {
+      return RV.el("button", { type: "button", class: "rv-mark-rest", onclick: askMark },
+        `Mark the ${boxes} as ${name} `, kbd("M"));
+    }
+    return RV.el("div", { class: "rv-mark-confirm", role: "group" },
+      RV.el("p", { text: `Mark ${boxes} as ${name}${lastAnswer.not_sure ? " (not sure)" : ""}?` }),
+      RV.el("div", { class: "rv-row" },
+        RV.el("button", { type: "button", class: "rv-primary", onclick: markRest }, "Yes, mark them ", kbd("M")),
+        RV.el("button", { type: "button", onclick: cancelMark }, "Cancel ", kbd("Esc"))));
   }
 
   function addedPanel(a) {
@@ -397,7 +460,7 @@ RV.views.frame = (() => {
       locked: "another volunteer is on it" };
     const rows = state.boxes.map((b) => RV.el("li", {
       class: "rv-cl " + STATE_CLASS[b.state],
-      onclick: () => select({ kind: "model", id: b.event_id, bbox: b.bbox.slice(), original: b.bbox.slice() }),
+      onclick: () => select(boxTarget(b)),
     }, `${b.n} · ${words[b.state] || answerText(b.outcome, b.label, b.common)}`));
     for (const a of state.added) {
       rows.push(RV.el("li", { class: "rv-cl rv-fb-added",
@@ -424,6 +487,7 @@ RV.views.frame = (() => {
     } else {
       out.push(...addedPanel(selected.kind === "added" ? addedBox(selected.id) : null));
     }
+    if (canMark()) out.push(markRestBlock());
     out.push(checklist());
     const blocked = state.blocking.length > 0;
     out.push(RV.el("button", { type: "button", class: "rv-primary", disabled: Boolean(state.complete) || blocked,
@@ -457,7 +521,8 @@ RV.views.frame = (() => {
       swatch("added", "drawn by a volunteer"),
       swatch("locked", "another volunteer has it"),
       RV.el("span", { class: "rv-legend-keys" },
-        kbd("S"), " next frame · ", kbd("D"), " draw a box · ", kbd("F"), " single boxes"));
+        kbd("S"), " next frame · ", kbd("D"), " draw a box · ", kbd("M"), " mark the rest · ",
+        kbd("F"), " single boxes"));
   }
 
   function render() {
@@ -489,6 +554,7 @@ RV.views.frame = (() => {
     busy = true;
     try {
       const b = modelBox(selected.id);
+      const changing = b.state === "answered";
       const body = { event_id: b.event_id, review_item_id: b.review_item_id, outcome, ...extra };
       if (outcome === "accept" || outcome === "species") body.not_sure = notSure;
       if (outcome !== "no_animal" && selected.bbox.some((v, i) => v !== b.bbox[i])) body.bbox = selected.bbox;
@@ -499,6 +565,50 @@ RV.views.frame = (() => {
         if (r.status === 409 || r.status === 403) await reload(false);
         return;
       }
+      if (outcome === "accept" || outcome === "species") {
+        // What "mark the rest" offers next in this frame.
+        const label = outcome === "accept" ? b.model.name : extra.label;
+        const lifeStage = extra.life_stage || null;
+        const entry = RV.entry(label, lifeStage);
+        lastAnswer = { label, life_stage: lifeStage, not_sure: notSure,
+          common: (outcome === "accept" && b.model.common) || (entry && entry.common) || null };
+      }
+      await RV.refreshMine();
+      if (changing) {
+        // A change made in the frame stays in the frame, on the same box.
+        await reload(true);
+        if (state && selectBox(b.event_id)) render();
+      } else {
+        await reload(false);
+      }
+    } finally {
+      busy = false;
+    }
+  }
+
+  // "Mark the rest": every box in this frame still waiting for an answer gets
+  // the species this volunteer last gave here (POST .../mark-rest; the server
+  // works out which boxes, and stores them as label_source 'bulk').
+  async function markRest() {
+    if (!state || RV.openFrameId !== state.saved_frame_id) return;
+    if (busy) return;
+    if (!lastAnswer) return;
+    busy = true;
+    confirmingMark = false;
+    const answer = lastAnswer;
+    try {
+      const r = await RV.post(`/api/review/frames/${state.saved_frame_id}/mark-rest`,
+        { label: answer.label, life_stage: answer.life_stage, not_sure: answer.not_sure });
+      if (!r.ok) {
+        RV.toast(r.data.error || "Those boxes weren't marked.");
+        if (r.data.error === "pick a species from the list") await RV.loadCatalogue();
+        await reload(false);
+        return;
+      }
+      const { marked, skipped } = r.data;
+      let message = `Marked ${marked} box${marked === 1 ? "" : "es"} as ${answer.common || answer.label}.`;
+      if (skipped) message += ` ${skipped} ${skipped === 1 ? "was" : "were"} taken by someone else.`;
+      RV.toast(message);
       await RV.refreshMine();
       await reload(false);
     } finally {
@@ -616,9 +726,16 @@ RV.views.frame = (() => {
     }
   }
 
-  RV.onKey("frame", (key) => {
+  function onFrameKey(key) {
     if (!state) return false;
     const k = key.length === 1 ? key.toLowerCase() : key;
+    if (k === "Escape" && confirmingMark) { cancelMark(); return true; }
+    if (k === "m" || (k === "Enter" && confirmingMark)) {
+      // M asks first ("Mark N boxes as ...?"); M again, or Enter, marks them.
+      if (!canMark()) return false;
+      if (confirmingMark) markRest(); else askMark();
+      return true;
+    }
     if (k === "f") { toSingle(); return true; }
     if (k === "d") { toggleDraw(); return true; }
     if (k === "s") { nextFrame(); return true; }
@@ -633,7 +750,7 @@ RV.views.frame = (() => {
     if (!selected) return false;
     if (selected.kind === "model") {
       const b = modelBox(selected.id);
-      if (!b || b.state !== "needs_answer") return false;
+      if (!b || !changeable(b)) return false;
       if (k === "a" && b.model) { acceptGuess(b); return true; }
       if (k === "c") { answerModel("unidentifiable", {}); return true; }
       if (k === "n") { answerModel("no_animal", {}); return true; }
@@ -642,7 +759,9 @@ RV.views.frame = (() => {
       return true;
     }
     return false;
-  });
+  }
+
+  RV.onKey("frame", onFrameKey);
 
   // Fix round 1, Important 1(b): so the nav click handler (review-core.js)
   // can refuse to leave the frame view while an answer is still in flight,
