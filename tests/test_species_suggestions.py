@@ -3,12 +3,18 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import random
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.exports import export_corrections, export_labeled_corrections
+from app.public_queries import LATEST_VERDICT
+from app.review_browse import agreement, progress_summary
 from app.review_catalogue import CatalogueStore
 from app.review_frames import MarkRestIn, mark_rest
+from app.review_pool import PoolSettings, ReviewPool
 from app.review_queue import (
     Conflict,
     Forbidden,
@@ -25,6 +31,7 @@ from app.species_suggestions import (
     create_suggestion,
     list_mine,
     merged_catalogue,
+    pending_species_events,
 )
 from psycopg.pq import TransactionStatus
 from review_fixtures import (
@@ -701,3 +708,189 @@ async def test_suggested_answer_over_http(rdb, rclient, tmp_path):
     assert r.json()["label"] == "Pomatomus saltatrix"
     [row] = await _verdicts(rdb)
     assert row["species_suggestion_id"] == s["suggestion_id"]
+
+
+# ---- keeping pending answers out ------------------------------------------------------------
+
+# A new stage of a listed species: its provisional name is the listed 'Seriola zonata', so a
+# pending answer would land in that species' training rows and counts unless it is kept out.
+JUVENILE_RUDDERFISH = {
+    "common_name": "Juvenile Banded Rudderfish",
+    "scientific_name": "Seriola zonata",
+    "life_stage": "juvenile",
+}
+
+
+async def _pending_and_control(rdb, tmp_path, cat):
+    """Two boxes roy answered 'Seriola zonata': `pending` with his pending suggestion,
+    `control` from the list."""
+    roy = await make_user(rdb, "roy")
+    sid = (await _suggest(rdb, roy, cat, **JUVENILE_RUDDERFISH))["suggestion_id"]
+    f, pending, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
+    out = await _answer(rdb, cat, roy, **_suggested(sid, event_id=pending, review_item_id=item))
+    g, control, control_item = await _box(rdb, tmp_path, 1, claimed_by=roy)
+    control_out = await _answer(
+        rdb,
+        cat,
+        roy,
+        event_id=control,
+        review_item_id=control_item,
+        outcome="species",
+        label="Seriola zonata",
+        label_source="search",
+    )
+    return {
+        "roy": roy,
+        "sid": sid,
+        "pending": pending,
+        "control": control,
+        "frames": {pending: f, control: g},
+        "first": {pending: out["id"], control: control_out["id"]},
+    }
+
+
+async def _export_rows(stream) -> list[dict]:
+    return list(csv.DictReader(io.StringIO("".join([line async for line in stream]))))
+
+
+async def _export_events(stream) -> list[int]:
+    return [int(r["event_id"]) for r in await _export_rows(stream)]
+
+
+async def _latest_verdict(rdb, event_id):
+    async with rdb.connection() as conn:
+        return await fetch_all(
+            conn,
+            f"""SELECT v.* FROM detection_events de CROSS JOIN LATERAL ({LATEST_VERDICT}) v
+                 WHERE de.id = %s""",
+            (event_id,),
+        )
+
+
+async def _verified(rdb, review_assets, name):
+    """`name`'s verified count as the review pool's refresh_progress computes it."""
+    store = CatalogueStore(catalogue_paths(review_assets))
+    pool = ReviewPool(rdb, PoolSettings(target=200), store, review_assets["baseline"])
+    await pool.refresh_progress()
+    return pool, pool.verified(name)
+
+
+async def test_pending_boxes_are_left_out_of_the_training_export(rdb, tmp_path, cat):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    for include_identity in (False, True):  # administrators' downloads too
+        rows = await _export_events(export_labeled_corrections(rdb, include_identity))
+        assert rows == [w["control"]], include_identity
+    # The whole box waits: a later answer from the list on it stays out as well.
+    boss = await make_user(rdb, "boss", role="admin")
+    await add_verdict(rdb, w["pending"], boss, name="Seriola zonata", label_source="search")
+    for include_identity in (False, True):
+        rows = await _export_events(export_labeled_corrections(rdb, include_identity))
+        assert rows == [w["control"]], include_identity
+
+
+async def test_pending_boxes_are_left_out_of_public_and_counts(rdb, tmp_path, cat, review_assets):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    public = await _export_events(export_corrections(rdb, hours=None, reviewer=None))
+    assert public == [w["control"]]
+    # an administrator's corrections file shows it, as it shows a pending spot-check's answer
+    admin = await _export_events(
+        export_corrections(rdb, hours=None, reviewer=None, include_identity=True)
+    )
+    assert sorted(admin) == sorted([w["pending"], w["control"]])
+
+    assert await _latest_verdict(rdb, w["pending"]) == []
+    [control] = await _latest_verdict(rdb, w["control"])
+    assert control["corrected_name"] == "Seriola zonata"
+
+    pool, verified = await _verified(rdb, review_assets, "Seriola zonata")
+    assert verified == 1  # the control only
+    async with rdb.connection() as conn:
+        p = await progress_summary(conn, pool_obj=pool, catalogue=cat, session_id=None, target=200)
+    assert p["kpis"]["verified_boxes"] == 1
+    seriola = next(s for s in p["species"] if s["name"] == "Seriola zonata")
+    assert seriola["verified"] == 1
+
+
+async def test_pending_answers_are_left_out_of_the_live_pool_count(
+    rdb, rclient, tmp_path, monkeypatch
+):
+    """Until the next refresh_progress, the pool counts what the verdict route reports
+    (`counts`); a pending answer must not be noted."""
+    calls = []
+    monkeypatch.setattr(
+        "app.review_pool.ReviewPool.note_verified", lambda self, name: calls.append(name)
+    )
+    await make_user(rdb, "roy")
+    login(rclient, "roy")
+    s = rclient.post(
+        "/api/review/species-suggestions", json=JUVENILE_RUDDERFISH, headers=CSRF
+    ).json()
+    _f, pending, _i = await _box(rdb, tmp_path, 0)
+    _g, control, _j = await _box(rdb, tmp_path, 1)
+    url = "/api/review/verdicts"
+    body = _suggested(s["suggestion_id"], event_id=pending)
+    r = rclient.post(url, json=body, headers=CSRF)
+    assert r.status_code == 200, r.text
+    assert r.json()["label"] == "Seriola zonata" and r.json()["counts"] is False
+    again = rclient.post(url, json=body, headers=CSRF).json()  # a double submit
+    assert again["duplicate"] is True and again["counts"] is False
+    listed = {
+        "event_id": control,
+        "outcome": "species",
+        "label": "Seriola zonata",
+        "label_source": "search",
+    }
+    r = rclient.post(url, json=listed, headers=CSRF)
+    assert r.status_code == 200 and r.json()["counts"] is True
+    assert calls == ["Seriola zonata"]
+
+
+async def test_pending_boxes_are_left_out_of_agreement(rdb, tmp_path, cat):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    two = await make_user(rdb, "two")
+    for eid in (w["pending"], w["control"]):
+        spot = await add_item(
+            rdb,
+            w["frames"][eid],
+            pass_=2,
+            status="done",
+            exclude_user_id=w["roy"],
+            first_correction_id=w["first"][eid],
+        )
+        await add_verdict(rdb, eid, two, name="Seriola zonata", item_id=spot)
+    async with rdb.connection() as conn:
+        a = await agreement(conn)
+    assert a["overall"]["pairs"] == 1  # the control's pair only
+    assert set(a["by_label_source"]) == {"search"}
+
+
+async def test_after_approval_the_box_is_back(rdb, tmp_path, cat, review_assets):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
+    for include_identity in (False, True):
+        rows = {
+            int(r["event_id"]): r
+            for r in await _export_rows(export_labeled_corrections(rdb, include_identity))
+        }
+        assert set(rows) == {w["pending"], w["control"]}, include_identity
+        back = rows[w["pending"]]
+        assert back["corrected_name"] == back["corrected_species_id"] == "Seriola zonata"
+        assert back["life_stage"] == "juvenile" and back["label_source"] == "suggested"
+    assert [v["corrected_name"] for v in await _latest_verdict(rdb, w["pending"])] == [
+        "Seriola zonata"
+    ]
+    _pool, verified = await _verified(rdb, review_assets, "Seriola zonata")
+    assert verified == 2
+
+
+async def test_pending_species_events_names_each_waiting_box(rdb, tmp_path, cat):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    named = {w["pending"]: "Juvenile Banded Rudderfish"}
+    async with rdb.connection() as conn:
+        assert await pending_species_events(conn) == named
+        assert await pending_species_events(conn, [w["pending"], w["control"]]) == named
+        assert await pending_species_events(conn, [w["control"]]) == {}
+        assert await pending_species_events(conn, []) == {}
+    await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
+    async with rdb.connection() as conn:
+        assert await pending_species_events(conn) == {}

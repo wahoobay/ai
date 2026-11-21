@@ -616,6 +616,13 @@ def _verdict_identity(v: dict, outcome: str) -> dict:
     }
 
 
+def _counts(name: str | None, confidence: str, species_suggestion_id: int | None) -> bool:
+    """Whether a first answer counts toward its species' verified total in the review pool
+    (ReviewPool.note_verified): a named, sure answer, not one naming a species waiting for
+    approval, which counts once approved (refresh_progress, pending_species_events)."""
+    return name is not None and confidence != "uncertain" and species_suggestion_id is None
+
+
 def _stored_outcome(row: dict) -> str:
     """The API-level outcome ('accept'/'species'/'unidentifiable'/
     'no_animal') a stored detection_corrections row represents. accept and
@@ -685,7 +692,9 @@ async def _duplicate_verdict(
         "outcome": _stored_outcome(recent),
         "label": recent["corrected_name"],
         "first_pass": first_pass,
-        "counts": recent["corrected_name"] is not None and recent["confidence"] != "uncertain",
+        "counts": _counts(
+            recent["corrected_name"], recent["confidence"], recent["species_suggestion_id"]
+        ),
         "spot_check_scheduled": spot is not None,
         "duplicate": True,
     }
@@ -971,7 +980,7 @@ async def submit_verdict(
         "outcome": body.outcome,
         "label": v["name"],
         "first_pass": first_pass,
-        "counts": v["name"] is not None and v["confidence"] != "uncertain",
+        "counts": _counts(v["name"], v["confidence"], v["species_suggestion_id"]),
         "spot_check_scheduled": spot is not None,
         "duplicate": False,
     }

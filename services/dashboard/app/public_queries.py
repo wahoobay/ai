@@ -6,9 +6,10 @@ is the caller's job. A reviewer's verdict is read for what it says, never for wh
 query here selects a reviewer, note, user or session column.
 
 Volunteers' verdicts in the public answers: a verdict counts once it is visible (none while a
-spot-check of its box is pending: exports.hide_pending_spot_checks), and the latest visible
-one wins. A box called not a fish is no detection, and a track whose latest verdict says not a
-fish is no sighting (`hide_not_a_fish`). A rename does not move a sighting between species:
+spot-check of its box is pending, or while one of its box's answers names a species waiting for
+approval: exports.hide_pending), and the latest visible one wins. A box called not a fish is
+no detection, and a track whose latest verdict says not a fish is no sighting
+(`hide_not_a_fish`). A rename does not move a sighting between species:
 species_sightings_mat counts a track under the model's vote over its frames; only a single
 detection (recent_detections) shows the species a volunteer named."""
 
@@ -18,7 +19,7 @@ from datetime import datetime
 
 from psycopg.rows import dict_row
 
-from .exports import hide_pending_spot_checks
+from .exports import hide_pending
 
 # A detection's saved frame, for a query over detection_events aliased `de`.
 # detection_events.image_path is legacy / always NULL — the worker writes
@@ -45,7 +46,7 @@ LATEST_VERDICT = f"""
               SELECT dc.event_id, dc.corrected_name, dc.corrected_species_id, dc.not_a_fish
                 FROM detection_corrections dc
                WHERE dc.event_id = de.id
-                 AND {hide_pending_spot_checks("dc")}
+                 AND {hide_pending("dc")}
                ORDER BY dc.created_at DESC, dc.id DESC
                LIMIT 1"""
 
@@ -58,7 +59,7 @@ NOT_A_FISH_TRACKS = f"""
               FROM detection_corrections dc
               JOIN detection_events e ON e.id = dc.event_id
              WHERE e.track_id IS NOT NULL
-               AND {hide_pending_spot_checks("dc")}
+               AND {hide_pending("dc")}
              ORDER BY e.track_id, dc.created_at DESC, dc.id DESC) latest
      WHERE latest.not_a_fish"""
 
@@ -237,7 +238,7 @@ async def recent_detections(
     """The newest classified detections of the last `hours` the model scored at least
     `min_confidence`, each with the latest verdict on it (`reviewed`, `corrected_name`,
     `corrected_species_id`) and the path of its saved frame. A verdict on a box whose
-    spot-check is pending does not count yet (exports.hide_pending_spot_checks); a box
+    spot-check or species is pending does not count yet (exports.hide_pending); a box
     called not a fish is left out, and so is every box of a track whose latest verdict says
     not a fish (as the sightings leave it out). With `species_id`, the boxes the model gave
     that species and no verdict moved to another (a verdict names its species as one of

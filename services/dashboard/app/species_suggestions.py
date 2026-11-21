@@ -156,6 +156,23 @@ async def pending_entries(conn, *, user, catalogue) -> list[dict]:
     return [entry_json(r, catalogue) for r in rows]
 
 
+async def pending_species_events(conn, event_ids: list[int] | None = None) -> dict[int, str]:
+    """Each box (of `event_ids`, or every one) with an answer linked to a pending suggestion,
+    mapped to that suggestion's common name (the latest such answer's). The Python sibling of
+    exports.hide_pending_species: these boxes stay out of agreement and verified counts."""
+    rows = await fetch_all(
+        conn,
+        """SELECT DISTINCT ON (c.event_id) c.event_id, ss.common_name
+             FROM detection_corrections c
+             JOIN species_suggestions ss ON ss.id = c.species_suggestion_id
+            WHERE ss.status = 'pending'
+              AND (%(ids)s::bigint[] IS NULL OR c.event_id = ANY(%(ids)s::bigint[]))
+            ORDER BY c.event_id, c.created_at DESC, c.id DESC""",
+        {"ids": None if event_ids is None else list(event_ids)},
+    )
+    return {r["event_id"]: r["common_name"] for r in rows}
+
+
 async def list_mine(conn, *, user) -> list[dict]:
     """`user`'s own suggestions, newest first, each with what happened to it."""
     rows = await fetch_all(

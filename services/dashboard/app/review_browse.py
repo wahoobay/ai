@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from .config import site_tz
 from .review_labels import agreement_summary, load_verdicts, outcome_of, resolve
 from .review_queue import Invalid, fetch_all, fetch_one
+from .species_suggestions import pending_species_events
 
 
 def local_tz() -> ZoneInfo:
@@ -133,7 +134,11 @@ async def progress_summary(conn, *, pool_obj, catalogue, session_id, target: int
     async with conn.transaction():
         await _set_statement_timeout(conn)
         resolved = await _resolved(conn)
-        verified = [r for r, _v in resolved.values() if r.is_verified]
+        # A box answered with a species waiting for approval counts once it is approved.
+        pending = await pending_species_events(conn)
+        verified = [
+            r for event_id, (r, _v) in resolved.items() if r.is_verified and event_id not in pending
+        ]
         added = await fetch_all(
             conn,
             """SELECT label, outcome FROM review_added_boxes
@@ -473,7 +478,16 @@ async def list_disputes(conn, *, catalogue) -> list[dict]:
 
 
 async def agreement(conn) -> dict:
-    return agreement_summary({event_id: r for event_id, (r, _v) in (await _resolved(conn)).items()})
+    """Agreement on spot-checks, leaving out boxes with an answer naming a species waiting for
+    approval: that answer is provisional, and the decision may rename it."""
+    pending = await pending_species_events(conn)
+    return agreement_summary(
+        {
+            event_id: r
+            for event_id, (r, _v) in (await _resolved(conn)).items()
+            if event_id not in pending
+        }
+    )
 
 
 async def pool_status(conn, *, pool_obj) -> dict:
