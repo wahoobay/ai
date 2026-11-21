@@ -30,10 +30,12 @@ from .review_browse import (
 )
 from .review_frames import (
     AddedBoxIn,
+    MarkRestIn,
     add_box,
     complete_frame,
     frame_record,
     frame_state,
+    mark_rest,
     open_frame,
     release_frame,
     remove_box,
@@ -345,6 +347,30 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             except ReviewError as e:
                 return _fail(e)
         return JSONResponse({"ok": True})
+
+    @router.post(
+        "/api/review/frames/{saved_frame_id}/mark-rest", dependencies=[Depends(require_csrf)]
+    )
+    async def frame_mark_rest(saved_frame_id: int, body: MarkRestIn, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            try:
+                out = await mark_rest(
+                    conn,
+                    saved_frame_id=saved_frame_id,
+                    user=user,
+                    body=body,
+                    catalogue=await _catalogue(),
+                    spot_rate=cfg.review_spotcheck_rate,
+                    rng=rng,
+                )
+            except ReviewError as e:
+                return _fail(e)
+        pool_obj = _pool()
+        if pool_obj:
+            for v in out["verdicts"]:
+                if v["first_pass"] and v["counts"] and not v["duplicate"]:
+                    pool_obj.note_verified(v["label"])
+        return JSONResponse({"marked": out["marked"], "skipped": out["skipped"]})
 
     @router.post(
         "/api/review/frames/{saved_frame_id}/complete", dependencies=[Depends(require_csrf)]

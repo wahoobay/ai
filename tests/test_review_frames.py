@@ -12,9 +12,11 @@ import pytest
 from app.review_catalogue import CatalogueStore
 from app.review_frames import (
     AddedBoxIn,
+    MarkRestIn,
     add_box,
     complete_frame,
     frame_state,
+    mark_rest,
     open_frame,
     release_frame,
     remove_box,
@@ -775,3 +777,148 @@ async def test_the_frame_routes_send_the_progress(rdb, rclient, tmp_path):
         ct = r.json()["boxes"][0]["counts_toward"]
         assert ct["name"] == "Seriola zonata" and isinstance(ct["count"], int)
         assert ct["target"] > 0
+
+
+# ---- 2026-11-21: mark the rest -----------------------------------------------
+
+
+async def _mark(rdb, f, user, cat, spot=0.0, **body):
+    async with rdb.connection() as conn:
+        return await mark_rest(
+            conn,
+            saved_frame_id=f["saved_frame_id"],
+            user=user,
+            body=MarkRestIn(**body),
+            catalogue=cat,
+            spot_rate=spot,
+            rng=random.Random(0),
+        )
+
+
+async def _open(rdb, f, uid):
+    async with rdb.connection() as conn:
+        await open_frame(conn, saved_frame_id=f["saved_frame_id"], user_id=uid, claim_s=600)
+
+
+async def _rows(rdb, event_id):
+    async with rdb.connection() as conn:
+        cur = await conn.execute(
+            """SELECT user_id, corrected_name, life_stage, confidence, label_source
+                 FROM detection_corrections WHERE event_id = %s ORDER BY id""",
+            (event_id,),
+        )
+        return await cur.fetchall()
+
+
+async def test_mark_rest_answers_only_the_unanswered_boxes(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES)
+    me, other = await make_user(rdb, "me"), await make_user(rdb, "other")
+    e = f["event_ids"]
+    await add_verdict(rdb, e[0], other, name="Seriola zonata")  # answered
+    await add_item(
+        rdb,
+        f,
+        1,
+        status="claimed",
+        claimed_by=other,
+        claimed_until=datetime.now(UTC) + timedelta(minutes=5),
+    )  # locked
+    open2, open3 = await add_item(rdb, f, 2), await add_item(rdb, f, 3)
+    await _open(rdb, f, me)
+    out = await _mark(rdb, f, as_user(me), cat, label="Seriola zonata")
+    assert (out["marked"], out["skipped"]) == (2, 0)
+    for eid in (e[2], e[3]):
+        assert await _rows(rdb, eid) == [(me, "Seriola zonata", None, "certain", "bulk")]
+    assert await _rows(rdb, e[0]) == [(other, "Seriola zonata", None, "certain", None)]
+    assert await _rows(rdb, e[1]) == []
+    assert (await _status(rdb, open2))[0] == "done" and (await _status(rdb, open3))[0] == "done"
+    assert (await _state(rdb, f, as_user(me), cat))["blocking"] == [2]  # the locked box
+
+
+async def test_mark_rest_carries_life_stage_and_not_sure(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[2:])
+    me = await make_user(rdb, "me")
+    out = await _mark(
+        rdb, f, as_user(me), cat, label="Pomacanthus paru", life_stage="juvenile", not_sure=True
+    )
+    assert out["marked"] == 2
+    for eid in f["event_ids"]:
+        assert await _rows(rdb, eid) == [(me, "Pomacanthus paru", "juvenile", "uncertain", "bulk")]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"label": "Not a species"},
+        {"label": "Pomacanthus paru"},  # a species listed only under its life stages
+    ],
+)
+async def test_mark_rest_refuses_an_unknown_species_or_stage_before_writing(
+    rdb, tmp_path, cat, body
+):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[2:])
+    me = await make_user(rdb, "me")
+    with pytest.raises(Invalid, match="pick a species from the list"):
+        await _mark(rdb, f, as_user(me), cat, **body)
+    for eid in f["event_ids"]:
+        assert await _rows(rdb, eid) == []
+
+
+async def test_mark_rest_skips_a_box_that_fails_and_keeps_going(rdb, tmp_path, cat, monkeypatch):
+    import app.review_frames as frames
+
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES)
+    me = await make_user(rdb, "me")
+    real = frames.submit_verdict
+    first = f["event_ids"][0]
+
+    async def flaky(conn, *, body, **kw):
+        if body.event_id == first:
+            raise Conflict("another volunteer is answering this box")
+        return await real(conn, body=body, **kw)
+
+    monkeypatch.setattr(frames, "submit_verdict", flaky)
+    out = await _mark(rdb, f, as_user(me), cat, label="Seriola zonata")
+    assert (out["marked"], out["skipped"]) == (3, 1)
+    assert await _rows(rdb, first) == []
+    for eid in f["event_ids"][1:]:
+        assert len(await _rows(rdb, eid)) == 1
+
+
+async def test_mark_rest_samples_spot_checks(rdb, tmp_path, cat):
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:2])
+    me = await make_user(rdb, "me")
+    out = await _mark(rdb, f, as_user(me), cat, spot=1.0, label="Seriola zonata")
+    assert out["marked"] == 2
+    async with rdb.connection() as conn:
+        cur = await conn.execute(
+            """SELECT ri.event_id, c.label_source FROM review_items ri
+                 JOIN detection_corrections c ON c.id = ri.first_correction_id
+                WHERE ri.pass = 2 AND ri.event_id = ANY(%s) ORDER BY ri.event_id""",
+            (f["event_ids"],),
+        )
+        assert await cur.fetchall() == [(eid, "bulk") for eid in f["event_ids"]]
+
+
+async def test_mark_rest_refuses_while_you_hold_a_second_opinion_in_the_frame(rdb, tmp_path, cat):
+    me = await make_user(rdb, "me")
+    f = await _held_spot_check(rdb, tmp_path, me)
+    with pytest.raises(Conflict, match=SECOND_OPINION_FIRST):
+        await _mark(rdb, f, as_user(me), cat, label="Seriola zonata")
+    assert await _rows(rdb, f["event_ids"][1]) == []
+
+
+async def test_mark_rest_over_http(rdb, rclient, tmp_path):
+    await make_user(rdb, "rev")
+    login(rclient, "rev")
+    f = await seed_frame(rdb, tmp_path, boxes=BOXES[:1])
+    sf = f["saved_frame_id"]
+    url = f"/api/review/frames/{sf}/mark-rest"
+    body = {"label": "Seriola zonata"}
+    assert rclient.post(url, json=body).status_code == 403  # no CSRF
+    rclient.post(f"/api/review/frames/{sf}/open", headers=CSRF)
+    r = rclient.post(url, headers=CSRF, json=body)
+    assert r.status_code == 200 and r.json() == {"marked": 1, "skipped": 0}
+    assert rclient.get(f"/api/review/frames/{sf}").json()["blocking"] == []
+    bad = rclient.post(url, headers=CSRF, json={"label": "Not a species"})
+    assert bad.status_code == 400 and bad.json()["error"] == "pick a species from the list"

@@ -33,10 +33,13 @@ from .review_queue import (
     Forbidden,
     Invalid,
     NotFound,
+    ReviewError,
+    VerdictIn,
     fetch_all,
     fetch_one,
     not_skipped,
     safe_frame_size,
+    submit_verdict,
     validate_bbox,
     validate_label,
 )
@@ -49,6 +52,12 @@ class AddedBoxIn(BaseModel):
     life_stage: str | None = Field(None, max_length=40)
     not_sure: bool = False
     celebrity_id: str | None = Field(None, max_length=80)
+
+
+class MarkRestIn(BaseModel):
+    label: str = Field(..., max_length=200)
+    life_stage: str | None = Field(None, max_length=40)
+    not_sure: bool = False
 
 
 def _is_admin(user) -> bool:
@@ -465,3 +474,49 @@ async def complete_frame(conn, *, saved_frame_id: int, user, catalogue) -> dict:
 async def uncomplete_frame(conn, *, saved_frame_id: int) -> None:
     async with conn.transaction(), conn.cursor() as cur:
         await cur.execute("DELETE FROM review_frames WHERE saved_frame_id = %s", (saved_frame_id,))
+
+
+async def mark_rest(
+    conn, *, saved_frame_id: int, user, body: MarkRestIn, catalogue, spot_rate: float, rng
+) -> dict:
+    """ "Mark the rest" (2026-11-21): answer every box in the frame still
+    waiting for an answer with the species the volunteer just gave. The
+    frame is read here, not taken from the page, so a box someone else now
+    holds, one already answered, or one behind a pending second opinion is
+    left alone, and a live second-opinion claim in the frame refuses the
+    whole request as opening the frame does. Each box goes through
+    submit_verdict under every rule a single answer meets (claims, the
+    catalogue, marking its items done, spot-check sampling), stored with
+    label_source 'bulk'. A box that fails meanwhile is skipped, not fatal."""
+    if not catalogue.entry(body.label, body.life_stage):
+        raise Invalid("pick a species from the list")
+    state = await frame_state(conn, saved_frame_id=saved_frame_id, user=user, catalogue=catalogue)
+    # End the read's implicit transaction, so each box below is saved in a
+    # transaction of its own and holds its locks only while it is written.
+    await conn.commit()
+    verdicts, skipped = [], 0
+    for box in state["boxes"]:
+        if box["state"] != "needs_answer":
+            continue
+        try:
+            verdicts.append(
+                await submit_verdict(
+                    conn,
+                    user=user,
+                    body=VerdictIn(
+                        event_id=box["event_id"],
+                        review_item_id=box["review_item_id"],
+                        outcome="species",
+                        label=body.label,
+                        life_stage=body.life_stage,
+                        not_sure=body.not_sure,
+                    ),
+                    catalogue=catalogue,
+                    spot_rate=spot_rate,
+                    rng=rng,
+                    bulk=True,
+                )
+            )
+        except ReviewError:
+            skipped += 1
+    return {"marked": len(verdicts), "skipped": skipped, "verdicts": verdicts}
