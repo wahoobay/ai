@@ -31,6 +31,14 @@ from pathlib import Path
 log = logging.getLogger("wahoobay.dashboard.review_catalogue")
 
 _NO_STAGE = {"", "unknown", "none", "n/a"}
+# A stage or phase written into a common name ("Yellowtail Parrotfish TP",
+# "Yellowtail/Redfin PF (IP)", "Juvenile Sheepshead Porgy"), taken out when the
+# species as a whole is named.
+_STAGE_WORDS = re.compile(
+    r"\s*\((?:IP|TP|initial phase|terminal phase|juvenile|juvi|intermediate|adult)\)"
+    r"|\b(?:IP|TP|juvenile|juvi|intermediate|sub-?adult|adult)\b",
+    re.I,
+)
 
 
 def normalize_raw(raw: str) -> str:
@@ -128,9 +136,17 @@ class Catalogue:
         return next((e.class_dir for e in self._by_name.get(name, []) if e.class_dir), None)
 
     def common_name(self, name: str | None) -> str | None:
-        return next(
-            (e.common_name for e in self._by_name.get(name or "", []) if e.common_name), None
-        )
+        """The species' own name: a stage-less entry's common name when there is
+        one, otherwise a staged entry's with its stage taken out, so a parrotfish
+        is "Yellowtail Parrotfish" rather than one of its phases."""
+        entries = sorted(self._by_name.get(name or "", []), key=lambda e: e.life_stage is not None)
+        for e in entries:
+            if e.common_name:
+                if e.life_stage is None:
+                    return e.common_name
+                plain = " ".join(_STAGE_WORDS.sub(" ", e.common_name).split())
+                return plain or e.common_name
+        return None
 
     def celebrity_ids(self, name: str | None) -> set[str]:
         return {c for e in self._by_name.get(name or "", []) for c in e.celebrity_ids}
