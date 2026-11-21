@@ -107,6 +107,11 @@ class Catalogue:
         self.celebrities_by_id = dict(celebrities_by_id)
         self._photos = {slug(e.name): e for e in self.entries if e.photo_path}
 
+    def with_entries(self, extra) -> Catalogue:
+        """This catalogue plus `extra` entries (species reviewers added and an admin
+        approved: species_suggestions.merged_catalogue), mapping raw names as this one does."""
+        return Catalogue([*self.entries, *extra], self._accepted, self.celebrities_by_id)
+
     def accepted(self, raw: str | None) -> str | None:
         if raw is None:
             return None
