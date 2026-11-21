@@ -97,7 +97,10 @@ class VerdictIn(BaseModel):
     label: str | None = Field(None, max_length=200)
     life_stage: str | None = Field(None, max_length=40)
     bbox: list[int] | None = None
-    label_source: Literal["model_guess", "hint", "search"] | None = None
+    label_source: Literal["model_guess", "hint", "search", "suggested"] | None = None
+    # A pending species suggestion this answer uses (label_source 'suggested'); the
+    # suggestion, not label/life_stage, then names the fish.
+    species_suggestion_id: int | None = None
     not_sure: bool = False
     celebrity_id: str | None = Field(None, max_length=80)
     notes: str | None = Field(None, max_length=2000)
@@ -449,7 +452,17 @@ def _validate(
     height: int,
     adjudication: bool,
     bulk: bool = False,
+    suggestion: dict | None = None,
 ) -> dict:
+    """`suggestion` is the pending species_suggestions row body.species_suggestion_id names,
+    loaded and checked for status and owner by submit_verdict."""
+    if suggestion is not None or body.label_source == "suggested":
+        if bulk:
+            raise Invalid("only a listed species can be marked with the rest")
+        if suggestion is None or body.outcome != "species" or body.label_source != "suggested":
+            raise Invalid("a new species answer needs its suggestion")
+        if blind:
+            raise Invalid("a second opinion can't use a new species")
     if bulk and body.outcome != "species":
         raise Invalid("only a species can be marked with the rest")
     if bulk and blind:
@@ -474,6 +487,12 @@ def _validate(
                 "the model's guess is not in the species list; " "pick the species instead"
             )
         name, life_stage, label_source = guess, body.life_stage, "model_guess"
+    elif suggestion is not None:
+        # A 'species' answer with a species not yet on the list: the suggestion names it.
+        from .species_suggestions import provisional_name  # that module imports this one
+
+        name, life_stage = provisional_name(suggestion, catalogue), suggestion["life_stage"]
+        label_source = "suggested"
     elif body.outcome == "species":
         if not body.label or not catalogue.entry(body.label, body.life_stage):
             raise Invalid("pick a species from the list")
@@ -497,7 +516,7 @@ def _validate(
         "name": name,
         "life_stage": life_stage,
         "label_source": label_source,
-        "species_suggestion_id": None,
+        "species_suggestion_id": suggestion["id"] if suggestion is not None else None,
         "bbox": bbox,
         "confidence": extra["confidence"],
         "celebrity_id": extra["celebrity_id"],
@@ -831,6 +850,21 @@ async def submit_verdict(
                  ORDER BY added_at DESC, id DESC LIMIT 1""",
                 (body.event_id,),
             )
+        suggestion = None
+        if body.species_suggestion_id is not None:
+            # Locked until commit, so an admin's decision cannot land between this check
+            # and the insert.
+            suggestion = await fetch_one(
+                conn,
+                "SELECT * FROM species_suggestions WHERE id = %s FOR UPDATE",
+                (body.species_suggestion_id,),
+            )
+            if suggestion is None:
+                raise NotFound("no such species suggestion")
+            if suggestion["status"] != "pending":
+                raise Conflict("that species suggestion was already decided; pick from the list")
+            if suggestion["suggested_by"] != user.id and role != "admin":
+                raise Forbidden("that suggestion isn't yours")
         v = _validate(
             body,
             catalogue=catalogue,
@@ -841,6 +875,7 @@ async def submit_verdict(
             height=height,
             adjudication=adjudication,
             bulk=bulk,
+            suggestion=suggestion,
         )
 
         if body.review_item_id is None and not adjudication:
@@ -862,8 +897,8 @@ async def submit_verdict(
                 (event_id, corrected_name, corrected_species_id, not_a_fish, unidentifiable,
                  is_endorsement, corrected_bbox, confidence, reviewer, notes, celebrity_id,
                  user_id, session_id, review_item_id, label_source, life_stage,
-                 is_adjudication, location_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 is_adjudication, location_id, species_suggestion_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, created_at""",
             (
                 body.event_id,
@@ -884,6 +919,7 @@ async def submit_verdict(
                 v["life_stage"],
                 adjudication,
                 location_id(),
+                v["species_suggestion_id"],
             ),
         )
 
@@ -901,7 +937,10 @@ async def submit_verdict(
 
         first_pass = not adjudication and (item is None or item["pass"] == 1)
         spot = None
-        if first_pass and rng.random() < spot_rate:
+        # An answer with a new species gets no spot-check: the admin who decides the
+        # suggestion sees every box answered with it.
+        sampled = first_pass and v["species_suggestion_id"] is None
+        if sampled and rng.random() < spot_rate:
             lane = (item or {}).get("lane") or ("check" if ev["best_species_id"] else "identify")
             spot = await fetch_one(
                 conn,

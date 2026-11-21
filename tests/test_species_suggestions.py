@@ -3,9 +3,22 @@
 
 from __future__ import annotations
 
+import random
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from app.review_catalogue import CatalogueStore
-from app.review_queue import Conflict, Invalid, fetch_one
+from app.review_frames import MarkRestIn, mark_rest
+from app.review_queue import (
+    Conflict,
+    Forbidden,
+    Invalid,
+    NotFound,
+    VerdictIn,
+    fetch_all,
+    fetch_one,
+    submit_verdict,
+)
 from app.species_suggestions import (
     SuggestionIn,
     clean_scientific,
@@ -14,7 +27,17 @@ from app.species_suggestions import (
     merged_catalogue,
 )
 from psycopg.pq import TransactionStatus
-from review_fixtures import CSRF, as_user, catalogue_paths, login, make_user
+from review_fixtures import (
+    CSRF,
+    T0,
+    add_item,
+    add_verdict,
+    as_user,
+    catalogue_paths,
+    login,
+    make_user,
+    seed_frame,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -378,3 +401,303 @@ async def test_suggestion_routes_over_http(rdb, rclient):
     assert mine[0]["id"] == entry["suggestion_id"]
     assert mine[0]["common_name"] == "Spotted Moray"
     assert mine[0]["status_text"] == "waiting for approval"
+
+
+# ---- answering a box with a pending suggestion ----------------------------------------------
+
+# The fixture taxonomy maps 'Pomatomus saltarix' to the listed, stage-less 'Pomatomus
+# saltatrix', so this suggestion's provisional name is the accepted 'Pomatomus saltatrix'.
+JUVENILE_BLUEFISH = {
+    "common_name": "Juvenile Bluefish",
+    "scientific_name": "Pomatomus saltarix",
+    "life_stage": "juvenile",
+}
+NEEDS_ITS_SUGGESTION = "a new species answer needs its suggestion"
+
+
+async def _box(rdb, tmp_path, n=0, *, claimed_by=None, **item_kw):
+    """One saved box with a pass-1 item: served to `claimed_by`, or open."""
+    f = await seed_frame(
+        rdb,
+        tmp_path,
+        ts=T0 + timedelta(minutes=10 * n),
+        frame_id=10 + n,
+        boxes=[{"bbox": [100, 100, 300, 250], "species": "Seriola zonata"}],
+    )
+    if claimed_by is not None:
+        item_kw.update(
+            status="claimed",
+            claimed_by=claimed_by,
+            claimed_until=datetime.now(UTC) + timedelta(minutes=10),
+        )
+    item = await add_item(rdb, f, predicted="Seriola zonata", **item_kw)
+    return f, f["event_ids"][0], item
+
+
+async def _answer(rdb, cat, uid, *, role="reviewer", spot=0.0, bulk=False, **body):
+    async with rdb.connection() as conn:
+        return await submit_verdict(
+            conn,
+            user=as_user(uid, role=role),
+            body=VerdictIn(**body),
+            catalogue=cat,
+            spot_rate=spot,
+            rng=random.Random(0),
+            bulk=bulk,
+        )
+
+
+def _suggested(sid, **body):
+    return {
+        "outcome": "species",
+        "label_source": "suggested",
+        "species_suggestion_id": sid,
+        **body,
+    }
+
+
+async def _verdicts(rdb):
+    async with rdb.connection() as conn:
+        return await fetch_all(conn, "SELECT * FROM detection_corrections ORDER BY id")
+
+
+async def _item_status(rdb, item_id):
+    async with rdb.connection() as conn:
+        row = await fetch_one(conn, "SELECT status FROM review_items WHERE id = %s", (item_id,))
+    return row["status"]
+
+
+async def _spot_check_events(rdb):
+    async with rdb.connection() as conn:
+        rows = await fetch_all(
+            conn, "SELECT event_id FROM review_items WHERE pass = 2 ORDER BY event_id"
+        )
+    return [r["event_id"] for r in rows]
+
+
+async def test_answering_with_my_suggestion_stores_the_provisional_name(rdb, tmp_path, cat):
+    roy = await make_user(rdb, "roy")
+    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    _f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
+    out = await _answer(
+        rdb,
+        cat,
+        roy,
+        # the suggestion names the fish; a label and stage sent with it are ignored
+        **_suggested(
+            s["suggestion_id"],
+            event_id=eid,
+            review_item_id=item,
+            label="Seriola zonata",
+            life_stage="adult",
+        ),
+    )
+    assert out["label"] == "Pomatomus saltatrix" and out["first_pass"] is True
+    [row] = await _verdicts(rdb)
+    assert row["id"] == out["id"] and row["review_item_id"] == item
+    assert row["label_source"] == "suggested"
+    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["corrected_name"] == row["corrected_species_id"] == "Pomatomus saltatrix"
+    assert row["life_stage"] == "juvenile"
+    assert await _item_status(rdb, item) == "done"
+
+
+async def test_a_suggested_answer_gets_no_spot_check(rdb, tmp_path, cat):
+    roy = await make_user(rdb, "roy")
+    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    _f, eid, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
+    _g, control_eid, control_item = await _box(rdb, tmp_path, 1, claimed_by=roy)
+    out = await _answer(
+        rdb,
+        cat,
+        roy,
+        spot=1.0,
+        **_suggested(s["suggestion_id"], event_id=eid, review_item_id=item),
+    )
+    assert out["spot_check_scheduled"] is False
+    control = await _answer(
+        rdb,
+        cat,
+        roy,
+        spot=1.0,
+        event_id=control_eid,
+        review_item_id=control_item,
+        outcome="species",
+        label="Seriola zonata",
+        label_source="search",
+    )
+    assert control["spot_check_scheduled"] is True  # a listed species at that rate gets one
+    assert await _spot_check_events(rdb) == [control_eid]
+
+
+async def test_someone_elses_suggestion_is_refused_but_an_admin_may_use_it(rdb, tmp_path, cat):
+    ann, roy = await make_user(rdb, "ann"), await make_user(rdb, "roy")
+    boss = await make_user(rdb, "boss", role="admin")
+    s = await _suggest(rdb, ann, cat, **JUVENILE_BLUEFISH)
+    _f, eid, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
+    with pytest.raises(Forbidden) as refused:
+        await _answer(
+            rdb, cat, roy, **_suggested(s["suggestion_id"], event_id=eid, review_item_id=item)
+        )
+    assert refused.value.message == "that suggestion isn't yours"
+    assert await _verdicts(rdb) == [] and await _item_status(rdb, item) == "claimed"
+
+    _g, boss_eid, boss_item = await _box(rdb, tmp_path, 1, claimed_by=boss)
+    out = await _answer(
+        rdb,
+        cat,
+        boss,
+        role="admin",
+        **_suggested(s["suggestion_id"], event_id=boss_eid, review_item_id=boss_item),
+    )
+    [row] = await _verdicts(rdb)
+    assert row["id"] == out["id"] and row["user_id"] == boss
+    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["label_source"] == "suggested"
+
+
+async def test_a_decided_suggestion_cannot_be_used(rdb, tmp_path, cat):
+    roy = await make_user(rdb, "roy")
+    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    _f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
+    with pytest.raises(NotFound) as missing:
+        await _answer(
+            rdb,
+            cat,
+            roy,
+            **_suggested(s["suggestion_id"] + 1000, event_id=eid, review_item_id=item),
+        )
+    assert missing.value.message == "no such species suggestion"
+    for status in ("approved", "rejected"):
+        async with rdb.connection() as conn:
+            await conn.execute(
+                "UPDATE species_suggestions SET status = %s, decided_at = now() WHERE id = %s",
+                (status, s["suggestion_id"]),
+            )
+        with pytest.raises(Conflict) as decided:
+            await _answer(
+                rdb,
+                cat,
+                roy,
+                **_suggested(s["suggestion_id"], event_id=eid, review_item_id=item),
+            )
+        assert (
+            decided.value.message
+            == "that species suggestion was already decided; pick from the list"
+        )
+    assert await _verdicts(rdb) == [] and await _item_status(rdb, item) == "claimed"
+
+
+async def test_suggested_needs_its_suggestion_and_no_bulk(rdb, tmp_path, cat):
+    roy = await make_user(rdb, "roy")
+    sid = (await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH))["suggestion_id"]
+    f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
+    box = {"event_id": eid, "review_item_id": item}
+    for body in (
+        {"outcome": "species", "label_source": "suggested"},
+        {
+            "outcome": "species",
+            "label": "Pomatomus saltatrix",
+            "life_stage": "juvenile",
+            "label_source": "suggested",
+        },
+        {"outcome": "no_animal", "label_source": "suggested"},
+        {"outcome": "species", "label_source": "search", "species_suggestion_id": sid},
+        {"outcome": "species", "species_suggestion_id": sid},
+        {"outcome": "accept", "species_suggestion_id": sid},
+        {"outcome": "accept", "label_source": "suggested", "species_suggestion_id": sid},
+        {"outcome": "unidentifiable", "label_source": "suggested", "species_suggestion_id": sid},
+    ):
+        with pytest.raises(Invalid) as refused:
+            await _answer(rdb, cat, roy, **box, **body)
+        assert refused.value.message == NEEDS_ITS_SUGGESTION, body
+
+    for label_source in ("suggested", None):
+        with pytest.raises(Invalid) as bulk:
+            await _answer(
+                rdb,
+                cat,
+                roy,
+                bulk=True,
+                **box,
+                outcome="species",
+                label_source=label_source,
+                species_suggestion_id=sid,
+            )
+        assert bulk.value.message == "only a listed species can be marked with the rest"
+    # Mark the rest carries no suggestion, and its label must be on the list.
+    async with rdb.connection() as conn:
+        with pytest.raises(Invalid, match="^pick a species from the list$"):
+            await mark_rest(
+                conn,
+                saved_frame_id=f["saved_frame_id"],
+                user=as_user(roy),
+                body=MarkRestIn(label="Pomatomus saltatrix", life_stage="juvenile"),
+                catalogue=cat,
+                spot_rate=0.0,
+                rng=random.Random(0),
+            )
+    assert await _verdicts(rdb) == [] and await _item_status(rdb, item) == "claimed"
+
+
+async def test_a_second_opinion_cannot_use_a_suggestion(rdb, tmp_path, cat):
+    one, roy = await make_user(rdb, "one"), await make_user(rdb, "roy")
+    f, eid, _item = await _box(rdb, tmp_path, status="done")
+    first = await add_verdict(rdb, eid, one, name="Seriola zonata")
+    spot = await add_item(
+        rdb,
+        f,
+        pass_=2,
+        exclude_user_id=one,
+        first_correction_id=first,
+        status="claimed",
+        claimed_by=roy,
+        claimed_until=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    with pytest.raises(Invalid) as refused:
+        await _answer(
+            rdb, cat, roy, **_suggested(s["suggestion_id"], event_id=eid, review_item_id=spot)
+        )
+    assert refused.value.message == "a second opinion can't use a new species"
+    assert [v["id"] for v in await _verdicts(rdb)] == [first]
+    assert await _item_status(rdb, spot) == "claimed"
+
+
+async def test_a_suggested_answer_without_a_queue_item(rdb, tmp_path, cat):
+    """The whole-frame view answers a box that was not served to the reviewer."""
+    roy = await make_user(rdb, "roy")
+    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    _f, eid, item = await _box(rdb, tmp_path)  # an open pass-1 item, nobody's claim
+    body = _suggested(s["suggestion_id"], event_id=eid)
+    out = await _answer(rdb, cat, roy, spot=1.0, **body)
+    assert out["label"] == "Pomatomus saltatrix" and out["spot_check_scheduled"] is False
+    [row] = await _verdicts(rdb)
+    assert row["review_item_id"] is None and row["label_source"] == "suggested"
+    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["corrected_name"] == "Pomatomus saltatrix" and row["life_stage"] == "juvenile"
+    assert await _item_status(rdb, item) == "done"
+    assert await _spot_check_events(rdb) == []
+    # a double submit is the same answer, not a second row
+    again = await _answer(rdb, cat, roy, spot=1.0, **body)
+    assert again["duplicate"] is True and again["id"] == out["id"]
+    assert again["outcome"] == "species" and again["label"] == "Pomatomus saltatrix"
+    assert len(await _verdicts(rdb)) == 1
+
+
+async def test_suggested_answer_over_http(rdb, rclient, tmp_path):
+    await make_user(rdb, "roy")
+    login(rclient, "roy")
+    s = rclient.post("/api/review/species-suggestions", json=JUVENILE_BLUEFISH, headers=CSRF).json()
+    _f, eid, _item = await _box(rdb, tmp_path)
+    url = "/api/review/verdicts"
+    missing = rclient.post(
+        url, json=_suggested(s["suggestion_id"] + 1000, event_id=eid), headers=CSRF
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"] == "no such species suggestion"
+    r = rclient.post(url, json=_suggested(s["suggestion_id"], event_id=eid), headers=CSRF)
+    assert r.status_code == 200, r.text
+    assert r.json()["label"] == "Pomatomus saltatrix"
+    [row] = await _verdicts(rdb)
+    assert row["species_suggestion_id"] == s["suggestion_id"]
