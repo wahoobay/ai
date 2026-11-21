@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from .config import site_tz
 from .review_labels import agreement_summary, load_verdicts, outcome_of, resolve
 from .review_queue import Invalid, fetch_all, fetch_one
-from .species_suggestions import PENDING_SUFFIX, pending_species_events
+from .species_suggestions import PENDING_SUFFIX, pending_shown_answers, pending_species_events
 
 
 def local_tz() -> ZoneInfo:
@@ -413,7 +413,7 @@ async def browse(
         # LIMIT 1), batched as a LATERAL join over the page's rows rather
         # than one round trip per cell (fix round 1, finding 1).
         box_ids = [c["event_id"] for c in page_cells if c["kind"] == "box"]
-        waiting = await pending_species_events(conn, box_ids) if box_ids else {}
+        waiting = await pending_shown_answers(conn, {eid: resolved[eid][0] for eid in box_ids})
         for c in page_cells:
             if c["kind"] == "box" and c["common"] is not None and c["event_id"] in waiting:
                 c["common"] = f"{waiting[c['event_id']]}{PENDING_SUFFIX}"

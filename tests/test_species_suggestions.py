@@ -1324,13 +1324,13 @@ async def test_the_frame_names_a_pending_species(rdb, tmp_path, cat):
     w = await _pending_and_control(rdb, tmp_path, cat)
     user = as_user(w["roy"])
 
-    async def boxes():
+    async def boxes(catalogue=cat):
         async with rdb.connection() as conn:
             state = await frame_state(
                 conn,
                 saved_frame_id=w["frames"][w["pending"]]["saved_frame_id"],
                 user=user,
-                catalogue=cat,
+                catalogue=catalogue,
             )
         return {b["event_id"]: b for b in state["boxes"]}
 
@@ -1339,8 +1339,9 @@ async def test_the_frame_names_a_pending_species(rdb, tmp_path, cat):
     assert shown[w["pending"]]["pending_species"] is True
     assert shown[w["pending"]]["state"] == "answered"
     await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
-    shown = await boxes()
-    assert WAITING not in shown[w["pending"]]["common"]
+    # approved: the box shows the species' own plain name (the stage is not in it)
+    shown = await boxes(await _merged(rdb, cat))
+    assert shown[w["pending"]]["common"] == "Banded Rudderfish"
     assert shown[w["pending"]]["pending_species"] is False
     # a box answered from the list never carries the flag
     async with rdb.connection() as conn:
@@ -1356,11 +1357,11 @@ async def test_the_frame_names_a_pending_species(rdb, tmp_path, cat):
 async def test_browse_names_a_pending_species(rdb, tmp_path, cat):
     w = await _pending_and_control(rdb, tmp_path, cat)
 
-    async def commons():
+    async def commons(catalogue=cat):
         async with rdb.connection() as conn:
             result = await browse(
                 conn,
-                catalogue=cat,
+                catalogue=catalogue,
                 user=as_user(w["roy"]),
                 filters=BrowseFilters(status="any"),
                 page=0,
@@ -1371,4 +1372,36 @@ async def test_browse_names_a_pending_species(rdb, tmp_path, cat):
     assert before[w["pending"]] == "Juvenile Banded Rudderfish" + WAITING
     assert WAITING not in before[w["control"]]
     await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
-    assert WAITING not in (await commons())[w["pending"]]
+    assert (await commons(await _merged(rdb, cat)))[w["pending"]] == "Banded Rudderfish"
+
+
+async def test_a_box_changed_away_from_its_pending_species_shows_the_new_answer(rdb, tmp_path, cat):
+    w = await _pending_and_control(rdb, tmp_path, cat)
+    await _answer(
+        rdb,
+        cat,
+        w["roy"],
+        event_id=w["pending"],
+        outcome="species",
+        label="Acanthurus coeruleus",
+        label_source="search",
+    )
+    async with rdb.connection() as conn:
+        state = await frame_state(
+            conn,
+            saved_frame_id=w["frames"][w["pending"]]["saved_frame_id"],
+            user=as_user(w["roy"]),
+            catalogue=cat,
+        )
+        [box] = state["boxes"]
+        result = await browse(
+            conn,
+            catalogue=cat,
+            user=as_user(w["roy"]),
+            filters=BrowseFilters(status="any"),
+            page=0,
+        )
+    assert box["label"] == "Acanthurus coeruleus"
+    assert box["common"] == "Blue Tang" and box["pending_species"] is False
+    cells = {c["event_id"]: c for c in result["cells"]}
+    assert cells[w["pending"]]["common"] == "Blue Tang"

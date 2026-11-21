@@ -43,7 +43,7 @@ from .review_queue import (
     validate_bbox,
     validate_label,
 )
-from .species_suggestions import PENDING_SUFFIX, pending_species_events
+from .species_suggestions import PENDING_SUFFIX, pending_shown_answers
 
 
 class AddedBoxIn(BaseModel):
@@ -187,7 +187,7 @@ async def frame_state(
     )
     ids = [e["id"] for e in events]
     resolved = await resolve_all(conn, ids) if ids else {}
-    waiting = await pending_species_events(conn, ids) if ids else {}
+    waiting = await pending_shown_answers(conn, resolved)
     items = (
         await fetch_all(
             conn,

@@ -226,6 +226,26 @@ async def pending_species_events(conn, event_ids: list[int] | None = None) -> di
     return {r["event_id"]: r["common_name"] for r in rows}
 
 
+async def pending_shown_answers(conn, resolved: dict) -> dict[int, str]:
+    """The boxes of `resolved` ({event_id: Resolved}) whose shown answer (one of its
+    deciding verdicts) is linked to a pending suggestion, mapped to that suggestion's
+    common name. One query; a box changed to another answer while its suggestion waits
+    is not among them."""
+    deciding = {vid: eid for eid, r in resolved.items() for vid in r.deciding}
+    if not deciding:
+        return {}
+    rows = await fetch_all(
+        conn,
+        """SELECT c.id, ss.common_name
+             FROM detection_corrections c
+             JOIN species_suggestions ss ON ss.id = c.species_suggestion_id
+            WHERE ss.status = 'pending' AND c.id = ANY(%s)
+            ORDER BY c.id""",
+        (list(deciding),),
+    )
+    return {deciding[r["id"]]: r["common_name"] for r in rows}
+
+
 async def list_mine(conn, *, user) -> list[dict]:
     """`user`'s own suggestions, newest first, each with what happened to it."""
     rows = await fetch_all(
