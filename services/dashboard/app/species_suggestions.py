@@ -8,11 +8,18 @@ cheap stamp of the approved set and the merge is rebuilt only when the stamp cha
 
 Duplicates are judged on name and stage together, the scientific name mapped through the
 taxonomy first; a new stage of a listed species is a new choice.
+
+An admin's decision settles the answers linked to a suggestion in place ("Approving and
+rejecting"): approval gives them the approved name and stage, rejection the listed species it
+really is or can't-identify. They keep label_source 'suggested' and their link, and the row keeps
+what was suggested, so the trail survives. "Not this species" (detach) turns one box's answers
+into can't-identify and unlinks them before the rest are decided.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from psycopg.pq import TransactionStatus
 from pydantic import BaseModel, Field
@@ -20,7 +27,7 @@ from pydantic import BaseModel, Field
 from .auth import effective_role
 from .config import location_id
 from .review_catalogue import Catalogue, CatalogueEntry
-from .review_queue import Conflict, Invalid, fetch_all, fetch_one
+from .review_queue import Conflict, Invalid, NotFound, fetch_all, fetch_one
 
 STAGES: tuple[str | None, ...] = (
     None,
@@ -56,6 +63,15 @@ _MINE_KEYS = (
 )
 
 
+DECIDED_SHOWN = 50  # the admin panel's history of decided suggestions
+
+# A can't-identify answer names nothing: no species, stage or individual, and it is 'certain'
+# (validate_label refuses 'not sure' and a named individual without a species).
+_CANT_IDENTIFY = """unidentifiable = true, corrected_name = NULL, corrected_species_id = NULL,
+                    life_stage = NULL, is_endorsement = false, confidence = 'certain',
+                    celebrity_id = NULL"""
+
+
 class SuggestionIn(BaseModel):
     common_name: str = Field(..., min_length=1, max_length=120)
     scientific_name: str | None = Field(None, max_length=120)
@@ -63,9 +79,47 @@ class SuggestionIn(BaseModel):
     note: str | None = Field(None, max_length=500)
 
 
+class ApproveIn(BaseModel):
+    scientific_name: str = Field(..., min_length=1, max_length=120)
+    common_name: str = Field(..., min_length=1, max_length=120)
+    life_stage: str | None = Field(None, max_length=40)
+    note: str | None = Field(None, max_length=500)
+
+
+class RejectIn(BaseModel):
+    """Either "it's actually" a listed choice (`as_label`, `as_life_stage`) or can't identify."""
+
+    as_label: str | None = Field(None, max_length=200)
+    as_life_stage: str | None = Field(None, max_length=40)
+    unidentifiable: bool = False
+    note: str | None = Field(None, max_length=500)
+
+
+class DetachIn(BaseModel):
+    event_id: int
+
+
 def _squash(raw: str | None) -> str | None:
     """Runs of whitespace made one space; None when nothing is left."""
     return " ".join((raw or "").split()) or None
+
+
+def _stage(raw: str | None) -> str | None:
+    stage = (_squash(raw) or "").lower() or None
+    if stage not in STAGES:
+        raise Invalid("pick a stage from the list")
+    return stage
+
+
+def _common(raw: str | None) -> str:
+    common = _squash(raw)
+    if common is None:
+        raise Invalid("write the fish's common name")
+    return common
+
+
+def _note(raw: str | None) -> str | None:
+    return (raw or "").strip() or None
 
 
 def clean_scientific(raw: str | None) -> str | None:
@@ -108,12 +162,8 @@ def _listed_as(entry: CatalogueEntry) -> Conflict:
 
 async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dict:
     """Record `user`'s suggestion, pending, and return its picker entry."""
-    stage = (_squash(body.life_stage) or "").lower() or None
-    if stage not in STAGES:
-        raise Invalid("pick a stage from the list")
-    common = _squash(body.common_name)
-    if common is None:
-        raise Invalid("write the fish's common name")
+    stage = _stage(body.life_stage)
+    common = _common(body.common_name)
     scientific = clean_scientific(body.scientific_name)
     if scientific is not None:
         listed = catalogue.entry(catalogue.accepted(scientific), stage)
@@ -139,7 +189,7 @@ async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dic
                                                  suggested_by, location_id)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING {_ENTRY_COLUMNS}""",
-            (common, scientific, stage, (body.note or "").strip() or None, user.id, location_id()),
+            (common, scientific, stage, _note(body.note), user.id, location_id()),
         )
     return entry_json(row, catalogue)
 
@@ -185,6 +235,202 @@ async def list_mine(conn, *, user) -> list[dict]:
     return [
         {**{k: r[k] for k in _MINE_KEYS}, "status_text": STATUS_TEXT[r["status"]]} for r in rows
     ]
+
+
+# ---- an admin decides ----
+#
+# Each decision locks the suggestion row first and takes no event lock: submit_verdict locks
+# the event, then its review item, then the suggestion, so an event lock taken after the
+# suggestion's could deadlock against it. The suggestion's lock alone is enough here, because
+# every answer that links to a suggestion is written under it.
+
+
+async def _lock_pending(conn, suggestion_id: int) -> dict:
+    row = await fetch_one(
+        conn, "SELECT * FROM species_suggestions WHERE id = %s FOR UPDATE", (suggestion_id,)
+    )
+    if row is None:
+        raise NotFound("no such species suggestion")
+    if row["status"] != "pending":
+        raise Conflict("this suggestion was already decided")
+    return row
+
+
+async def _name_answers(conn, suggestion_id: int, name: str, stage: str | None, catalogue) -> int:
+    """Give every answer linked to the suggestion `name` at `stage`; is_endorsement is
+    recomputed against each box's model guess. Returns how many answers changed."""
+    rows = await fetch_all(
+        conn,
+        """SELECT c.id, de.best_species_id FROM detection_corrections c
+             JOIN detection_events de ON de.id = c.event_id
+            WHERE c.species_suggestion_id = %s""",
+        (suggestion_id,),
+    )
+    endorsed = [r["id"] for r in rows if catalogue.accepted(r["best_species_id"]) == name]
+    cur = await conn.execute(
+        """UPDATE detection_corrections
+              SET corrected_name = %(name)s, corrected_species_id = %(name)s,
+                  life_stage = %(stage)s, is_endorsement = (id = ANY(%(endorsed)s::bigint[]))
+            WHERE species_suggestion_id = %(sid)s""",
+        {"name": name, "stage": stage, "endorsed": endorsed, "sid": suggestion_id},
+    )
+    return cur.rowcount
+
+
+async def _record_decision(conn, suggestion_id: int, *, user, status: str, note, **columns):
+    sets = "".join(f", {column} = %({column})s" for column in columns)
+    await conn.execute(
+        f"""UPDATE species_suggestions
+               SET status = %(status)s, decided_by = %(uid)s, decided_at = now(),
+                   decision_note = %(note)s{sets}
+             WHERE id = %(sid)s""",
+        {**columns, "status": status, "uid": user.id, "note": _note(note), "sid": suggestion_id},
+    )
+
+
+async def approve(conn, *, user, suggestion_id: int, body: ApproveIn, catalogue) -> dict:
+    """Add the suggestion to the list as the admin's (corrected) names and stage, and settle
+    every answer linked to it. `catalogue` is the merged one: a choice approved from another
+    suggestion is already listed, and that suggestion is rejected "as" it instead."""
+    scientific = clean_scientific(body.scientific_name)
+    if scientific is None:
+        raise Invalid("write the scientific name as Genus species")
+    name = catalogue.accepted(scientific)
+    common, stage = _common(body.common_name), _stage(body.life_stage)
+    async with conn.transaction():
+        await _lock_pending(conn, suggestion_id)
+        listed = catalogue.entry(name, stage)
+        if listed is not None:
+            x = listed.common_name or listed.name
+            raise Conflict(f"already listed as {x}; reject it as 'it's actually {x}' instead")
+        answers = await _name_answers(conn, suggestion_id, name, stage, catalogue)
+        await _record_decision(
+            conn,
+            suggestion_id,
+            user=user,
+            status="approved",
+            note=body.note,
+            approved_name=name,
+            approved_common=common,
+            approved_stage=stage,
+        )
+    return {"answers": answers}
+
+
+async def reject(conn, *, user, suggestion_id: int, body: RejectIn, catalogue) -> dict:
+    """Leave the suggestion off the list. Its answers become the listed choice it really is
+    (`as_label` at `as_life_stage`, from the merged `catalogue`: Ruling P3) or can't-identify."""
+    label = _squash(body.as_label)
+    if (label is not None) == body.unidentifiable:  # both, or neither
+        raise Invalid("say what it is, or that it can't be identified")
+    entry = None
+    if label is not None:
+        entry = catalogue.entry(label, body.as_life_stage)
+        if entry is None:
+            raise Invalid("pick a species from the list")
+    async with conn.transaction():
+        await _lock_pending(conn, suggestion_id)
+        if entry is not None:
+            answers = await _name_answers(
+                conn, suggestion_id, entry.name, entry.life_stage, catalogue
+            )
+        else:
+            cur = await conn.execute(
+                f"UPDATE detection_corrections SET {_CANT_IDENTIFY}"
+                " WHERE species_suggestion_id = %s",
+                (suggestion_id,),
+            )
+            answers = cur.rowcount
+        await _record_decision(
+            conn,
+            suggestion_id,
+            user=user,
+            status="rejected",
+            note=body.note,
+            rejected_to_name=entry.name if entry else None,
+            rejected_to_stage=entry.life_stage if entry else None,
+        )
+    return {"answers": answers}
+
+
+async def detach(conn, *, user, suggestion_id: int, event_id: int) -> dict:
+    """The per-box "Not this species": the answers on `event_id` that use the pending
+    suggestion become can't-identify and no longer link to it, so its decision leaves them
+    alone."""
+    async with conn.transaction():
+        await _lock_pending(conn, suggestion_id)
+        cur = await conn.execute(
+            f"""UPDATE detection_corrections SET {_CANT_IDENTIFY}, species_suggestion_id = NULL
+                 WHERE species_suggestion_id = %s AND event_id = %s""",
+            (suggestion_id, event_id),
+        )
+        if not cur.rowcount:
+            raise NotFound("no answer on this box uses this suggestion")
+    return {"answers": cur.rowcount}
+
+
+async def list_for_admin(conn, *, status: Literal["pending", "decided"]) -> list[dict]:
+    """The admin panel's suggestions, newest first (by decision, once decided): every pending
+    one, or the last DECIDED_SHOWN decided ones. Each has its columns, `suggested_by_name` and
+    `answers`, the number of answers linked to it."""
+    rows = await fetch_all(
+        conn,
+        """SELECT ss.*, u.display_name AS suggested_by_name,
+                  (SELECT count(*) FROM detection_corrections c
+                    WHERE c.species_suggestion_id = ss.id) AS answers
+             FROM species_suggestions ss
+             JOIN users u ON u.id = ss.suggested_by
+            WHERE (ss.status = 'pending') = %(pending)s
+            ORDER BY COALESCE(ss.decided_at, ss.created_at) DESC, ss.id DESC
+            LIMIT %(limit)s""",
+        {"pending": status == "pending", "limit": None if status == "pending" else DECIDED_SHOWN},
+    )
+    for r in rows:
+        for key in ("created_at", "decided_at"):
+            r[key] = r[key].isoformat() if r[key] is not None else None
+    return rows
+
+
+async def pending_count(conn) -> int:
+    row = await fetch_one(
+        conn, "SELECT count(*) AS n FROM species_suggestions WHERE status = 'pending'"
+    )
+    return row["n"]
+
+
+async def suggestion_boxes(conn, *, suggestion_id: int, page: int, per_page: int = 24) -> dict:
+    """The boxes answered with the suggestion, `per_page` at a time, each with who answered
+    it (the latest such answer's reviewer)."""
+    total = await fetch_one(
+        conn,
+        """SELECT count(DISTINCT event_id) AS n FROM detection_corrections
+            WHERE species_suggestion_id = %s""",
+        (suggestion_id,),
+    )
+    rows = await fetch_all(
+        conn,
+        """SELECT * FROM (
+               SELECT DISTINCT ON (c.event_id) c.event_id, COALESCE(u.display_name, c.reviewer) AS by
+                 FROM detection_corrections c
+                 LEFT JOIN users u ON u.id = c.user_id
+                WHERE c.species_suggestion_id = %(sid)s
+                ORDER BY c.event_id, c.created_at DESC, c.id DESC
+           ) b
+           ORDER BY b.event_id
+           LIMIT %(limit)s OFFSET %(offset)s""",
+        {"sid": suggestion_id, "limit": per_page, "offset": page * per_page},
+    )
+    return {
+        "total": total["n"],
+        "boxes": [
+            {
+                "event_id": r["event_id"],
+                "zoom_url": f"/api/review/boxes/{r['event_id']}/zoom.jpg",
+                "by": r["by"],
+            }
+            for r in rows
+        ],
+    }
 
 
 # The last merge, as (key, base, merged). Holding `base` keeps its id(), part of the key,

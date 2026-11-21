@@ -11,6 +11,7 @@ import asyncio
 import logging
 import random
 from datetime import date, timedelta
+from typing import Literal
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -63,11 +64,20 @@ from .review_queue import (
     submit_verdict,
 )
 from .species_suggestions import (
+    ApproveIn,
+    DetachIn,
+    RejectIn,
     SuggestionIn,
+    approve,
     create_suggestion,
+    detach,
+    list_for_admin,
     list_mine,
     merged_catalogue,
+    pending_count,
     pending_entries,
+    reject,
+    suggestion_boxes,
 )
 
 log = logging.getLogger(__name__)
@@ -272,6 +282,81 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def my_suggestions(user=Depends(reviewer)):
         async with _db().connection() as conn:
             return JSONResponse({"suggestions": await list_mine(conn, user=user)})
+
+    # ---- an admin decides suggested species (spec 2026-11-21, "Admin panel") ----
+    # Approve and reject leave the review pool's in-memory counts alone: its next
+    # refresh_progress reads the settled answers.
+
+    @router.get("/api/review/species-suggestions")
+    async def admin_suggestions(
+        status: Literal["pending", "decided"] = Query("pending"), user=Depends(admin_only)
+    ):
+        async with _db().connection() as conn:
+            listed = await list_for_admin(conn, status=status)
+            pending = len(listed) if status == "pending" else await pending_count(conn)
+        return JSONResponse({"suggestions": listed, "pending": pending})
+
+    @router.get("/api/review/species-suggestions/{suggestion_id}/boxes")
+    async def admin_suggestion_boxes(
+        suggestion_id: int, page: int = Query(0, ge=0, le=100000), user=Depends(admin_only)
+    ):
+        async with _db().connection() as conn:
+            return JSONResponse(
+                await suggestion_boxes(conn, suggestion_id=suggestion_id, page=page)
+            )
+
+    @router.post(
+        "/api/review/species-suggestions/{suggestion_id}/approve",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def approve_suggestion(suggestion_id: int, body: ApproveIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await approve(
+                        conn,
+                        user=user,
+                        suggestion_id=suggestion_id,
+                        body=body,
+                        catalogue=await _catalogue(conn),
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post(
+        "/api/review/species-suggestions/{suggestion_id}/reject",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def reject_suggestion(suggestion_id: int, body: RejectIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await reject(
+                        conn,
+                        user=user,
+                        suggestion_id=suggestion_id,
+                        body=body,
+                        catalogue=await _catalogue(conn),
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post(
+        "/api/review/species-suggestions/{suggestion_id}/detach",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def detach_box(suggestion_id: int, body: DetachIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await detach(
+                        conn, user=user, suggestion_id=suggestion_id, event_id=body.event_id
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
 
     @router.get("/api/review/species/{name_slug}/photo.jpg")
     async def species_photo(name_slug: str, user=Depends(reviewer)):
