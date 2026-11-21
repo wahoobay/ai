@@ -19,7 +19,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 ALEMBIC = [sys.executable, "-m", "alembic", "-c", str(REPO / "db" / "alembic.ini")]
 BASELINE_SQL = REPO / "db" / "migrations" / "versions" / "0001_baseline.sql"
-HEAD = "0005"
+HEAD = "0006"
 DATA_TABLES = {
     "detection_events",
     "frame_stats",
@@ -161,4 +161,39 @@ def test_label_source_accepts_bulk_at_head(pg_url):
             "INSERT INTO detection_corrections (event_id, corrected_name, label_source) "
             "VALUES (%s, 'Seriola zonata', 'other')",
             (eid,),
+        )
+
+
+def test_species_suggestions_at_head(pg_url):
+    """0006: a reviewer's suggested species lives in species_suggestions; an answer that uses one
+    carries label_source 'suggested' and a link the suggestion cannot lose."""
+    alembic("upgrade", "head", url=pg_url)
+    with psycopg.connect(pg_url) as conn:
+        (uid,) = conn.execute(
+            "INSERT INTO users (username, display_name, email, password_hash) "
+            "VALUES ('r', 'R', 'r@example.org', 'x') RETURNING id"
+        ).fetchone()
+        sid, status, location = conn.execute(
+            "INSERT INTO species_suggestions (common_name, suggested_by) VALUES ('Blue tang', %s) "
+            "RETURNING id, status, location_id",
+            (uid,),
+        ).fetchone()
+        assert (status, location) == ("pending", "wahoobay")
+        (eid,) = conn.execute(
+            "INSERT INTO detection_events (ts, frame_id, source_name, det_conf, bbox, topk) "
+            "VALUES (now(), 1, 'cam', 0.9, ARRAY[1,2,3,4], '[]'::jsonb) RETURNING id"
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO detection_corrections "
+            "(event_id, corrected_name, label_source, species_suggestion_id) "
+            "VALUES (%s, 'Blue tang', 'suggested', %s)",
+            (eid, sid),
+        )
+    with psycopg.connect(pg_url) as conn, pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute("DELETE FROM species_suggestions WHERE id = %s", (sid,))
+    with psycopg.connect(pg_url) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO species_suggestions (common_name, suggested_by, status) "
+            "VALUES ('Blue tang', %s, 'other')",
+            (uid,),
         )

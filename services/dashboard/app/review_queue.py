@@ -497,6 +497,7 @@ def _validate(
         "name": name,
         "life_stage": life_stage,
         "label_source": label_source,
+        "species_suggestion_id": None,
         "bbox": bbox,
         "confidence": extra["confidence"],
         "celebrity_id": extra["celebrity_id"],
@@ -556,6 +557,7 @@ _VERDICT_IDENTITY_COLUMNS = (
     "celebrity_id",
     "notes",
     "corrected_bbox",
+    "species_suggestion_id",
 )
 
 # Every other detection_corrections column, and why a verdict that differs
@@ -591,6 +593,7 @@ def _verdict_identity(v: dict, outcome: str) -> dict:
         "celebrity_id": v["celebrity_id"],
         "notes": v["notes"],
         "corrected_bbox": v["bbox"],
+        "species_suggestion_id": v["species_suggestion_id"],
     }
 
 
