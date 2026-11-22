@@ -363,8 +363,10 @@ def export_corrections(
     include_identity: bool = False,
 ):
     # include_identity: an admin is asking; they also see answers under a
-    # pending spot-check or naming a species waiting for approval.
-    where = []
+    # pending spot-check. A box with an answer naming a species waiting for
+    # approval is left out for everyone, as in labeled_corrections: the file
+    # has no column saying an answer is provisional (final review I2).
+    where = [hide_pending_species("c")]
     params: list = []
     if hours is not None:
         where.append("c.created_at >= NOW() - (%s::int || ' hours')::interval")
@@ -373,7 +375,7 @@ def export_corrections(
         where.append("c.reviewer = %s")
         params.append(reviewer)
     if not include_identity:
-        where.append(hide_pending("c"))
+        where.append(hide_pending_spot_checks("c"))
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     sql = f"""
         SELECT c.id, c.created_at, c.event_id,

@@ -826,11 +826,13 @@ async def test_pending_boxes_are_left_out_of_public_and_counts(rdb, tmp_path, ca
     w = await _pending_and_control(rdb, tmp_path, cat)
     public = await _export_events(export_corrections(rdb, hours=None, reviewer=None))
     assert public == [w["control"]]
-    # an administrator's corrections file shows it, as it shows a pending spot-check's answer
+    # Final review I2 (ruling): an administrator's corrections file leaves it out too. It has no
+    # column saying an answer is provisional, and the spec's anti-goal names this file with no
+    # admin exception; the New species panel is where admins see these answers.
     admin = await _export_events(
         export_corrections(rdb, hours=None, reviewer=None, include_identity=True)
     )
-    assert sorted(admin) == sorted([w["pending"], w["control"]])
+    assert admin == [w["control"]]
 
     assert await _latest_verdict(rdb, w["pending"]) == []
     [control] = await _latest_verdict(rdb, w["control"])
