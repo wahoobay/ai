@@ -85,10 +85,15 @@ _CANT_IDENTIFY = """unidentifiable = true, corrected_name = NULL, corrected_spec
                     celebrity_id = NULL"""
 
 # The answers (detection_corrections c) a decision rewrites: those linked to a suggestion, for
-# a #49 leftover, or every one naming a choice, for an addition. The drawn boxes
+# a #49 leftover, or every one naming a choice, for an addition. An answer linked to a #49
+# leftover still pending can name the same choice (its provisional name); it is that
+# suggestion's decision to settle, under its lock, so _NAMING leaves it alone. One linked to a
+# decided suggestion (rejected "as" an addition, say) is an ordinary answer. The drawn boxes
 # (review_added_boxes b) naming a choice: they carry no link.
 _LINKED = "c.species_suggestion_id = %(sid)s"
-_NAMING = "c.corrected_name = %(was_name)s AND c.life_stage IS NOT DISTINCT FROM %(was_stage)s"
+_NAMING = """c.corrected_name = %(was_name)s AND c.life_stage IS NOT DISTINCT FROM %(was_stage)s
+             AND NOT EXISTS (SELECT 1 FROM species_suggestions p
+                              WHERE p.id = c.species_suggestion_id AND p.status = 'pending')"""
 _DRAWN_NAMING = """b.removed_at IS NULL AND b.label = %(was_name)s
                    AND b.life_stage IS NOT DISTINCT FROM %(was_stage)s"""
 
@@ -380,9 +385,10 @@ async def _name_answers(
     conn, where: str, params: dict, name: str, stage: str | None, catalogue
 ) -> int:
     """Give every answer `where` picks out (_LINKED or _NAMING, filled in from `params`) `name`
-    at `stage`; is_endorsement is recomputed against each box's model guess. A named individual
-    stays only if it is recorded for `name` (final review I4: the public gallery would list the
-    box under them). Returns how many answers changed."""
+    at `stage`, as a species answer: never also can't-identify or not-a-fish, which
+    resolve_all would read first. is_endorsement is recomputed against each box's model guess.
+    A named individual stays only if it is recorded for `name` (final review I4: the public
+    gallery would list the box under them). Returns how many answers changed."""
     rows = await fetch_all(
         conn,
         f"""SELECT c.id, de.best_species_id FROM detection_corrections c
@@ -394,6 +400,7 @@ async def _name_answers(
     cur = await conn.execute(
         f"""UPDATE detection_corrections c
                SET corrected_name = %(name)s, corrected_species_id = %(name)s,
+                   unidentifiable = false, not_a_fish = false,
                    life_stage = %(stage)s, is_endorsement = (c.id = ANY(%(endorsed)s::bigint[])),
                    celebrity_id = CASE WHEN c.celebrity_id = ANY(%(celebrities)s::text[])
                                        THEN c.celebrity_id END
@@ -670,6 +677,8 @@ async def list_additions(conn) -> list[dict]:
                       count(DISTINCT c.event_id) AS n
                  FROM detection_corrections c
                 WHERE c.corrected_name IN (SELECT approved_name FROM additions)
+                  AND NOT EXISTS (SELECT 1 FROM species_suggestions p  -- as _NAMING
+                                   WHERE p.id = c.species_suggestion_id AND p.status = 'pending')
                 GROUP BY 1, 2
            ), drawn AS (
                SELECT b.label AS name, b.life_stage AS stage, count(*) AS n

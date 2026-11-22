@@ -41,10 +41,12 @@ from app.species_suggestions import (
     ApproveIn,
     RejectIn,
     SuggestionIn,
+    addition_boxes,
     approve,
     clean_scientific,
     create_suggestion,
     detach,
+    list_additions,
     list_mine,
     merged_catalogue,
     pending_species_events,
@@ -2004,6 +2006,73 @@ async def test_removal_refusals(rdb, tmp_path, cat):
     await refused(Conflict, "this species was already removed", as_label="Seriola zonata")
     await refused(Conflict, "this species was already removed", unidentifiable=True)
     assert await _row(rdb, sid) == removed
+
+
+async def test_removal_leaves_a_pending_leftovers_answers_to_its_decision(rdb, tmp_path, cat):
+    """A #49 suggestion still pending can name the same species and stage as an addition: its
+    answers store the provisional, accepted name. Removing the addition leaves them to that
+    suggestion's own decision, which then applies to the box. Answers of a #49 suggestion
+    already rejected "as" the addition are ordinary answers naming it, and move."""
+    roy, ann = await make_user(rdb, "roy"), await make_user(rdb, "ann")
+    boss = await make_user(rdb, "boss", role="admin")
+    waiting = await insert_pending(
+        rdb, user_id=ann, common_name="Spotted Goatfish", scientific_name=GOATFISH_NAME
+    )
+    settled = await insert_pending(rdb, user_id=ann, common_name="Goatfish")
+    sid = (await _suggest(rdb, roy, cat, **GOATFISH_ADDED))["suggestion_id"]
+    merged = await _merged(rdb, cat)
+    waiting_box = await _answered_with(rdb, tmp_path, merged, ann, waiting, 0)
+    settled_box = await _answered_with(rdb, tmp_path, merged, ann, settled, 1)
+    as_goatfish = RejectIn(as_label=GOATFISH_NAME)
+    await _decide(rdb, reject, boss, settled, body=as_goatfish, catalogue=merged)
+    before = {r["event_id"]: r for r in await _verdicts(rdb)}
+    for eid in (waiting_box, settled_box):
+        assert (before[eid]["corrected_name"], before[eid]["life_stage"]) == (GOATFISH_NAME, None)
+    async with rdb.connection() as conn:  # the panel counts what a removal would move
+        [listed] = await list_additions(conn)
+        shown = await addition_boxes(conn, suggestion_id=sid, page=0)
+    assert listed["answers"] == shown["total"] == 1
+
+    assert await _remove(rdb, boss, sid, merged, cat, unidentifiable=True) == {
+        "answers": 1,
+        "drawn": 0,
+    }
+    after = {r["event_id"]: r for r in await _verdicts(rdb)}
+    assert after[waiting_box] == before[waiting_box]  # still waiting on its own decision
+    assert after[settled_box]["unidentifiable"] is True
+    assert after[settled_box]["species_suggestion_id"] == settled
+
+    body = ApproveIn(scientific_name=GOATFISH_NAME, common_name="Spotted Goatfish")
+    out = await _decide(rdb, approve, boss, waiting, body=body, catalogue=await _merged(rdb, cat))
+    assert out == {"answers": 1}
+    async with rdb.connection() as conn:
+        resolved = (await resolve_all(conn, [waiting_box]))[waiting_box]
+    assert resolved.species == GOATFISH_NAME
+
+
+async def test_a_decision_naming_an_answer_makes_it_a_species_answer(rdb, tmp_path, cat):
+    """Guard: a decision that names an answer clears can't-identify and not-a-fish, so no row
+    is ever both, which resolve_all would read as can't-identify (or no animal), ignoring the
+    decision, and which an export would ship as it stands."""
+    roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
+    sid = await insert_pending(rdb, user_id=roy, common_name="Almaco Jack")
+    events = [await _answered_with(rdb, tmp_path, cat, roy, sid, n) for n in (0, 1)]
+    async with rdb.connection() as conn:
+        for eid, flag in zip(events, ("unidentifiable", "not_a_fish"), strict=True):
+            await conn.execute(
+                f"""UPDATE detection_corrections
+                       SET {flag} = true, corrected_name = NULL, corrected_species_id = NULL
+                     WHERE event_id = %s""",
+                (eid,),
+            )
+    body = RejectIn(as_label="Seriola zonata")
+    assert await _decide(rdb, reject, boss, sid, body=body, catalogue=cat) == {"answers": 2}
+    for row in await _linked(rdb, sid):
+        assert row["corrected_name"] == "Seriola zonata"
+        assert row["unidentifiable"] is False and row["not_a_fish"] is False
+    async with rdb.connection() as conn:
+        resolved = await resolve_all(conn, events)
+    assert [resolved[eid].species for eid in events] == ["Seriola zonata", "Seriola zonata"]
 
 
 async def test_addition_routes_over_http(rdb, rclient, tmp_path):
