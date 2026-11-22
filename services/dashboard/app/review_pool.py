@@ -56,6 +56,7 @@ from psycopg.rows import dict_row
 from .config import location_id
 from .review_labels import resolve_all
 from .review_queue import EVENT_LOCK_SQL
+from .species_suggestions import pending_species_events
 
 log = logging.getLogger("wahoobay.dashboard.review_pool")
 
@@ -224,6 +225,8 @@ class ReviewPool:
                 (str(self.s.statement_timeout_ms),),
             )
             resolved = await resolve_all(conn)
+            # A box answered with a species waiting for approval counts once it is approved.
+            pending = await pending_species_events(conn)
             async with conn.cursor() as cur:
                 await cur.execute(
                     """SELECT label, count(*) FROM review_added_boxes
@@ -233,7 +236,9 @@ class ReviewPool:
                 )
                 added = await cur.fetchall()
         verified: dict[str, int] = {}
-        for r in resolved.values():
+        for event_id, r in resolved.items():
+            if event_id in pending:
+                continue
             if r.is_verified and r.species and r.confidence != "uncertain":
                 verified[r.species] = verified.get(r.species, 0) + 1
         for label, n in added:

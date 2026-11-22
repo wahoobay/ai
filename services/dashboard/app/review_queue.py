@@ -51,7 +51,12 @@ EVENT_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended('review-event:' 
 RETIRED_MESSAGES = {
     "frame_missing": "this box was retired: its frame is missing on disk",
     "outside_window": "this box was retired: it is outside the review window",
+    "new_species": "this box was retired: an admin checks its answer instead",
 }
+
+# An answer naming a species a reviewer added that an admin has since removed. The page reloads
+# its species list on this text (RV.STALE_SPECIES).
+REMOVED_SPECIES = "that species was removed from the list; pick from the list"
 
 
 def not_skipped(alias: str) -> str:
@@ -97,7 +102,11 @@ class VerdictIn(BaseModel):
     label: str | None = Field(None, max_length=200)
     life_stage: str | None = Field(None, max_length=40)
     bbox: list[int] | None = None
-    label_source: Literal["model_guess", "hint", "search"] | None = None
+    label_source: Literal["model_guess", "hint", "search", "suggested"] | None = None
+    # The species suggestion this answer uses (label_source 'suggested'): a species a reviewer
+    # added, or a pending one left over from ai #49. The suggestion, not label/life_stage,
+    # then names the fish.
+    species_suggestion_id: int | None = None
     not_sure: bool = False
     celebrity_id: str | None = Field(None, max_length=80)
     notes: str | None = Field(None, max_length=2000)
@@ -438,6 +447,33 @@ def validate_label(body, *, catalogue, name: str | None) -> dict:
     return {"confidence": "uncertain" if body.not_sure else "certain", "celebrity_id": celebrity_id}
 
 
+async def hold_addition(conn, *, catalogue, name: str | None, life_stage: str | None) -> None:
+    """Called inside the transaction that saves an answer or a drawn box naming `name` at
+    `life_stage`, after `catalogue` (the merged one the caller validated against) was read
+    (Ruling W2). When that choice is a species a reviewer added, its species_suggestions row is
+    held FOR SHARE until commit: a removal (species_suggestions.remove_addition, which holds it
+    FOR UPDATE) either commits first, and the answer is refused because `catalogue` is stale,
+    or waits for this one, and then moves it with the rest. A choice added again since its
+    removal is listed again.
+
+    A choice the files list (every file-built entry is in the Species Log or the classifier)
+    is theirs, whatever rows a removed addition of it left, and is not looked up."""
+    entry = catalogue.entry(name, life_stage) if name is not None else None
+    if entry is None or entry.in_species_log or entry.in_classifier:
+        return
+    rows = await fetch_all(
+        conn,
+        """SELECT status FROM species_suggestions
+            WHERE status IN ('approved', 'rejected') AND approved_name = %s
+              AND approved_stage IS NOT DISTINCT FROM %s
+            ORDER BY id
+              FOR SHARE""",
+        (name, life_stage),
+    )
+    if rows and all(r["status"] == "rejected" for r in rows):
+        raise Conflict(REMOVED_SPECIES)
+
+
 def _validate(
     body: VerdictIn,
     *,
@@ -448,7 +484,24 @@ def _validate(
     width: int,
     height: int,
     adjudication: bool,
+    bulk: bool = False,
+    suggestion: dict | None = None,
 ) -> dict:
+    """`suggestion` is the species_suggestions row body.species_suggestion_id names, loaded and
+    checked for status and owner by submit_verdict: a species a reviewer added ('approved'),
+    or a 'pending' one left over from ai #49."""
+    pending = suggestion is not None and suggestion["status"] == "pending"
+    if suggestion is not None or body.label_source == "suggested":
+        if bulk:
+            raise Invalid("only a listed species can be marked with the rest")
+        if suggestion is None or body.outcome != "species" or body.label_source != "suggested":
+            raise Invalid("a new species answer needs its suggestion")
+        if blind and pending:
+            raise Invalid("a second opinion can't use a new species")
+    if bulk and body.outcome != "species":
+        raise Invalid("only a species can be marked with the rest")
+    if bulk and blind:
+        raise Invalid("a second opinion can't be marked with the rest")
     bbox = None
     if body.bbox is not None:
         if body.outcome == "no_animal":
@@ -469,11 +522,28 @@ def _validate(
                 "the model's guess is not in the species list; " "pick the species instead"
             )
         name, life_stage, label_source = guess, body.life_stage, "model_guess"
+    elif pending:
+        # A 'species' answer with a species not yet on the list: the suggestion names it.
+        from .species_suggestions import provisional_name  # that module imports this one
+
+        name, life_stage = provisional_name(suggestion, catalogue), suggestion["life_stage"]
+        label_source = "suggested"
+    elif suggestion is not None:
+        # The answer that adds a species: the addition's listed name and stage.
+        name, life_stage = suggestion["approved_name"], suggestion["approved_stage"]
+        if not catalogue.entry(name, life_stage):
+            raise Invalid("pick a species from the list")
+        label_source = "suggested"
     elif body.outcome == "species":
         if not body.label or not catalogue.entry(body.label, body.life_stage):
             raise Invalid("pick a species from the list")
         name, life_stage = body.label, body.life_stage
-        if not adjudication:
+        if bulk:
+            # Whole-frame "mark the rest": the label the volunteer just gave,
+            # applied to every unanswered box (only mark_rest sets this; the
+            # public body's Literal refuses 'bulk').
+            label_source = "bulk"
+        elif not adjudication:
             label_source = body.label_source
             if label_source not in ("hint", "search"):
                 raise Invalid("say whether the species came from a hint or the search")
@@ -487,6 +557,7 @@ def _validate(
         "name": name,
         "life_stage": life_stage,
         "label_source": label_source,
+        "species_suggestion_id": suggestion["id"] if suggestion is not None else None,
         "bbox": bbox,
         "confidence": extra["confidence"],
         "celebrity_id": extra["celebrity_id"],
@@ -546,6 +617,7 @@ _VERDICT_IDENTITY_COLUMNS = (
     "celebrity_id",
     "notes",
     "corrected_bbox",
+    "species_suggestion_id",
 )
 
 # Every other detection_corrections column, and why a verdict that differs
@@ -581,7 +653,16 @@ def _verdict_identity(v: dict, outcome: str) -> dict:
         "celebrity_id": v["celebrity_id"],
         "notes": v["notes"],
         "corrected_bbox": v["bbox"],
+        "species_suggestion_id": v["species_suggestion_id"],
     }
+
+
+def _counts(name: str | None, confidence: str, pending_suggestion: bool) -> bool:
+    """Whether a first answer counts toward its species' verified total in the review pool
+    (ReviewPool.note_verified): a named, sure answer, not one naming a pending suggestion left
+    over from ai #49, which counts once approved (refresh_progress, pending_species_events).
+    An answer with a species a reviewer added counts like any other."""
+    return name is not None and confidence != "uncertain" and not pending_suggestion
 
 
 def _stored_outcome(row: dict) -> str:
@@ -616,14 +697,17 @@ async def _duplicate_verdict(
 
     first_pass is what the caller's verdict would have been: False for a
     re-answer linked to the caller's own spot-check."""
-    cols = ", ".join(_VERDICT_IDENTITY_COLUMNS)
+    cols = ", ".join(f"c.{col}" for col in _VERDICT_IDENTITY_COLUMNS)
     recent = await fetch_one(
         conn,
         f"""
-        SELECT id, created_at, {cols}
-          FROM detection_corrections
-         WHERE event_id = %s AND user_id = %s AND NOT is_adjudication
-         ORDER BY created_at DESC, id DESC LIMIT 1""",
+        SELECT c.id, c.created_at, {cols},
+               EXISTS (SELECT 1 FROM species_suggestions ss
+                        WHERE ss.id = c.species_suggestion_id AND ss.status = 'pending')
+                   AS pending_suggestion
+          FROM detection_corrections c
+         WHERE c.event_id = %s AND c.user_id = %s AND NOT c.is_adjudication
+         ORDER BY c.created_at DESC, c.id DESC LIMIT 1""",
         (event_id, user_id),
     )
     if recent is None or recent["created_at"] < datetime.now(UTC) - timedelta(
@@ -653,7 +737,9 @@ async def _duplicate_verdict(
         "outcome": _stored_outcome(recent),
         "label": recent["corrected_name"],
         "first_pass": first_pass,
-        "counts": recent["corrected_name"] is not None and recent["confidence"] != "uncertain",
+        "counts": _counts(
+            recent["corrected_name"], recent["confidence"], recent["pending_suggestion"]
+        ),
         "spot_check_scheduled": spot is not None,
         "duplicate": True,
     }
@@ -668,6 +754,7 @@ async def submit_verdict(
     spot_rate: float,
     rng: random.Random,
     adjudication: bool = False,
+    bulk: bool = False,
 ) -> dict:
     role = effective_role(user.status, user.role)
     async with conn.transaction():
@@ -817,6 +904,24 @@ async def submit_verdict(
                  ORDER BY added_at DESC, id DESC LIMIT 1""",
                 (body.event_id,),
             )
+        suggestion = None
+        if body.species_suggestion_id is not None:
+            # Locked until commit, so a removal (or, for a leftover, an admin's decision)
+            # cannot land between this check and the insert.
+            suggestion = await fetch_one(
+                conn,
+                "SELECT * FROM species_suggestions WHERE id = %s FOR UPDATE",
+                (body.species_suggestion_id,),
+            )
+            if suggestion is None:
+                raise NotFound("no such species suggestion")
+            if suggestion["status"] == "rejected":
+                raise Conflict(REMOVED_SPECIES)
+            if suggestion["suggested_by"] != user.id and role != "admin":
+                raise Forbidden("that suggestion isn't yours")
+        # A suggestion left over from ai #49, still waiting for an admin: the #49 rules below
+        # hold for its answers. An addition's answers are ordinary ones.
+        pending = suggestion is not None and suggestion["status"] == "pending"
         v = _validate(
             body,
             catalogue=catalogue,
@@ -826,7 +931,15 @@ async def submit_verdict(
             width=width,
             height=height,
             adjudication=adjudication,
+            bulk=bulk,
+            suggestion=suggestion,
         )
+        if suggestion is None:
+            # A plain answer naming a reviewer's addition: held like a linked one, after the
+            # event and item locks (Ruling W2). A linked answer's suggestion is held above.
+            await hold_addition(
+                conn, catalogue=catalogue, name=v["name"], life_stage=v["life_stage"]
+            )
 
         if body.review_item_id is None and not adjudication:
             dup = await _duplicate_verdict(
@@ -847,8 +960,8 @@ async def submit_verdict(
                 (event_id, corrected_name, corrected_species_id, not_a_fish, unidentifiable,
                  is_endorsement, corrected_bbox, confidence, reviewer, notes, celebrity_id,
                  user_id, session_id, review_item_id, label_source, life_stage,
-                 is_adjudication, location_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 is_adjudication, location_id, species_suggestion_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, created_at""",
             (
                 body.event_id,
@@ -869,6 +982,7 @@ async def submit_verdict(
                 v["life_stage"],
                 adjudication,
                 location_id(),
+                v["species_suggestion_id"],
             ),
         )
 
@@ -883,10 +997,26 @@ async def submit_verdict(
                      WHERE {where} AND status IN ('open', 'claimed')""",
                 params,
             )
+        if pending:
+            # An answer with a pending species gets no spot-check (below), and one already
+            # waiting on the box, sampled from an earlier answer from the list, is retired: its
+            # reviewer could not pick the pending species, so it would be a dispute by
+            # construction. The admin's approval is these answers' check (final review I3).
+            for spot_item in await fetch_all(
+                conn,
+                """SELECT id FROM review_items
+                    WHERE event_id = %s AND pass = 2 AND status IN ('open', 'claimed')""",
+                (body.event_id,),
+            ):
+                await retire_item(conn, spot_item["id"], "new_species")
 
         first_pass = not adjudication and (item is None or item["pass"] == 1)
         spot = None
-        if first_pass and rng.random() < spot_rate:
+        # An answer with a pending species gets no spot-check: the admin who decides the
+        # suggestion sees every box answered with it. One with a species a reviewer added is
+        # sampled like any other: WoRMS confirms the name, not the fish.
+        sampled = first_pass and not pending
+        if sampled and rng.random() < spot_rate:
             lane = (item or {}).get("lane") or ("check" if ev["best_species_id"] else "identify")
             spot = await fetch_one(
                 conn,
@@ -917,7 +1047,7 @@ async def submit_verdict(
         "outcome": body.outcome,
         "label": v["name"],
         "first_pass": first_pass,
-        "counts": v["name"] is not None and v["confidence"] != "uncertain",
+        "counts": _counts(v["name"], v["confidence"], pending),
         "spot_check_scheduled": spot is not None,
         "duplicate": False,
     }

@@ -102,6 +102,23 @@ def hide_pending_spot_checks(alias: str) -> str:
     )
 
 
+def hide_pending_species(alias: str) -> str:
+    """SQL condition (spec 2026-11-21, "Kept out while pending"): leave out every answer on a
+    box while any of its answers names a species still waiting for an admin's approval. The
+    whole box, as hide_pending_spot_checks: hiding only the pending answer would let every
+    "latest answer" reader show the answer it replaced."""
+    return (
+        "NOT EXISTS (SELECT 1 FROM detection_corrections pc"
+        " JOIN species_suggestions ss ON ss.id = pc.species_suggestion_id"
+        f" WHERE pc.event_id = {alias}.event_id AND ss.status = 'pending')"
+    )
+
+
+def hide_pending(alias: str) -> str:
+    """SQL condition for public outputs: neither a pending spot-check nor a pending species."""
+    return f"({hide_pending_spot_checks(alias)} AND {hide_pending_species(alias)})"
+
+
 # ---------------------------------------------------------------------------
 # Per-resource generators
 # ---------------------------------------------------------------------------
@@ -346,8 +363,10 @@ def export_corrections(
     include_identity: bool = False,
 ):
     # include_identity: an admin is asking; they also see answers under a
-    # pending spot-check.
-    where = []
+    # pending spot-check. A box with an answer naming a species waiting for
+    # approval is left out for everyone, as in labeled_corrections: the file
+    # has no column saying an answer is provisional (final review I2).
+    where = [hide_pending_species("c")]
     params: list = []
     if hours is not None:
         where.append("c.created_at >= NOW() - (%s::int || ' hours')::interval")
@@ -675,15 +694,16 @@ def export_labeled_corrections(
     # The frame is matched on camera + frame_id + ts. frame_id restarts at 1
     # with every worker restart, so frame_id + camera alone can name a
     # different frame. When one frame was saved under several reasons, the
-    # lowest id wins. user_ids limits the rows to those accounts' answers
-    # (the label archive, one account at a time).
-    conditions, params = [], []
+    # lowest id wins. A box with an answer naming a species waiting for approval is training
+    # data for no one yet, administrators included. user_ids limits the rows to those
+    # accounts' answers (the label archive, one account at a time).
+    conditions, params = [hide_pending_species("c")], []
     if not include_identity:
         conditions.append(hide_pending_spot_checks("c"))
     if user_ids is not None:
         conditions.append("c.user_id = ANY(%s)")
         params.append(list(user_ids))
-    where_sql = "WHERE " + " AND ".join(conditions) if conditions else ""
+    where_sql = "WHERE " + " AND ".join(conditions)
     sql = f"""
         SELECT c.id AS correction_id,
                c.created_at,

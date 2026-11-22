@@ -31,6 +31,19 @@ from pathlib import Path
 log = logging.getLogger("wahoobay.dashboard.review_catalogue")
 
 _NO_STAGE = {"", "unknown", "none", "n/a"}
+# A stage or phase written into a common name ("Yellowtail Parrotfish TP",
+# "Yellowtail/Redfin PF (IP)", "Juvenile Sheepshead Porgy"), taken out when the
+# species as a whole is named.
+_STAGE_WORDS = re.compile(
+    r"\s*\((?:IP|TP|initial phase|terminal phase|juvenile|juvi|intermediate|adult)\)"
+    r"|\b(?:IP|TP|juvenile|juvi|intermediate|sub-?adult|adult)\b",
+    re.I,
+)
+
+
+def without_stage_words(common: str) -> str:
+    """'Yellowtail Parrotfish TP' -> 'Yellowtail Parrotfish'; '' when only stage words."""
+    return " ".join(_STAGE_WORDS.sub(" ", common).split())
 
 
 def normalize_raw(raw: str) -> str:
@@ -99,6 +112,11 @@ class Catalogue:
         self.celebrities_by_id = dict(celebrities_by_id)
         self._photos = {slug(e.name): e for e in self.entries if e.photo_path}
 
+    def with_entries(self, extra) -> Catalogue:
+        """This catalogue plus `extra` entries (species reviewers added and an admin
+        approved: species_suggestions.merged_catalogue), mapping raw names as this one does."""
+        return Catalogue([*self.entries, *extra], self._accepted, self.celebrities_by_id)
+
     def accepted(self, raw: str | None) -> str | None:
         if raw is None:
             return None
@@ -128,9 +146,16 @@ class Catalogue:
         return next((e.class_dir for e in self._by_name.get(name, []) if e.class_dir), None)
 
     def common_name(self, name: str | None) -> str | None:
-        return next(
-            (e.common_name for e in self._by_name.get(name or "", []) if e.common_name), None
-        )
+        """The species' own name: a stage-less entry's common name when there is
+        one, otherwise a staged entry's with its stage taken out, so a parrotfish
+        is "Yellowtail Parrotfish" rather than one of its phases."""
+        entries = sorted(self._by_name.get(name or "", []), key=lambda e: e.life_stage is not None)
+        for e in entries:
+            if e.common_name:
+                if e.life_stage is None:
+                    return e.common_name
+                return without_stage_words(e.common_name) or e.common_name
+        return None
 
     def celebrity_ids(self, name: str | None) -> set[str]:
         return {c for e in self._by_name.get(name or "", []) for c in e.celebrity_ids}

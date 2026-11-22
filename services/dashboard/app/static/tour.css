@@ -104,7 +104,7 @@ body:has(#tour-review-link) #identity-chip .chip-review { display: none; }
 
 /* Booth mode hides what means nothing to a visitor (frame rates, drift, the operators' alerts), the account
    and its sign-out, the theme picker (it would stick for the next visitor), and the review tool's expert
-   corners (Browse, the date window, drawing, single boxes, shortcuts). */
+   corners (Browse, the date window, drawing, single boxes, shortcuts, adding a species to everyone's list). */
 [data-booth="1"] header .stats,
 [data-booth="1"] .drift-panel,
 [data-booth="1"] #alerts-banner,
@@ -114,4 +114,5 @@ body:has(#tour-review-link) #identity-chip .chip-review { display: none; }
 [data-booth="1"] .rv-window,
 [data-booth="1"] .rv-draw,
 [data-booth="1"] .rv-to-single,
-[data-booth="1"] .rv-legend-keys { display: none !important; }
+[data-booth="1"] .rv-legend-keys,
+[data-booth="1"] .rv-add { display: none !important; }

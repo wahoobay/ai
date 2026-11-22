@@ -11,6 +11,7 @@ import asyncio
 import logging
 import random
 from datetime import date, timedelta
+from typing import Literal
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -30,10 +31,12 @@ from .review_browse import (
 )
 from .review_frames import (
     AddedBoxIn,
+    MarkRestIn,
     add_box,
     complete_frame,
     frame_record,
     frame_state,
+    mark_rest,
     open_frame,
     release_frame,
     remove_box,
@@ -60,6 +63,25 @@ from .review_queue import (
     skip_item,
     submit_verdict,
 )
+from .species_suggestions import (
+    ApproveIn,
+    DetachIn,
+    RejectIn,
+    SuggestionIn,
+    addition_boxes,
+    approve,
+    create_suggestion,
+    detach,
+    list_additions,
+    list_for_admin,
+    list_mine,
+    merged_catalogue,
+    pending_count,
+    pending_entries,
+    reject,
+    remove_addition,
+    suggestion_boxes,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,8 +103,15 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             )
         return pool
 
-    async def _catalogue():
-        return await state["review_catalogue"].aget()
+    async def _catalogue(conn=None):
+        """The file-built catalogue plus every approved species suggestion. A caller that
+        holds a pool connection passes it: taking a second one from the same pool while
+        holding the first can stall every request once the pool is full (Ruling P1)."""
+        base = await state["review_catalogue"].aget()
+        if conn is not None:
+            return await merged_catalogue(conn, base)
+        async with _db().connection() as own:
+            return await merged_catalogue(own, base)
 
     def _pool():
         return state.get("review_pool")
@@ -156,7 +185,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                             await build_payload(
                                 conn,
                                 item,
-                                catalogue=await _catalogue(),
+                                catalogue=await _catalogue(conn),
                                 counts=_counts,
                                 target=cfg.review_target,
                             )
@@ -176,7 +205,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                     conn,
                     user=user,
                     body=body,
-                    catalogue=await _catalogue(),
+                    catalogue=await _catalogue(conn),
                     spot_rate=cfg.review_spotcheck_rate,
                     rng=rng,
                 )
@@ -211,7 +240,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                         conn,
                         user=user,
                         event_id=event_id,
-                        catalogue=await _catalogue(),
+                        catalogue=await _catalogue(conn),
                         counts=_counts,
                         target=cfg.review_target,
                     )
@@ -224,17 +253,165 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         async with _db().connection() as conn:
             return JSONResponse(
                 await recent_verdicts(
-                    conn, user_id=user.id, session_id=user.session_id, catalogue=await _catalogue()
+                    conn,
+                    user_id=user.id,
+                    session_id=user.session_id,
+                    catalogue=await _catalogue(conn),
                 )
             )
 
     @router.get("/api/review/species")
     async def species(user=Depends(reviewer)):
-        return JSONResponse({"species": (await _catalogue()).to_json()})
+        """Every choice, reviewers' additions included, plus any pending suggestion left over
+        from ai #49 that this caller may pick (their own; all of them for an admin), marked
+        "waiting for approval"."""
+        async with _db().connection() as conn:
+            catalogue = await _catalogue(conn)
+            pending = await pending_entries(conn, user=user, catalogue=catalogue)
+        return JSONResponse({"species": catalogue.to_json() + pending})
+
+    @router.post("/api/review/species-suggestions", dependencies=[Depends(require_csrf)])
+    async def suggest_species(body: SuggestionIn, user=Depends(reviewer)):
+        """Add the species the reviewer chose from WoRMS to everyone's list at once. The
+        response is the new choice (`key`, `name`, `life_stage`, `common`) and its
+        `suggestion_id`, for the page to answer the box with; a refusal is 400 or 409."""
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await create_suggestion(
+                        conn, user=user, body=body, catalogue=await _catalogue(conn)
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.get("/api/review/species-suggestions/mine")
+    async def my_suggestions(user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            return JSONResponse({"suggestions": await list_mine(conn, user=user)})
+
+    # ---- an admin removes a species a reviewer added (spec 2026-11-21-species-worms-check) ----
+    # A removal leaves the review pool's in-memory counts alone, as a decision below does: its
+    # next refresh_progress reads the moved answers.
+
+    @router.get("/api/review/species-additions")
+    async def admin_additions(user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            return JSONResponse({"additions": await list_additions(conn)})
+
+    @router.get("/api/review/species-additions/{suggestion_id}/boxes")
+    async def admin_addition_boxes(
+        suggestion_id: int, page: int = Query(0, ge=0, le=100000), user=Depends(admin_only)
+    ):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await addition_boxes(conn, suggestion_id=suggestion_id, page=page)
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post(
+        "/api/review/species-additions/{suggestion_id}/remove",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def remove_species_addition(suggestion_id: int, body: RejectIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await remove_addition(
+                        conn,
+                        user=user,
+                        suggestion_id=suggestion_id,
+                        body=body,
+                        catalogue=await _catalogue(conn),
+                        base=await state["review_catalogue"].aget(),
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    # ---- an admin decides suggested species left over from ai #49 (spec 2026-11-21, "Admin
+    # panel") ----
+    # Approve and reject leave the review pool's in-memory counts alone: its next
+    # refresh_progress reads the settled answers.
+
+    @router.get("/api/review/species-suggestions")
+    async def admin_suggestions(
+        status: Literal["pending", "decided"] = Query("pending"), user=Depends(admin_only)
+    ):
+        async with _db().connection() as conn:
+            listed = await list_for_admin(conn, status=status)
+            pending = len(listed) if status == "pending" else await pending_count(conn)
+        return JSONResponse({"suggestions": listed, "pending": pending})
+
+    @router.get("/api/review/species-suggestions/{suggestion_id}/boxes")
+    async def admin_suggestion_boxes(
+        suggestion_id: int, page: int = Query(0, ge=0, le=100000), user=Depends(admin_only)
+    ):
+        async with _db().connection() as conn:
+            return JSONResponse(
+                await suggestion_boxes(conn, suggestion_id=suggestion_id, page=page)
+            )
+
+    @router.post(
+        "/api/review/species-suggestions/{suggestion_id}/approve",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def approve_suggestion(suggestion_id: int, body: ApproveIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await approve(
+                        conn,
+                        user=user,
+                        suggestion_id=suggestion_id,
+                        body=body,
+                        catalogue=await _catalogue(conn),
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post(
+        "/api/review/species-suggestions/{suggestion_id}/reject",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def reject_suggestion(suggestion_id: int, body: RejectIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await reject(
+                        conn,
+                        user=user,
+                        suggestion_id=suggestion_id,
+                        body=body,
+                        catalogue=await _catalogue(conn),
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post(
+        "/api/review/species-suggestions/{suggestion_id}/detach",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def detach_box(suggestion_id: int, body: DetachIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await detach(
+                        conn, user=user, suggestion_id=suggestion_id, event_id=body.event_id
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
 
     @router.get("/api/review/species/{name_slug}/photo.jpg")
     async def species_photo(name_slug: str, user=Depends(reviewer)):
-        found = (await _catalogue()).photo(name_slug)
+        # The file catalogue, not _catalogue(): approved suggestions carry no photos, so
+        # merging them would only cost a database round trip per thumbnail (Ruling P1a).
+        found = (await state["review_catalogue"].aget()).photo(name_slug)
         if found is None:
             return JSONResponse({"error": "no photo for that species"}, status_code=404)
         return await _jpeg(render_frame, str(found[0]), 320)
@@ -268,7 +445,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def _frame_call(fn, **kw):
         async with _db().connection() as conn:
             try:
-                return JSONResponse(await fn(conn, **kw))
+                return JSONResponse(await fn(conn, catalogue=await _catalogue(conn), **kw))
             except ReviewError as e:
                 return _fail(e)
 
@@ -291,7 +468,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                         conn,
                         saved_frame_id=saved_frame_id,
                         user=user,
-                        catalogue=await _catalogue(),
+                        catalogue=await _catalogue(conn),
                         counts=_counts,
                         target=cfg.review_target,
                     )
@@ -305,7 +482,6 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             frame_state,
             saved_frame_id=saved_frame_id,
             user=user,
-            catalogue=await _catalogue(),
             counts=_counts,
             target=cfg.review_target,
         )
@@ -317,7 +493,6 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             saved_frame_id=saved_frame_id,
             user=user,
             body=body,
-            catalogue=await _catalogue(),
         )
 
     @router.patch(
@@ -332,7 +507,6 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             box_id=box_id,
             user=user,
             body=body,
-            catalogue=await _catalogue(),
         )
 
     @router.delete(
@@ -347,12 +521,34 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         return JSONResponse({"ok": True})
 
     @router.post(
+        "/api/review/frames/{saved_frame_id}/mark-rest", dependencies=[Depends(require_csrf)]
+    )
+    async def frame_mark_rest(saved_frame_id: int, body: MarkRestIn, user=Depends(reviewer)):
+        async with _db().connection() as conn:
+            try:
+                out = await mark_rest(
+                    conn,
+                    saved_frame_id=saved_frame_id,
+                    user=user,
+                    body=body,
+                    catalogue=await _catalogue(conn),
+                    spot_rate=cfg.review_spotcheck_rate,
+                    rng=rng,
+                )
+            except ReviewError as e:
+                return _fail(e)
+        pool_obj = _pool()
+        if pool_obj:
+            for v in out["verdicts"]:
+                if v["first_pass"] and v["counts"] and not v["duplicate"]:
+                    pool_obj.note_verified(v["label"])
+        return JSONResponse({"marked": out["marked"], "skipped": out["skipped"]})
+
+    @router.post(
         "/api/review/frames/{saved_frame_id}/complete", dependencies=[Depends(require_csrf)]
     )
     async def frame_complete(saved_frame_id: int, user=Depends(reviewer)):
-        return await _frame_call(
-            complete_frame, saved_frame_id=saved_frame_id, user=user, catalogue=await _catalogue()
-        )
+        return await _frame_call(complete_frame, saved_frame_id=saved_frame_id, user=user)
 
     @router.post(
         "/api/review/frames/{saved_frame_id}/release", dependencies=[Depends(require_csrf)]
@@ -415,7 +611,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                 summary = await progress_summary(
                     conn,
                     pool_obj=pool_obj,
-                    catalogue=await _catalogue(),
+                    catalogue=await _catalogue(conn),
                     session_id=user.session_id,
                     target=cfg.review_target,
                 )
@@ -457,7 +653,11 @@ def build_review_router(cfg, state, templates) -> APIRouter:
             try:
                 return JSONResponse(
                     await browse(
-                        conn, catalogue=await _catalogue(), user=user, filters=filters, page=page
+                        conn,
+                        catalogue=await _catalogue(conn),
+                        user=user,
+                        filters=filters,
+                        page=page,
                     )
                 )
             except ReviewError as e:
@@ -473,7 +673,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
     async def disputes(user=Depends(admin_only)):
         async with _db().connection() as conn:
             return JSONResponse(
-                {"disputes": await list_disputes(conn, catalogue=await _catalogue())}
+                {"disputes": await list_disputes(conn, catalogue=await _catalogue(conn))}
             )
 
     @router.post("/api/review/disputes/{event_id}/adjudicate", dependencies=[Depends(require_csrf)])
@@ -500,7 +700,7 @@ def build_review_router(cfg, state, templates) -> APIRouter:
                         conn,
                         user=user,
                         body=verdict,
-                        catalogue=await _catalogue(),
+                        catalogue=await _catalogue(conn),
                         spot_rate=0.0,
                         rng=rng,
                         adjudication=True,

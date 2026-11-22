@@ -141,7 +141,7 @@ RV.views.single = (() => {
   }
 
   function chooseHint(h) {
-    const entries = RV.catalogue.filter((e) => e.name === h.name);
+    const entries = RV.catalogue.filter((e) => e.name === h.name && !e.pending);
     if (!entries.length) { RV.toast("That species isn't in the list any more."); return; }
     if (entries.length === 1) { pickSpecies(entries[0], "hint"); return; }
     // Several life stages: let the volunteer pick one, and remember the
@@ -230,11 +230,23 @@ RV.views.single = (() => {
     const pickerSlot = RV.el("div", { class: "rv-picker" });
     side.append(RV.el("div", { class: "rv-label", text: c.model ? "Or pick the species" : "Pick the species" }),
       pickerSlot);
+    // Any box may add a species, a blind second opinion included (spec
+    // 2026-11-21-species-worms-check); only a first-pass box offers the ai #49 suggestions
+    // still waiting for approval, which a second opinion can't use.
     picker = new RV.SpeciesPicker(pickerSlot, (entry) => {
       const source = hintName && entry.name === hintName ? "hint" : "search";
       hintName = null;
       pickSpecies(entry, source);
-    });
+    }, { pending: c.item.pass !== 2 });
+    // Only the box the form was opened on: not one shown since (S, a reopen).
+    const stillHere = () => current === c;
+    side.append(RV.addSpeciesBlock((entry) => {
+      if (!stillHere()) {
+        RV.toast("The new species was added. Pick it from the search to answer a box with it.");
+        return undefined;
+      }
+      return submit("species", RV.answerExtra(entry));
+    }, (entry) => { if (stillHere()) pickSpecies(entry, "search"); }));
     const chips = hintChips(c);
     if (chips) side.append(chips);
     side.append(RV.el("div", { class: "rv-row" },
@@ -258,7 +270,7 @@ RV.views.single = (() => {
   }
 
   function pickSpecies(entry, source) {
-    const base = { label: entry.name, life_stage: entry.life_stage, label_source: source };
+    const base = RV.answerExtra(entry, source);
     const celebs = entry.celebrities || [];
     if (!celebs.length) { submit("species", base); return; }
     const who = entry.common || entry.name;
@@ -280,6 +292,10 @@ RV.views.single = (() => {
       if (editor && editor.moved && outcome !== "no_animal") body.bbox = editor.box;
       if (notes.trim()) body.notes = notes.trim();
       const r = await RV.post("/api/review/verdicts", body);
+      // The species list may have changed since the page loaded (RV.STALE_SPECIES) -- a
+      // species a reviewer added that an admin has removed since, say -- which the server
+      // refuses with a 409 though the box is unchanged.
+      const stale = RV.STALE_SPECIES.has(r.data.error);
       // A box that changed out from under the volunteer -- someone else
       // just answered it (409), this claim was never really theirs (403
       // "this box was not served to you"), or its frame vanished from
@@ -287,8 +303,8 @@ RV.views.single = (() => {
       // resubmitting the same thing, so move on rather than leave them
       // stuck. Every other failure (a bad box, an unchosen life stage, a
       // stale species list) is the volunteer's to correct, so it stays.
-      if (r.status === 409 || r.status === 404
-          || (r.status === 403 && r.data.error === "this box was not served to you")) {
+      if (!stale && (r.status === 409 || r.status === 404
+          || (r.status === 403 && r.data.error === "this box was not served to you"))) {
         RV.toast(r.data.error || "That box isn't available any more. Here's the next one.");
         RV.held = null;
         await loadNext(nav);
@@ -296,8 +312,7 @@ RV.views.single = (() => {
       }
       if (!r.ok) {
         RV.toast(r.data.error || "That answer wasn't saved.");
-        // Review Focus 5: the species list may have changed since the page loaded.
-        if (r.data.error === "pick a species from the list") await RV.loadCatalogue();
+        if (stale) await RV.loadCatalogue();
         return;
       }
       RV.held = null;

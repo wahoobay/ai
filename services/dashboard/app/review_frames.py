@@ -33,13 +33,18 @@ from .review_queue import (
     Forbidden,
     Invalid,
     NotFound,
+    ReviewError,
+    VerdictIn,
     fetch_all,
     fetch_one,
+    hold_addition,
     not_skipped,
     safe_frame_size,
+    submit_verdict,
     validate_bbox,
     validate_label,
 )
+from .species_suggestions import PENDING_SUFFIX, pending_shown_answers
 
 
 class AddedBoxIn(BaseModel):
@@ -49,6 +54,12 @@ class AddedBoxIn(BaseModel):
     life_stage: str | None = Field(None, max_length=40)
     not_sure: bool = False
     celebrity_id: str | None = Field(None, max_length=80)
+
+
+class MarkRestIn(BaseModel):
+    label: str = Field(..., max_length=200)
+    life_stage: str | None = Field(None, max_length=40)
+    not_sure: bool = False
 
 
 def _is_admin(user) -> bool:
@@ -177,31 +188,69 @@ async def frame_state(
     )
     ids = [e["id"] for e in events]
     resolved = await resolve_all(conn, ids) if ids else {}
+    waiting = await pending_shown_answers(conn, resolved)
     items = (
         await fetch_all(
             conn,
             """
-        SELECT id, event_id, pass, status, claimed_by, claimed_until, hints
+        SELECT id, event_id, pass, status, claimed_by, claimed_until, hints, added_at
           FROM review_items WHERE event_id = ANY(%s)""",
             (ids,),
         )
         if ids
         else []
     )
-    mine = (
+    # This volunteer's latest answer on each box: which boxes are theirs, and
+    # the box they drew on it, which a change made from the frame keeps.
+    my_latest = (
+        {
+            r["event_id"]: r
+            for r in await fetch_all(
+                conn,
+                """
+        SELECT DISTINCT ON (event_id) event_id, corrected_bbox FROM detection_corrections
+         WHERE event_id = ANY(%s) AND user_id = %s
+         ORDER BY event_id, created_at DESC, id DESC""",
+                (ids, user.id),
+            )
+        }
+        if ids
+        else {}
+    )
+    mine = set(my_latest)
+    # What submit_verdict's no-item path (and reopen_payload) check before
+    # taking a changed answer: a second opinion this volunteer gave stays
+    # blind, and another volunteer's answer on the box closes it to them.
+    own_spot = (
+        {
+            r["event_id"]
+            for r in await fetch_all(
+                conn,
+                """
+        SELECT DISTINCT c.event_id FROM detection_corrections c
+          JOIN review_items ri ON ri.id = c.review_item_id
+         WHERE c.event_id = ANY(%s) AND c.user_id = %s AND ri.pass = 2""",
+                (ids, user.id),
+            )
+        }
+        if mine
+        else set()
+    )
+    answered_by_others = (
         {
             r["event_id"]
             for r in await fetch_all(
                 conn,
                 """
         SELECT DISTINCT event_id FROM detection_corrections
-         WHERE event_id = ANY(%s) AND user_id = %s""",
+         WHERE event_id = ANY(%s) AND user_id IS NOT NULL AND user_id <> %s""",
                 (ids, user.id),
             )
         }
-        if ids
+        if mine
         else set()
     )
+    admin = _is_admin(user)
     now = datetime.now(UTC)
     boxes = []
     for n, e in enumerate(events, 1):
@@ -222,6 +271,10 @@ async def frame_state(
             ),
             None,
         )
+        claimed_by_other = any(
+            i["status"] == "claimed" and i["claimed_by"] != user.id and i["claimed_until"] > now
+            for i in its
+        )
         r = resolved.get(e["id"])
         if r is None:
             state = "locked" if held_by_other else "needs_answer"
@@ -233,12 +286,23 @@ async def frame_state(
             state = "answered_hidden"
         else:
             state = "answered"
+        mine_here = e["id"] in mine
+        my_bbox = my_latest[e["id"]]["corrected_bbox"] if mine_here else None
         box = {
             "n": n,
             "event_id": e["id"],
             "bbox": list(e["bbox"]),
             "state": state,
-            "mine": e["id"] in mine,
+            "mine": mine_here,
+            "own_spot": e["id"] in own_spot,
+            "my_bbox": list(my_bbox) if my_bbox else None,
+            "can_change": (
+                state == "answered"
+                and mine_here
+                and e["id"] not in own_spot
+                and (admin or e["id"] not in answered_by_others)
+                and not claimed_by_other
+            ),
             "review_item_id": my_item["id"] if my_item else None,
             "zoom": {
                 "url": f"/api/review/boxes/{e['id']}/zoom.jpg",
@@ -247,6 +311,7 @@ async def frame_state(
             "outcome": None,
             "label": None,
             "common": None,
+            "pending_species": False,
             "status": None,
             "model": None,
             "hints": None,
@@ -259,6 +324,34 @@ async def frame_state(
                 common=catalogue.common_name(r.species),
                 status=r.status,
             )
+            if e["id"] in waiting:
+                box.update(common=f"{waiting[e['id']]}{PENDING_SUFFIX}", pending_species=True)
+            if box["can_change"]:
+                # What a change made in the frame offers: the model's guess and
+                # the hints of the box's latest first-pass item, the same list
+                # submit_verdict checks a hint against on the no-item path.
+                guess = catalogue.accepted(e["best_species_id"])
+                if guess:
+                    box["model"] = {
+                        "name": guess,
+                        "p": e["best_accuracy"],
+                        "common": catalogue.common_name(guess),
+                    }
+                firsts = sorted(
+                    (i for i in its if i["pass"] == 1),
+                    key=lambda i: (i["added_at"], i["id"]),
+                    reverse=True,
+                )
+                if firsts and firsts[0]["hints"]:
+                    box["hints"] = [
+                        {
+                            "name": h["name"],
+                            "p": h.get("p"),
+                            "common": catalogue.common_name(h["name"]),
+                        }
+                        for h in firsts[0]["hints"]
+                        if h.get("name") != guess
+                    ][:3]
         elif state == "needs_answer":
             guess = catalogue.accepted(e["best_species_id"])
             if guess:
@@ -361,10 +454,19 @@ async def _is_complete(conn, saved_frame_id: int) -> bool:
     )
 
 
+async def _hold_label(conn, v: dict, catalogue) -> None:
+    """A drawn box naming a species a reviewer added holds that addition's row (FOR SHARE,
+    Ruling W2), and is refused if it was removed since `catalogue` was read. Taken first in
+    the transaction, before the drawn box's own row lock: a removal locks the addition's row,
+    then the drawn boxes naming it, so taken after it the two could wait on each other."""
+    await hold_addition(conn, catalogue=catalogue, name=v["label"], life_stage=v["life_stage"])
+
+
 async def add_box(conn, *, saved_frame_id: int, user, body: AddedBoxIn, catalogue) -> dict:
     fr = await frame_record(conn, saved_frame_id)
     v = _validate_added(body, catalogue=catalogue, width=fr["width"], height=fr["height"])
     async with conn.transaction():
+        await _hold_label(conn, v, catalogue)
         if not _is_admin(user) and await _is_complete(conn, saved_frame_id):
             raise Conflict("this frame is already marked complete")
         row = await fetch_one(
@@ -411,6 +513,7 @@ async def update_box(
     fr = await frame_record(conn, saved_frame_id)
     v = _validate_added(body, catalogue=catalogue, width=fr["width"], height=fr["height"])
     async with conn.transaction():
+        await _hold_label(conn, v, catalogue)
         await _own_box(conn, saved_frame_id=saved_frame_id, box_id=box_id, user=user)
         async with conn.cursor() as cur:
             await cur.execute(
@@ -465,3 +568,49 @@ async def complete_frame(conn, *, saved_frame_id: int, user, catalogue) -> dict:
 async def uncomplete_frame(conn, *, saved_frame_id: int) -> None:
     async with conn.transaction(), conn.cursor() as cur:
         await cur.execute("DELETE FROM review_frames WHERE saved_frame_id = %s", (saved_frame_id,))
+
+
+async def mark_rest(
+    conn, *, saved_frame_id: int, user, body: MarkRestIn, catalogue, spot_rate: float, rng
+) -> dict:
+    """ "Mark the rest" (2026-11-21): answer every box in the frame still
+    waiting for an answer with the species the volunteer just gave. The
+    frame is read here, not taken from the page, so a box someone else now
+    holds, one already answered, or one behind a pending second opinion is
+    left alone, and a live second-opinion claim in the frame refuses the
+    whole request as opening the frame does. Each box goes through
+    submit_verdict under every rule a single answer meets (claims, the
+    catalogue, marking its items done, spot-check sampling), stored with
+    label_source 'bulk'. A box that fails meanwhile is skipped, not fatal."""
+    if not catalogue.entry(body.label, body.life_stage):
+        raise Invalid("pick a species from the list")
+    state = await frame_state(conn, saved_frame_id=saved_frame_id, user=user, catalogue=catalogue)
+    # End the read's implicit transaction, so each box below is saved in a
+    # transaction of its own and holds its locks only while it is written.
+    await conn.commit()
+    verdicts, skipped = [], 0
+    for box in state["boxes"]:
+        if box["state"] != "needs_answer":
+            continue
+        try:
+            verdicts.append(
+                await submit_verdict(
+                    conn,
+                    user=user,
+                    body=VerdictIn(
+                        event_id=box["event_id"],
+                        review_item_id=box["review_item_id"],
+                        outcome="species",
+                        label=body.label,
+                        life_stage=body.life_stage,
+                        not_sure=body.not_sure,
+                    ),
+                    catalogue=catalogue,
+                    spot_rate=spot_rate,
+                    rng=rng,
+                    bulk=True,
+                )
+            )
+        except ReviewError:
+            skipped += 1
+    return {"marked": len(verdicts), "skipped": skipped, "verdicts": verdicts}

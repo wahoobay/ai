@@ -96,6 +96,36 @@
 .rv-side button.rv-link, .rv-frame-top button.rv-link { background: none; border: none; color: var(--accent);
   padding: 2px 4px; }
 .rv-check { display: inline-flex; gap: 4px; align-items: center; }
+/* Mark the rest (2026-11-21): one wide action above the checklist, and its one question. */
+.rv-side button.rv-mark-rest { width: 100%; text-align: left; border-color: var(--accent); }
+.rv-mark-confirm { background: var(--rv-note-bg); border-left: 3px solid var(--accent); padding: 6px 10px;
+  border-radius: 4px; }
+.rv-mark-confirm p { margin: 0 0 6px; }
+/* Adding a species (2026-11-21): a link under the picker opens a short form, with the
+   species the volunteer added under it. [hidden] is restated: display: flex beats it. */
+.rv-side button.rv-add-species { align-self: flex-start; padding: 2px 0; font-size: 13px; }
+.rv-add { display: flex; flex-direction: column; gap: 6px; }
+.rv-suggest { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid var(--rv-line);
+  border-radius: 8px; }
+.rv-suggest[hidden] { display: none; }
+.rv-suggest-form { display: flex; flex-direction: column; gap: 8px; }
+.rv-suggest-form p { margin: 0; }
+.rv-suggest-field { display: flex; flex-direction: column; gap: 3px; }
+.rv-field { width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--rv-line);
+  background: var(--bg); color: var(--ink); font: inherit; }
+.rv-suggest-error { color: var(--rv-bad-ink); font-size: 13px; }
+/* Checking with WoRMS (2026-11-21-species-worms-check): the record found or "Did you mean?"
+   choices, then what the list rules say, with "Use …" for a species already listed. */
+.rv-worms, .rv-worms-verdict { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.rv-worms:empty, .rv-worms-verdict:empty { display: none; }
+.rv-worms p, .rv-worms-verdict p { margin: 0; }
+.rv-worms a { color: var(--accent); white-space: nowrap; }
+.rv-worms-note { color: var(--muted); }
+.rv-worms-choices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rv-worms-choice label { display: inline-flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.rv-worms-verdict .rv-row > button { flex: 0 1 auto; }
+.rv-suggest-mine ul { list-style: none; margin: 4px 0 0; padding: 0; font-size: 13px; }
+.rv-suggest-mine li { padding: 4px 0; border-bottom: 1px solid var(--rv-line); }
 .rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--rv-line); border-radius: 6px; }
 .rv-note { background: var(--rv-note-bg); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
   margin: 0; font-size: 13px; }
@@ -170,6 +200,36 @@
 #rv-pager button { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--rv-line); background: var(--bg);
   color: var(--ink); cursor: pointer; }
 #rv-pager button:disabled { opacity: .4; cursor: default; }
+/* New species (2026-11-21): the admin's panel takes the whole row. Each waiting suggestion
+   shows its boxes (24 a page, each with "Not this species") and the two decisions side by
+   side; decided ones fold away. For admins the Browse button counts the waiting ones. */
+.rv-admin .rv-species-panel { grid-column: 1 / -1; }
+.rv-sg { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--rv-line); }
+.rv-sg p { margin: 0; }
+.rv-sg-boxes { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.rv-sg-box { margin: 0; display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.rv-sg-box img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 4px; background: #000; }
+.rv-sg-decide { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.rv-sg-fields { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--rv-line);
+  border-radius: 6px; }
+.rv-sg-fields > button { align-self: flex-start; }
+.rv-sg-chosen { font-weight: 600; margin-left: 4px; }
+.rv-panel button.rv-primary { background: var(--good); color: var(--rv-on-good); border: none; font-weight: 700; }
+.rv-panel button:disabled { opacity: .4; cursor: default; }
+.rv-sg-history summary { cursor: pointer; color: var(--muted); }
+.rv-sg-history ul { list-style: none; margin: 6px 0 0; padding: 0; font-size: 13px; }
+.rv-sg-history li { padding: 4px 0; border-bottom: 1px solid var(--rv-line); }
+.rv-tabs .rv-badge { margin-left: 6px; background: var(--warn); color: var(--rv-on-accent); font-size: 11px;
+  font-weight: 700; }
+/* Species added by reviewers (spec 2026-11-21-species-worms-check): the admin's main species
+   panel, full width like "New species" (now shown only while an ai #49 suggestion waits). Each
+   addition is a card with its WoRMS link; its boxes and Remove fold open on demand, and removed
+   ones fold away like decided suggestions. */
+.rv-addition a, .rv-sg-history a { color: var(--accent); white-space: nowrap; }
+.rv-sg-used summary, .rv-sg-remove summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.rv-sg-used[open] > summary, .rv-sg-remove[open] > summary { margin-bottom: 6px; }
+.rv-sg-remove .rv-sg-fields { max-width: 460px; }
+.rv-sg-remove .rv-suggest-error { margin: 6px 0 0; }
 
 /* The whole-frame instructions: a call-out under the frame. The swatches copy
    the frame boxes' colours and line styles (.rv-fb-*) on a dark underwater

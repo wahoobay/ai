@@ -81,7 +81,7 @@ from .exports import (
     export_water_quality,
     export_weather,
     fetch_parquet_bytes,
-    hide_pending_spot_checks,
+    hide_pending,
     query_for,
 )
 from .frames import frame_exists
@@ -691,6 +691,7 @@ def build_app() -> FastAPI:
             BASE_DIR / "templates" / "index.html",
             BASE_DIR / "static" / "review.css",
             BASE_DIR / "static" / "review-core.js",
+            BASE_DIR / "static" / "review-worms.js",
             BASE_DIR / "static" / "review-single.js",
             BASE_DIR / "static" / "review-frame.js",
             BASE_DIR / "static" / "review-browse.js",
@@ -1457,7 +1458,7 @@ def build_app() -> FastAPI:
             where.append("c.reviewer = %s")
             params.append(reviewer)
         if not admin:
-            where.append(hide_pending_spot_checks("c"))
+            where.append(hide_pending("c"))
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
         params.append(limit)
         sql = f"""
@@ -1529,15 +1530,15 @@ def build_app() -> FastAPI:
                     # events, most recent tagged event_id, first + last
                     # tag time.
                     # The photo is a public thumbnail (no user dependency
-                    # here), so it never picks an event whose spot-check is
-                    # pending (follow-up D3, fix round 1 T4a).
+                    # here), so it never picks an event whose spot-check or
+                    # species is pending (follow-up D3, fix round 1 T4a).
                     await cur.execute(f"""
                         SELECT celebrity_id,
                                COUNT(DISTINCT event_id)::int  AS sightings,
                                MAX(created_at) AS last_tagged_at,
                                MIN(created_at) AS first_tagged_at,
                                (ARRAY_AGG(event_id ORDER BY created_at DESC)
-                                FILTER (WHERE {hide_pending_spot_checks("detection_corrections")})
+                                FILTER (WHERE {hide_pending("detection_corrections")})
                                )[1] AS recent_event_id
                           FROM detection_corrections
                          WHERE celebrity_id IS NOT NULL
@@ -1618,9 +1619,9 @@ def build_app() -> FastAPI:
                             r["last_tagged_at"].isoformat() if r["last_tagged_at"] else None
                         )
                     # One entry per event -- its latest tag -- and, for the
-                    # public, none while a spot-check on it is pending
-                    # (follow-up D2, D3).
-                    hide = "" if _is_admin(user) else f"AND {hide_pending_spot_checks('dc')}"
+                    # public, none while a spot-check or species on it is
+                    # pending (follow-up D2, D3).
+                    hide = "" if _is_admin(user) else f"AND {hide_pending('dc')}"
                     await cur.execute(
                         f"""
                         SELECT * FROM (

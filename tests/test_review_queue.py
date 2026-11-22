@@ -574,6 +574,60 @@ async def test_accepting_the_guess_records_an_endorsement_and_closes_the_item(rd
     assert await _status(rdb, item) == "done"
 
 
+async def test_a_bulk_verdict_is_stored_as_bulk(rdb, tmp_path, cat):
+    """Whole-frame 'mark the rest' (2026-11-21): the answer is stored with its own
+    label_source, so its agreement can be measured apart from boxes answered one by one."""
+    [(f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one = await make_user(rdb, "one")
+    await _next(rdb, one)
+    async with rdb.connection() as conn:
+        out = await submit_verdict(
+            conn,
+            user=as_user(one),
+            body=VerdictIn(
+                event_id=f["event_ids"][0],
+                review_item_id=item,
+                outcome="species",
+                label="Seriola zonata",
+            ),
+            catalogue=cat,
+            spot_rate=0.0,
+            rng=random.Random(0),
+            bulk=True,
+        )
+    row = await _row(
+        rdb,
+        "SELECT corrected_name, is_endorsement, label_source FROM detection_corrections WHERE id = %s",
+        out["id"],
+    )
+    assert row == ("Seriola zonata", True, "bulk")
+    assert await _status(rdb, item) == "done"
+
+
+def test_bulk_is_refused_from_the_public_body():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        VerdictIn(event_id=1, outcome="species", label="Seriola zonata", label_source="bulk")
+
+
+async def test_bulk_only_for_a_species(rdb, tmp_path, cat):
+    [(f, item)] = await _boxes(rdb, tmp_path, n=1)
+    one = await make_user(rdb, "one")
+    await _next(rdb, one)
+    async with rdb.connection() as conn:
+        with pytest.raises(Invalid, match="only a species can be marked with the rest"):
+            await submit_verdict(
+                conn,
+                user=as_user(one),
+                body=VerdictIn(event_id=f["event_ids"][0], review_item_id=item, outcome="accept"),
+                catalogue=cat,
+                spot_rate=0.0,
+                rng=random.Random(0),
+                bulk=True,
+            )
+
+
 async def test_a_species_from_the_search_with_its_life_stage(rdb, tmp_path, cat):
     [(f, item)] = await _boxes(rdb, tmp_path, n=1)
     one = await make_user(rdb, "one")
@@ -1351,6 +1405,7 @@ async def test_duplicate_verdict_reads_outcome_from_the_stored_row_not_the_argum
         "celebrity_id": None,
         "notes": None,
         "bbox": None,
+        "species_suggestion_id": None,
     }
     async with rdb.connection() as conn:
         dup = await _duplicate_verdict(conn, event_id=eid, user_id=one, v=v, outcome="species")
