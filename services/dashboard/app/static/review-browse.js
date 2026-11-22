@@ -28,9 +28,12 @@ RV.views.browse = (() => {
   let page = 0;
   let progress = null;
 
+  // awaiting_species: the box's answer names a species waiting for an admin's approval, so it
+  // is not verified yet (final review I1).
   const BADGES = { single: ["✓ verified", "ok"], agreed: ["✓✓ agreed", "two"], adjudicated: ["settled", "two"],
     disputed: ["disputed", "disp"], in_queue: ["in queue", "open"],
-    awaiting_second_opinion: ["awaiting 2nd opinion", "open"] };
+    awaiting_second_opinion: ["awaiting 2nd opinion", "open"],
+    awaiting_species: ["waiting for approval", "open"] };
 
   function answerText(side) {
     if (side.outcome === "no_animal") return "no animal";

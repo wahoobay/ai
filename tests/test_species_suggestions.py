@@ -1403,6 +1403,35 @@ async def test_browse_names_a_pending_species(rdb, tmp_path, cat):
     assert (await commons(await _merged(rdb, cat)))[w["pending"]] == "Banded Rudderfish"
 
 
+async def test_browse_never_calls_a_box_waiting_on_a_new_species_verified(rdb, tmp_path, cat):
+    """Final review I1: the grid said "✓ verified" on such a box, and the Verified filter listed
+    it, under counts that leave it out. It has a status of its own until the decision."""
+    w = await _pending_and_control(rdb, tmp_path, cat)
+
+    async def statuses(status, catalogue=cat, page_size=48):
+        async with rdb.connection() as conn:
+            result = await browse(
+                conn,
+                catalogue=catalogue,
+                user=as_user(w["roy"]),
+                filters=BrowseFilters(status=status),
+                page=0,
+                page_size=page_size,
+            )
+        return {c["event_id"]: c["status"] for c in result["cells"]}, result["total"]
+
+    shown, total = await statuses("any")
+    assert shown == {w["pending"]: "awaiting_species", w["control"]: "single"} and total == 2
+    # the filter runs before paging: the waiting box is out of every page and of the total
+    assert await statuses("verified") == ({w["control"]: "single"}, 1)
+    assert await statuses("verified", page_size=1) == ({w["control"]: "single"}, 1)
+    for status in ("agreed", "adjudicated", "disputed", "unidentifiable", "no_animal"):
+        assert await statuses(status) == ({}, 0), status
+    await _approve(rdb, w["sid"], "Seriola zonata", "juvenile", "Juvenile Banded Rudderfish")
+    approved = await statuses("verified", await _merged(rdb, cat))
+    assert approved == ({w["pending"]: "single", w["control"]: "single"}, 2)
+
+
 async def test_browse_names_a_pending_species_that_is_not_listed_yet(rdb, tmp_path, cat):
     """Browser walk 2026-11-21: a species new to the list has no listed common name, so
     the cell showed its bare provisional name, "Pseudupeneus maculatus", unmarked."""

@@ -1804,6 +1804,33 @@ def test_admins_see_the_waiting_count_on_the_browse_button(tmp_path):
 
 
 @needs_node
+def test_a_box_waiting_on_a_new_species_is_not_badged_verified(tmp_path):
+    """Final review I1: its own status, and the spec's words, not "✓ verified"."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      RV.role = "reviewer";
+      const cellOf = (event_id, status) => ({ kind: "box", event_id, added_id: null, saved_frame_id: 7,
+        zoom_url: "/z.jpg", status, outcome: "species", label: "Seriola zonata",
+        common: "Juvenile Banded Rudderfish (new, waiting for approval)", camera: "seahive",
+        ts: "2026-06-16T12:00:00Z", lane: "check", mine: true, reviewers: ["Roy"],
+        last_at: "2026-11-21T15:00:00Z" });
+      const stubbed = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => (url.startsWith("/api/review/browse?")
+        ? { status: 200, ok: true, json: async () => ({ has_more: false,
+            cells: [cellOf(101, "awaiting_species"), cellOf(102, "single")] }) }
+        : stubbed(url, opts));
+      await RV.views.browse.enter(); await settle();
+      return document.getElementById("rv-grid").children.map((c) =>
+        textOf(find(c, (n) => (n.className || "").startsWith("rv-badge"))));
+    """,
+        tmp_path,
+    )
+    assert out == ["waiting for approval", "✓ verified"]
+
+
+@needs_node
 @pytest.mark.parametrize("role", ["reviewer", "admin"])
 def test_browse_never_shows_the_word_null(role, tmp_path):
     """Browser walk 2026-11-21: Browse put the word "null" under its counts (DOM
