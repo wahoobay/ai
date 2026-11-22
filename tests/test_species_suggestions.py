@@ -134,12 +134,40 @@ async def test_a_listed_choice_is_refused(rdb, cat):
             scientific_name="Pomacanthus paru",
             life_stage="adult",
         )
-    # the same common name, in any case and at any stage
+    # the same common name at the same stage, in any case
     with pytest.raises(Conflict, match="^already on the list as Blue Tang$"):
         await _suggest(rdb, roy, cat, common_name="bLUE tANG")
-    with pytest.raises(Conflict, match="^already on the list as Blue Tang$"):
-        await _suggest(rdb, roy, cat, common_name="Blue Tang", life_stage="juvenile")
     assert await _count(rdb) == 0
+
+
+async def test_a_common_name_is_judged_with_its_stage(rdb, cat):
+    """Ruling X1: a listed species' plain common name with a stage it lacks is a new
+    choice (Roy types "Bluefish", juvenile); with a stage it has, it is that choice."""
+    roy = await make_user(rdb, "roy")
+    assert cat.entry("Pomatomus saltatrix", None) is not None  # Bluefish, stage-less only
+    assert cat.entry("Pomatomus saltatrix", "juvenile") is None
+    e = await _suggest(
+        rdb,
+        roy,
+        cat,
+        common_name="Bluefish",
+        scientific_name="Pomatomus saltatrix",
+        life_stage="juvenile",
+    )
+    assert e["name"] == "Pomatomus saltatrix" and e["life_stage"] == "juvenile"
+    e = await _suggest(rdb, roy, cat, common_name="Blue Tang", life_stage="juvenile")
+    assert e["name"] == "Blue Tang" and e["life_stage"] == "juvenile"
+
+    with pytest.raises(Conflict, match="^already on the list as Bluefish$"):
+        await _suggest(rdb, roy, cat, common_name="bluefish")
+    # French Angelfish is listed as adult and juvenile: the plain name at a listed stage
+    with pytest.raises(Conflict, match="^already on the list as Adult French Angelfish$"):
+        await _suggest(rdb, roy, cat, common_name="French Angelfish", life_stage="adult")
+    # the name written with a stage word, at that same listed stage
+    for typed in ("Juvenile French Angelfish", "french angelfish juvi"):
+        with pytest.raises(Conflict, match="^already on the list as Juvenile French Angelfish$"):
+            await _suggest(rdb, roy, cat, common_name=typed, life_stage="juvenile")
+    assert await _count(rdb) == 2
 
 
 async def test_a_new_stage_of_a_listed_species_is_accepted(rdb, cat):

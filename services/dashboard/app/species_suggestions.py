@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from .auth import effective_role
 from .config import location_id
-from .review_catalogue import Catalogue, CatalogueEntry
+from .review_catalogue import Catalogue, CatalogueEntry, without_stage_words
 from .review_queue import Conflict, Invalid, NotFound, fetch_all, fetch_one
 
 STAGES: tuple[str | None, ...] = (
@@ -160,6 +160,26 @@ def _listed_as(entry: CatalogueEntry) -> Conflict:
     return Conflict(f"already on the list as {entry.common_name or entry.name}")
 
 
+def _listed_by_common_name(catalogue, common: str, stage: str | None) -> CatalogueEntry | None:
+    """The listed choice a common name and stage already are (Ruling X1), judged on species
+    and stage together: an entry with exactly this common name at this stage, or a species
+    whose own common name is this one, stage words taken out, listed at this stage. A
+    stage a listed species lacks is a new choice, even typed as its plain common name."""
+    folded = common.casefold()
+    for e in catalogue.entries:
+        if e.life_stage == stage and (_squash(e.common_name) or "").casefold() == folded:
+            return e
+    plain = without_stage_words(common).casefold()
+    if not plain:
+        return None
+    for name in catalogue.names():
+        if (catalogue.common_name(name) or "").casefold() == plain:
+            listed = catalogue.entry(name, stage)
+            if listed is not None:
+                return listed
+    return None
+
+
 async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dict:
     """Record `user`'s suggestion, pending, and return its picker entry."""
     stage = _stage(body.life_stage)
@@ -169,10 +189,10 @@ async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dic
         listed = catalogue.entry(catalogue.accepted(scientific), stage)
         if listed is not None:
             raise _listed_as(listed)
+    listed = _listed_by_common_name(catalogue, common, stage)
+    if listed is not None:
+        raise _listed_as(listed)
     folded = common.casefold()
-    for e in catalogue.entries:
-        if (_squash(e.common_name) or "").casefold() == folded:
-            raise _listed_as(e)
     async with conn.transaction():
         await conn.execute(_SUGGESTER_LOCK_SQL, (user.id,))
         waiting = await fetch_all(

@@ -41,6 +41,11 @@ _STAGE_WORDS = re.compile(
 )
 
 
+def without_stage_words(common: str) -> str:
+    """'Yellowtail Parrotfish TP' -> 'Yellowtail Parrotfish'; '' when only stage words."""
+    return " ".join(_STAGE_WORDS.sub(" ", common).split())
+
+
 def normalize_raw(raw: str) -> str:
     """'Pomatomus_saltarix ' -> 'Pomatomus saltarix'."""
     return " ".join(raw.replace("_", " ").split())
@@ -149,8 +154,7 @@ class Catalogue:
             if e.common_name:
                 if e.life_stage is None:
                     return e.common_name
-                plain = " ".join(_STAGE_WORDS.sub(" ", e.common_name).split())
-                return plain or e.common_name
+                return without_stage_words(e.common_name) or e.common_name
         return None
 
     def celebrity_ids(self, name: str | None) -> set[str]:
