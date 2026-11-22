@@ -16,7 +16,13 @@ from js_source import function_body as _function_body
 from js_source import read as _read
 from review_fixtures import login, make_user
 
-SCRIPTS = ["review-core.js", "review-single.js", "review-frame.js", "review-browse.js"]
+SCRIPTS = [
+    "review-core.js",
+    "review-worms.js",
+    "review-single.js",
+    "review-frame.js",
+    "review-browse.js",
+]
 
 
 @pytest.mark.skipif(not Path(NODE).exists(), reason="node is not available")
@@ -1089,11 +1095,14 @@ def test_the_frame_says_how_to_mark_the_rest_until_a_species_is_given(tmp_path):
     assert "Mark the 2 unanswered boxes as Smallmouth grunt" in out["afterSpecies"]
 
 
-# ---- 2026-11-21: reviewers add a species from the picker and answer with it ----------
-# Spec 2026-11-21 (reviewer species suggestions), "Answering with a suggestion": POST the
-# suggestion, then the verdict. SUGGEST_STUB goes after FRAME_STUB: elements keep their
-# listeners and attributes (ELEMENT_STUB, shared with the Browse admin tests below), so a
-# test can click the link, fill the form and submit it.
+# ---- reviewers add a species, checked with WoRMS (spec 2026-11-21-species-worms-check) -------
+# "Not on the list? Add a species" opens a form under every picker -- on blind second opinions
+# and boxes a volunteer drew too. "Check with WoRMS" asks WoRMS from the browser
+# (review-worms.js); the record chosen is posted, and the box answered with the new species.
+# SUGGEST_STUB goes after FRAME_STUB: elements keep their listeners and attributes (ELEMENT_STUB,
+# shared with the Browse admin tests below), so a test can click the link, fill the form, check
+# and add. WoRMS is stubbed by URL, never called: `worms[path]` is { status, data } (204, nothing
+# found, when unset), "reject" (a transport error) or "hang" (no answer until aborted).
 
 ELEMENT_STUB = r"""
   const plainEl = document.createElement;
@@ -1123,24 +1132,68 @@ ELEMENT_STUB = r"""
 SUGGEST_STUB = (
     ELEMENT_STUB
     + r"""
-  const ADD = "Not on the list? Add a species";
-  const addLink = (root) => find(root, (n) => n.tag === "button" && textOf(n) === ADD);
-  const submitForm = (root) => find(root, (n) => n.tag === "form").on.submit({ preventDefault() {} });
-  // Open the form under the picker in `root` and fill it in.
-  const openForm = (root, fields) => {
-    addLink(root).on.click({});
-    for (const [name, value] of Object.entries(fields || {})) attr(root, "name", name).value = value;
+  const all = (n, pred, out = []) => {
+    if (!n || typeof n !== "object") return out;
+    if (pred(n)) out.push(n);
+    for (const c of kids(n)) all(c, pred, out);
+    return out;
   };
-  const ENTRY = { key: "suggestion:9", name: "Pseudupeneus maculatus", life_stage: "juvenile",
-    common: "Spotted Goatfish (waiting for approval)", suggestion_id: 9, pending: true,
+  const button = (root, text) => find(root, (n) => n.tag === "button" && textOf(n) === text);
+  const addLink = (root) => button(root, "Not on the list? Add a species");
+  const checkButton = (root) => button(root, "Check with WoRMS");
+  const addButton = (root) => button(root, "Add and answer this box");
+  const radios = (root) => all(root, (n) => n.attrs && n.attrs.type === "radio");
+  const choices = (root) => all(root, (n) => n.className === "rv-worms-choice").map(textOf);
+  const uses = (root) => all(root, (n) => n.tag === "button" && textOf(n).startsWith("Use ")).map(textOf);
+  // Fill fields in, as typing (or choosing a stage) would.
+  const fill = (root, fields) => {
+    for (const [name, value] of Object.entries(fields)) {
+      const field = attr(root, "name", name);
+      field.value = value;
+      (field.on.input || field.on.change)({});
+    }
+  };
+  // Open the form under the picker in `root` and fill it in; Enter in a field checks with WoRMS.
+  const openForm = (root, fields) => { addLink(root).on.click({}); fill(root, fields); };
+  const checkForm = (root) => find(root, (n) => n.tag === "form").on.submit({ preventDefault() {} });
+  const WORMS = "https://www.marinespecies.org/rest";
+  globalThis.worms = {};
+  const record = (id, name, extra) => Object.assign({ AphiaID: id, scientificname: name,
+    authority: "(Bloch, 1793)", status: "accepted", rank: "Species", valid_AphiaID: id, valid_name: name,
+    valid_authority: "(Bloch, 1793)", family: "Mullidae", match_type: "exact",
+    url: `https://www.marinespecies.org/aphia.php?p=taxdetails&id=${id}` }, extra);
+  const matchNames = (name) =>
+    `/AphiaRecordsByMatchNames?scientificnames[]=${encodeURIComponent(name)}&marine_only=false`;
+  const GOATFISH = record(126994, "Pseudupeneus maculatus");
+  // The species added: the server's answer is its key and suggestion_id; the list reloaded
+  // afterwards has it.
+  const ADDED = { key: "Pseudupeneus maculatus|juvenile", name: "Pseudupeneus maculatus",
+    life_stage: "juvenile", common: "Spotted Goatfish", aphia_id: 126994, rank: "Species",
+    family: "Mullidae", resolved: true, in_species_log: false, in_classifier: false, celebrities: [] };
+  // A species suggested under ai #49, still waiting for an admin: only its suggester picks it.
+  const ENTRY = { key: "suggestion:4", name: "Pseudupeneus maculatus", life_stage: "juvenile",
+    common: "Spotted Goatfish (waiting for approval)", suggestion_id: 4, pending: true,
     in_species_log: false, in_classifier: false };
   const listed = RV.catalogue.slice();
-  globalThis.suggestReply = { status: 200, data: ENTRY };
+  globalThis.suggestReply = { status: 200, data: { key: ADDED.key, name: ADDED.name,
+    life_stage: ADDED.life_stage, common: ADDED.common, suggestion_id: 9 } };
   globalThis.mine = [];
+  globalThis.species = null;           // the list /api/review/species answers: [...listed, ADDED]
   const pageFetch = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
     const reply = (status, data) => ({ status, ok: status < 400, json: async () => data });
     const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (url.startsWith(WORMS)) {
+      calls.push({ url, body, headers: (opts && opts.headers) || null,
+        credentials: (opts && opts.credentials) || null });
+      const answer = globalThis.worms[url.slice(WORMS.length)];
+      if (answer === "reject") throw new TypeError("Failed to fetch");
+      if (answer === "hang") {
+        return new Promise((_, reject) =>
+          opts.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+      }
+      return answer ? reply(answer.status || 200, answer.data) : reply(204, null);
+    }
     if (url === "/api/review/species-suggestions") {
       calls.push({ url, body });
       await globalThis.gate;               // a test may hold the reply back
@@ -1152,7 +1205,7 @@ SUGGEST_STUB = (
     }
     if (url === "/api/review/species") {
       calls.push({ url, body });
-      return reply(200, { species: [...listed, ENTRY] });
+      return reply(200, { species: globalThis.species || [...listed, ADDED] });
     }
     if (url === "/api/review/verdicts" && globalThis.verdictReply) {
       calls.push({ url, body });
@@ -1161,6 +1214,10 @@ SUGGEST_STUB = (
     return pageFetch(url, opts);
   };
   const sent = () => calls.filter((c) => c.body && !c.url.endsWith("/open"));
+  // What the page asked for, from call `from` on: WoRMS (by path), our species and answer routes.
+  const asked = (from) => calls.slice(from || 0).map((c) => c.url)
+    .filter((u) => u.startsWith(WORMS) || u.startsWith("/api/review/species") || u === "/api/review/verdicts")
+    .map((u) => (u.startsWith(WORMS) ? "WoRMS " + u.slice(WORMS.length) : u));
   // A box the queue served to the single view.
   const payload = (pass) => ({ item: { id: 11, event_id: 101, pass },
     box: { bbox: [10, 10, 50, 50], model_bbox: [10, 10, 50, 50], saved_frame_id: 7 },
@@ -1169,109 +1226,491 @@ SUGGEST_STUB = (
 """
 )
 
-SUGGESTION = {
-    "common_name": "Spotted Goatfish",
+
+def _page(*views: str) -> list[str]:
+    """review-core.js, the WoRMS check, and the views named."""
+    return [_read("review-core.js"), _read("review-worms.js"), *(_read(v) for v in views)]
+
+
+GOATFISH_FORM = (
+    '{ common_name: " Spotted Goatfish ", scientific_name: " Pseudupeneus  maculatus ", '
+    'life_stage: "juvenile" }'
+)
+MATCH_GOATFISH = (
+    "WoRMS /AphiaRecordsByMatchNames?scientificnames[]=Pseudupeneus%20maculatus&marine_only=false"
+)
+ADDITION = {
+    "aphia_id": 126994,
     "scientific_name": "Pseudupeneus maculatus",
+    "family": "Mullidae",
+    "common_name": "Spotted Goatfish",
     "life_stage": "juvenile",
     "note": None,
 }
-SUGGESTED_ANSWER = {
+ADDED_ANSWER = {
     "label": "Pseudupeneus maculatus",
     "life_stage": "juvenile",
     "label_source": "suggested",
     "species_suggestion_id": 9,
 }
-FILLED = (
-    '{ common_name: " Spotted Goatfish ", scientific_name: "Pseudupeneus maculatus", '
-    'life_stage: "juvenile" }'
-)
+BOX_101 = {"event_id": 101, "review_item_id": 11, "outcome": "species"}
+DOWN = "WoRMS isn't answering right now; try again in a minute, or answer Can't identify for now."
+UNKNOWN = "WoRMS doesn't know this name. Check the spelling, or answer Can't identify for now."
 
 
 @needs_node
-def test_adding_a_species_answers_the_frame_box_with_it(tmp_path):
+def test_an_exact_worms_match_adds_and_answers_the_box(tmp_path):
+    """Box 1 is answered with a listed species, then (the stub's frame never changes) with one
+    WoRMS knows exactly: the form shows the record, adds it and answers the box, and "mark the
+    rest" then offers the new species, not the earlier one."""
     out = run_node(
-        [_read("review-core.js"), _read("review-frame.js")],
+        _page("review-frame.js"),
         FRAME_STUB
         + SUGGEST_STUB
         + f"""
+      worms[matchNames("Pseudupeneus maculatus")] = {{ data: [[GOATFISH]] }};
       await RV.views.frame.enter({{ savedFrameId: 7 }});    // box 1 is selected
+      key("a"); await settle();                            // a listed species: M would mark with it
+      const from = calls.length;
       const root = document.getElementById("rv-frame");
-      openForm(root, {FILLED});
-      submitForm(root); submitForm(root);                  // a double click sends it once
+      openForm(root, {GOATFISH_FORM});
+      const before = addButton(root).disabled;
+      checkForm(root); await settle();
+      const shown = textOf(root);
+      addButton(root).on.click({{}}); addButton(root).on.click({{}});   // a double click adds it once
       await settle();
-      const asked = calls.map((c) => c.url).filter((u) => u.startsWith("/api/review/species")
-        || u === "/api/review/verdicts");
-      return {{ sent: sent(), asked, m: key("m") }};
+      const wormsCalls = calls.filter((c) => c.url.startsWith(WORMS));
+      return {{ before, shown, asked: asked(from), sent: sent().slice(1),
+        plain: wormsCalls.every((c) => !c.headers && !c.credentials),
+        text: textOf(root), m: key("m") }};
     """,
         tmp_path,
     )
-    suggestion, verdict = out["sent"]
-    assert suggestion == {"url": "/api/review/species-suggestions", "body": SUGGESTION}
-    assert verdict == {
-        "url": "/api/review/verdicts",
-        "body": {
-            "event_id": 101,
-            "review_item_id": 11,
-            "outcome": "species",
-            **SUGGESTED_ANSWER,
-            "not_sure": False,
-        },
-    }
-    # Your suggestions are read when the form opens; the list is reloaded before answering.
+    assert out["before"] is True  # nothing to add until WoRMS has answered
+    assert "✓ Pseudupeneus maculatus (Bloch, 1793) · Mullidae WoRMS ↗" in out["shown"]
     assert out["asked"] == [
         "/api/review/species-suggestions/mine",
+        MATCH_GOATFISH,
+        "/api/review/species-suggestions",
+        "/api/review/species",  # the list is reloaded before answering
+        "/api/review/verdicts",
+    ]
+    assert out["plain"]  # no custom header or cookie, so the browser sends WoRMS no preflight
+    suggestion, verdict = out["sent"]
+    assert suggestion == {"url": "/api/review/species-suggestions", "body": ADDITION}
+    assert verdict == {
+        "url": "/api/review/verdicts",
+        "body": {**BOX_101, **ADDED_ANSWER, "not_sure": False},
+    }
+    assert "Mark the 2 unanswered boxes as Spotted Goatfish" in out["text"]
+    assert out["m"] is True
+
+
+@needs_node
+def test_a_misspelling_offers_did_you_mean(tmp_path):
+    """On a blind second opinion, which may add a species now that nothing waits for an admin.
+    TAXAMATCH's fuzzy matches are offered as "Did you mean?": species only, each accepted species
+    once, accepted ones first. Picking one enables Add; with no common name typed, the record's
+    English name from WoRMS is posted."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      worms[matchNames("Pseudupeneus maculatis")] = { data: [[
+        record(500, "Upeneus maculatus", { match_type: "near_3", status: "unaccepted",
+          valid_AphiaID: 126994, valid_name: "Pseudupeneus maculatus" }),
+        record(126994, "Pseudupeneus maculatus", { match_type: "phonetic" }),
+        record(126995, "Pseudupeneus prayensis", { match_type: "near_2", authority: "(Cuvier, 1829)",
+          valid_authority: "(Cuvier, 1829)" }),
+        record(126993, "Pseudupeneus", { match_type: "near_1", rank: "Genus" })]] };
+      worms["/AphiaVernacularsByAphiaID/126994"] = { data: [
+        { vernacular: "rouget-souris tacheté", language_code: "fra", language: "French" },
+        { vernacular: "spotted goatfish", language_code: "eng", language: "English" }] };
+      await RV.views.single.enter({ payload: payload(2) });   // a blind second opinion
+      const root = document.getElementById("rv-single");
+      openForm(root, { scientific_name: "Pseudupeneus maculatis", life_stage: "juvenile" });
+      checkForm(root); await settle();
+      const found = { text: textOf(root), choices: choices(root), ready: !addButton(root).disabled };
+      radios(root)[0].on.change({});
+      const ready = !addButton(root).disabled;
+      addButton(root).on.click({}); await settle();
+      return { found, ready, asked: asked(), sent: sent() };
+    """,
+        tmp_path,
+    )
+    assert "Did you mean?" in out["found"]["text"]
+    assert out["found"]["choices"] == [
+        "Pseudupeneus maculatus (Bloch, 1793) · Mullidae WoRMS ↗",
+        "Pseudupeneus prayensis (Cuvier, 1829) · Mullidae WoRMS ↗",
+    ]
+    assert out["found"]["ready"] is False and out["ready"] is True
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        "WoRMS /AphiaRecordsByMatchNames?scientificnames[]=Pseudupeneus%20maculatis&marine_only=false",
+        "WoRMS /AphiaVernacularsByAphiaID/126994",
         "/api/review/species-suggestions",
         "/api/review/species",
         "/api/review/verdicts",
     ]
-    assert out["m"] is False  # a species waiting for approval never marks the rest
+    suggestion, verdict = out["sent"]
+    assert suggestion["body"] == {**ADDITION, "common_name": "spotted goatfish"}
+    assert verdict["body"] == {**BOX_101, **ADDED_ANSWER, "not_sure": False}
 
 
 @needs_node
-def test_drawn_boxes_have_no_add_a_species_link(tmp_path):
-    src = _read("review-frame.js")
-    assert "RV.addSpeciesBlock(" in _function_body(src, "answerControls")
-    for name in ("addedPanel", "pickerAndButtons"):
-        body = _function_body(src, name)
-        assert "suggestSpecies" not in body and "addSpeciesBlock" not in body, name
+def test_a_common_name_only_uses_the_vernacular_search(tmp_path):
+    """A common name alone asks WoRMS's vernacular search, exactly first, then by prefix; the
+    candidates are offered to confirm even when there is one. A new name clears the result."""
     out = run_node(
-        [_read("review-core.js"), _read("review-frame.js")],
+        _page("review-single.js"),
         FRAME_STUB
         + SUGGEST_STUB
         + """
-      RV.catalogue = [...listed, ENTRY];
-      const frameFetch = globalThis.fetch;
-      globalThis.fetch = async (url, opts) => {
-        const r = await frameFetch(url, opts);
-        if (!url.endsWith("/open")) return r;
-        const data = await r.json();
-        data.added = [{ id: 5, bbox: [400, 300, 480, 360], mine: true, by: "you", outcome: "species",
-          label: "Haemulon chrysargyreum", common: "Smallmouth grunt", life_stage: null,
-          not_sure: false, zoom_url: "/a.jpg" }];
-        return { status: 200, ok: true, json: async () => data };
-      };
-      await RV.views.frame.enter({ savedFrameId: 7 });    // box 1, drawn by the model
-      const root = document.getElementById("rv-frame");
-      const model = { link: Boolean(addLink(root)), offers: offered(root, "spotted") };
-      find(root, (n) => n.tag === "li" && textOf(n).startsWith("+ drawn by you")).on.click({});
-      const drawnBox = { link: Boolean(addLink(root)), offers: offered(root, "spotted") };
-      return { model, drawnBox };
+      worms["/AphiaRecordsByVernacular/spotted%20goatfish?like=false"] = { data: [GOATFISH] };
+      worms["/AphiaRecordsByVernacular/goatfish?like=true"] = { data: [
+        record(1, "Mullus auratus"), record(2, "Mulloidichthys martinicus"), record(3, "Mullus surmuletus"),
+        record(4, "Parupeneus barberinus"), record(5, "Upeneus parvus"), record(6, "Mullus barbatus"),
+        record(7, "Mullidae", { rank: "Family" })] };
+      await RV.views.single.enter({ payload: payload(1) });
+      const root = document.getElementById("rv-single");
+      openForm(root, { common_name: "spotted goatfish", life_stage: "juvenile" });
+      checkForm(root); await settle();
+      const one = { text: textOf(root), choices: choices(root), ready: !addButton(root).disabled };
+      fill(root, { common_name: "goatfish" });
+      const cleared = choices(root).length;
+      checkForm(root); await settle();
+      const many = choices(root).length;
+      fill(root, { common_name: "spotted goatfish" });
+      checkForm(root); await settle();
+      radios(root)[0].on.change({});
+      addButton(root).on.click({}); await settle();
+      return { one, cleared, many, asked: asked(), sent: sent() };
     """,
         tmp_path,
     )
-    assert out["model"] == {
-        "link": True,
-        "offers": "Spotted Goatfish (waiting for approval)Pseudupeneus maculatus · juvenile",
-    }
-    assert out["drawnBox"] == {"link": False, "offers": ""}
+    assert "Did you mean?" in out["one"]["text"]
+    assert out["one"]["choices"] == ["Pseudupeneus maculatus (Bloch, 1793) · Mullidae WoRMS ↗"]
+    assert out["one"]["ready"] is False  # confirmed by a click, even for one candidate
+    assert out["cleared"] == 0 and out["many"] == 5
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        "WoRMS /AphiaRecordsByVernacular/spotted%20goatfish?like=false",
+        "WoRMS /AphiaRecordsByVernacular/goatfish?like=false",
+        "WoRMS /AphiaRecordsByVernacular/goatfish?like=true",
+        "WoRMS /AphiaRecordsByVernacular/spotted%20goatfish?like=false",
+        "/api/review/species-suggestions",
+        "/api/review/species",
+        "/api/review/verdicts",
+    ]
+    suggestion, verdict = out["sent"]
+    assert suggestion["body"] == {**ADDITION, "common_name": "spotted goatfish"}
+    assert verdict["body"] == {**BOX_101, **ADDED_ANSWER, "not_sure": False}
 
 
 @needs_node
-def test_picking_a_pending_entry_answers_with_its_suggestion(tmp_path):
+def test_a_synonym_of_a_listed_species_offers_use_it(tmp_path):
+    """Review Focus 2: WoRMS lists Scarus croicensis as Scarus iseri, which is on the list. The
+    form says so, offers the listed species, and adds nothing."""
+    out = run_node(
+        _page("review-frame.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      RV.catalogue = [...listed, { key: "Scarus iseri|", name: "Scarus iseri", life_stage: null,
+        common: "Striped Parrotfish", aphia_id: 276002, celebrities: [] }];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      worms[matchNames("Scarus croicensis")] = { data: [[record(126000, "Scarus croicensis", {
+        status: "unaccepted", authority: "Bloch, 1790", valid_AphiaID: 276002, valid_name: "Scarus iseri",
+        valid_authority: "(Bloch, 1789)", family: "Scaridae" })]] };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const root = document.getElementById("rv-frame");
+      openForm(root, { scientific_name: "Scarus croicensis" });
+      checkForm(root); await settle();
+      const text = textOf(root);
+      const ready = !addButton(root).disabled;
+      const useButtons = uses(root);
+      button(root, "Use Striped Parrotfish").on.click({}); await settle();
+      return { text, ready, useButtons, sent: sent() };
+    """,
+        tmp_path,
+    )
+    assert "WoRMS lists this as Scarus iseri" in out["text"]
+    assert "✓ Scarus iseri (Bloch, 1789) · Scaridae WoRMS ↗" in out["text"]
+    assert "already on the list as Striped Parrotfish" in out["text"]
+    assert out["ready"] is False and out["useButtons"] == ["Use Striped Parrotfish"]
+    assert out["sent"] == [  # the listed species answers the box; nothing is added
+        {
+            "url": "/api/review/verdicts",
+            "body": {
+                **BOX_101,
+                "label": "Scarus iseri",
+                "life_stage": None,
+                "label_source": "search",
+                "not_sure": False,
+            },
+        }
+    ]
+
+
+@needs_node
+def test_stage_none_for_a_staged_only_species_offers_its_stages(tmp_path):
+    """Dan's option a: a plain entry for a species listed only by phase is refused, so the form
+    offers its listed phases; a new stage of it may still be added."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      const parrot = (stage) => ({ key: `Scarus iseri|${stage}`, name: "Scarus iseri", life_stage: stage,
+        common: "Striped Parrotfish", aphia_id: 276002, celebrities: [] });
+      RV.catalogue = [...listed, parrot("initial phase"), parrot("terminal phase")];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      worms[matchNames("Scarus iseri")] = { data: [[record(276002, "Scarus iseri",
+        { authority: "(Bloch, 1789)", valid_authority: "(Bloch, 1789)", family: "Scaridae" })]] };
+      await RV.views.single.enter({ payload: payload(1) });
+      const root = document.getElementById("rv-single");
+      openForm(root, { scientific_name: "Scarus iseri" });
+      checkForm(root); await settle();
+      const none = { text: textOf(root), offered: uses(root), ready: !addButton(root).disabled };
+      fill(root, { life_stage: "juvenile" });     // a new stage of a species listed by phase
+      const juvenile = { text: textOf(root), offered: uses(root), ready: !addButton(root).disabled };
+      fill(root, { life_stage: "" });
+      button(root, "Use Striped Parrotfish (terminal phase)").on.click({}); await settle();
+      return { none, juvenile, sent: sent() };
+    """,
+        tmp_path,
+    )
+    assert "pick a stage: initial phase, terminal phase, or add a new one" in out["none"]["text"]
+    assert out["none"]["offered"] == [
+        "Use Striped Parrotfish (initial phase)",
+        "Use Striped Parrotfish (terminal phase)",
+    ]
+    assert out["none"]["ready"] is False
+    assert "pick a stage" not in out["juvenile"]["text"]
+    assert out["juvenile"]["offered"] == [] and out["juvenile"]["ready"] is True
+    assert [c["body"] for c in out["sent"]] == [
+        {
+            **BOX_101,
+            "label": "Scarus iseri",
+            "life_stage": "terminal phase",
+            "label_source": "search",
+            "not_sure": False,
+        }
+    ]
+
+
+@needs_node
+def test_worms_down_says_so_and_adds_nothing(tmp_path):
+    """Review Focus 3: WoRMS can't be reached, answers 503, or takes longer than the page waits.
+    Each says so; Check works again (it asked once while busy); nothing is added."""
+    out = run_node(
+        _page("review-frame.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      RV.worms.TIMEOUT_MS = 50;
+      await RV.views.frame.enter({{ savedFrameId: 7 }});
+      const root = document.getElementById("rv-frame");
+      openForm(root, {{ scientific_name: "Pseudupeneus maculatus" }});
+      const seen = [];
+      for (const answer of ["reject", {{ status: 503, data: {{ error: "unavailable" }} }}, "hang"]) {{
+        worms[matchNames("Pseudupeneus maculatus")] = answer;
+        checkForm(root);
+        const busy = checkButton(root).disabled;
+        checkForm(root);                                  // pressed again while asking
+        await new Promise((r) => setTimeout(r, 120)); await settle();
+        seen.push({{ busy, down: textOf(root).includes({json.dumps(DOWN)}),
+          check: !checkButton(root).disabled, add: !addButton(root).disabled }});
+      }}
+      return {{ seen, asked: asked(), sent: sent() }};
+    """,
+        tmp_path,
+    )
+    assert out["seen"] == [{"busy": True, "down": True, "check": True, "add": False}] * 3
+    assert out["asked"] == ["/api/review/species-suggestions/mine"] + [MATCH_GOATFISH] * 3
+    assert out["sent"] == []
+
+
+@needs_node
+def test_a_genus_is_refused(tmp_path):
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      worms[matchNames("Pseudupeneus")] = { data: [[record(126993, "Pseudupeneus",
+        { rank: "Genus", authority: "Bleeker, 1862", valid_authority: "Bleeker, 1862" })]] };
+      await RV.views.single.enter({ payload: payload(1) });
+      const root = document.getElementById("rv-single");
+      openForm(root, { scientific_name: "Pseudupeneus" });
+      checkForm(root); await settle();
+      return { text: textOf(root), ready: !addButton(root).disabled, choices: choices(root),
+        sent: sent() };
+    """,
+        tmp_path,
+    )
+    assert "pick a species, not a genus" in out["text"]
+    assert out["ready"] is False and out["choices"] == [] and out["sent"] == []
+
+
+@needs_node
+def test_a_name_taxamatch_misses_falls_back_to_names_that_start_the_same(tmp_path):
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      worms["/AphiaRecordsByName/Pseudupeneus%20mac?like=true&marine_only=false"] = { data: [
+        record(126994, "Pseudupeneus maculatus", { match_type: undefined })] };
+      await RV.views.single.enter({ payload: payload(1) });
+      const root = document.getElementById("rv-single");
+      openForm(root, { scientific_name: "Pseudupeneus mac" });
+      checkForm(root); await settle();
+      const started = { text: textOf(root), choices: choices(root) };
+      fill(root, { scientific_name: "Nofishus atall" });
+      checkForm(root); await settle();
+      return { started, unknown: textOf(root), ready: !addButton(root).disabled, asked: asked() };
+    """,
+        tmp_path,
+    )
+    assert "Did you mean?" in out["started"]["text"]
+    assert out["started"]["choices"] == ["Pseudupeneus maculatus (Bloch, 1793) · Mullidae WoRMS ↗"]
+    assert UNKNOWN in out["unknown"] and out["ready"] is False
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        "WoRMS /AphiaRecordsByMatchNames?scientificnames[]=Pseudupeneus%20mac&marine_only=false",
+        "WoRMS /AphiaRecordsByName/Pseudupeneus%20mac?like=true&marine_only=false",
+        "WoRMS /AphiaRecordsByMatchNames?scientificnames[]=Nofishus%20atall&marine_only=false",
+        "WoRMS /AphiaRecordsByName/Nofishus%20atall?like=true&marine_only=false",
+    ]
+
+
+@needs_node
+def test_the_form_mirrors_the_list_rules(tmp_path):
+    """The server is the authority; the form only mirrors its rules to offer "Use …" instead of
+    a refusal: the same choice by name or AphiaID, and Dan's option a on stages. A species
+    still waiting for approval (an ai #49 leftover) is not on the list."""
+    out = run_node(
+        [_read("review-core.js")],
+        """
+      const e = (name, stage, common, aphia) => ({ key: `${name}|${stage || ""}`, name,
+        life_stage: stage, common, aphia_id: aphia });
+      RV.catalogue = [e("Abudefduf saxatilis", null, "Sergeant Major", 1),
+        e("Scarus iseri", "initial phase", "Striped Parrotfish (initial phase)", 2),
+        e("Scarus iseri", "terminal phase", "Striped Parrotfish (terminal phase)", 2),
+        e("Charybdis hellerii", null, "Spiny Hands Crab", 3),
+        { key: "suggestion:4", name: "Pseudupeneus maculatus", life_stage: null, pending: true,
+          suggestion_id: 4, common: "Spotted Goatfish (waiting for approval)" }];
+      const judge = (id, name, stage) => {
+        const c = RV.listConflict({ aphia_id: id, name }, stage);
+        return c && { message: c.message, uses: c.uses.map((u) => u.key) };
+      };
+      return [judge(1, "Abudefduf saxatilis", null), judge(1, "Abudefduf saxatilis", "adult"),
+        judge(2, "Scarus iseri", null), judge(2, "Scarus iseri", "juvenile"),
+        judge(2, "Scarus iseri", "terminal phase"),
+        judge(3, "Charybdis (Charybdis) hellerii", null),
+        judge(4, "Pseudupeneus maculatus", null), judge(5, "Lutjanus apodus", "juvenile")];
+    """,
+        tmp_path,
+    )
+    major = {"message": "already on the list as Sergeant Major", "uses": ["Abudefduf saxatilis|"]}
+    assert out == [
+        major,
+        major,  # a stage for a species listed without one
+        {
+            "message": "pick a stage: initial phase, terminal phase, or add a new one",
+            "uses": ["Scarus iseri|initial phase", "Scarus iseri|terminal phase"],
+        },
+        None,  # a new stage of a species listed by phase
+        {
+            "message": "already on the list as Striped Parrotfish (terminal phase)",
+            "uses": ["Scarus iseri|terminal phase"],
+        },
+        {"message": "already on the list as Spiny Hands Crab", "uses": ["Charybdis hellerii|"]},
+        None,
+        None,
+    ]
+
+
+@needs_node
+def test_the_add_link_is_on_blind_items_and_drawn_boxes_but_hidden_in_booth_mode(tmp_path):
+    """Nothing waits for an admin any more, so a blind second opinion and a box a volunteer drew
+    may add a species too; the pickers there still never offer an ai #49 leftover waiting for
+    approval. A drawn box is saved with the new species. Booth mode hides the whole block."""
+    hidden = [
+        sel
+        for sel, body in re.findall(r"([^{}]*)\{([^}]*)\}", _read("tour.css"))
+        if "display: none" in body
+    ]
+    assert any(re.search(r'\[data-booth="1"\] \.rv-add\b', sel) for sel in hidden)
+    assert "RV.addSpeciesBlock(" in _function_body(_read("review-frame.js"), "addedPanel")
+    out = run_node(
+        _page("review-single.js", "review-frame.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      RV.catalogue = [...listed, ENTRY];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      await RV.views.single.enter({{ payload: payload(2) }});     // a blind second opinion
+      const single = document.getElementById("rv-single");
+      const blind = {{ link: Boolean(addLink(single)), offers: offered(single, "spotted") }};
+      const frameFetch = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {{
+        const r = await frameFetch(url, opts);
+        if (!url.endsWith("/open")) return r;
+        const data = await r.json();
+        data.added = [{{ id: 5, bbox: [400, 300, 480, 360], mine: true, by: "you", outcome: "species",
+          label: "Haemulon chrysargyreum", common: "Smallmouth grunt", life_stage: null,
+          not_sure: false, zoom_url: "/a.jpg" }}];
+        return {{ status: 200, ok: true, json: async () => data }};
+      }};
+      await RV.views.frame.enter({{ savedFrameId: 7 }});
+      const root = document.getElementById("rv-frame");
+      find(root, (n) => n.tag === "li" && textOf(n).startsWith("+ drawn by you")).on.click({{}});
+      const drawn = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
+      worms[matchNames("Pseudupeneus maculatus")] = {{ data: [[GOATFISH]] }};
+      openForm(root, {GOATFISH_FORM});
+      checkForm(root); await settle();
+      addButton(root).on.click({{}}); await settle();
+      return {{ blind, drawn, sent: sent() }};
+    """,
+        tmp_path,
+    )
+    assert out["blind"] == {"link": True, "offers": ""}
+    assert out["drawn"] == {"link": True, "offers": ""}
+    assert out["sent"] == [
+        {"url": "/api/review/species-suggestions", "body": ADDITION},
+        {
+            "url": "/api/review/frames/7/boxes/5",
+            "body": {
+                "bbox": [400, 300, 480, 360],
+                "outcome": "species",
+                "label": "Pseudupeneus maculatus",
+                "life_stage": "juvenile",
+                "not_sure": False,
+            },
+        },
+    ]
+
+
+def test_the_worms_check_loads_after_core_and_busts_the_cache():
+    page = (STATIC.parent / "templates" / "review.html").read_text()
+    core = page.index("/static/review-core.js?v=")
+    assert core < page.index("/static/review-worms.js?v=") < page.index("/static/review-single.js")
+    assert 'BASE_DIR / "static" / "review-worms.js"' in (STATIC.parent / "main.py").read_text()
+
+
+@needs_node
+def test_an_entry_with_a_suggestion_answers_with_it(tmp_path):
+    """The answer that adds a species names the addition, as one with an ai #49 leftover still
+    waiting for approval does; a species picked from the list is an ordinary answer."""
     out = run_node(
         [_read("review-core.js")],
         """
       return [RV.answerExtra({ pending: true, suggestion_id: 4, name: "x", life_stage: null }),
+        RV.answerExtra({ key: "Pseudupeneus maculatus|juvenile", name: "Pseudupeneus maculatus",
+          life_stage: "juvenile", suggestion_id: 9 }),
         RV.answerExtra({ key: "Haemulon plumierii|", name: "Haemulon plumierii", life_stage: null },
           "hint")];
     """,
@@ -1279,6 +1718,7 @@ def test_picking_a_pending_entry_answers_with_its_suggestion(tmp_path):
     )
     assert out == [
         {"label": "x", "life_stage": None, "label_source": "suggested", "species_suggestion_id": 4},
+        ADDED_ANSWER,
         {"label": "Haemulon plumierii", "life_stage": None, "label_source": "hint"},
     ]
     assert "RV.answerExtra(entry, source)" in _function_body(
@@ -1290,41 +1730,110 @@ def test_picking_a_pending_entry_answers_with_its_suggestion(tmp_path):
 
 
 @needs_node
-def test_the_form_shows_the_server_refusal(tmp_path):
+def test_a_refusal_after_the_check_is_shown_with_use_it(tmp_path):
+    """Review Focus 1, on the page: the list was read before another reviewer added the same
+    species, so the check passes and the server refuses. The form reloads the list and offers
+    the species now listed; nothing is answered until it's used. Without a name nothing is
+    asked."""
     out = run_node(
-        [_read("review-core.js"), _read("review-frame.js")],
+        _page("review-frame.js"),
         FRAME_STUB
         + SUGGEST_STUB
-        + """
-      globalThis.suggestReply = { status: 409, data: { error: "already on the list as Bluefish" } };
-      await RV.views.frame.enter({ savedFrameId: 7 });
+        + f"""
+      globalThis.suggestReply = {{ status: 409, data: {{ error: "already on the list as Spotted Goatfish" }} }};
+      worms[matchNames("Pseudupeneus maculatus")] = {{ data: [[GOATFISH]] }};
+      await RV.views.frame.enter({{ savedFrameId: 7 }});
       const root = document.getElementById("rv-frame");
-      openForm(root, { common_name: "   " });
-      submitForm(root); await settle();                    // no common name: nothing is sent
+      openForm(root, {{ common_name: "  ", scientific_name: " " }});
+      checkForm(root); await settle();                     // no name: WoRMS isn't asked
       const alert = attr(root, "role", "alert");
-      const empty = { said: alert.textContent, shown: !alert.hidden, sent: sent().length };
-      attr(root, "name", "common_name").value = "Bluefish";
-      submitForm(root); await settle();
-      const button = find(root, (n) => n.tag === "button" && textOf(n) === "Add and answer this box");
-      return { empty, said: alert.textContent, shown: !alert.hidden, sent: sent(),
-        ready: !button.disabled };
+      const empty = {{ said: alert.textContent, shown: !alert.hidden, asked: asked().length }};
+      fill(root, {GOATFISH_FORM});
+      checkForm(root); await settle();
+      addButton(root).on.click({{}}); await settle();
+      const refused = {{ text: textOf(root), offered: uses(root), check: !checkButton(root).disabled,
+        add: !addButton(root).disabled }};
+      button(root, "Use Spotted Goatfish").on.click({{}}); await settle();
+      return {{ empty, refused, asked: asked(), sent: sent() }};
     """,
         tmp_path,
     )
-    assert out["empty"] == {"said": "write the fish's common name", "shown": True, "sent": 0}
-    assert out["said"] == "already on the list as Bluefish" and out["shown"]
-    assert [c["url"] for c in out["sent"]] == ["/api/review/species-suggestions"]  # no verdict
-    assert out["ready"]  # the button works again
-
-
-def test_the_add_species_form_is_busy_guarded():
-    _assert_busy_guarded(_function_body(_read("review-core.js"), "addSpecies"), "addSpecies")
+    assert out["empty"] == {
+        "said": "write the fish's common name or its scientific name",
+        "shown": True,
+        "asked": 1,  # only "Species you added"
+    }
+    assert "already on the list as Spotted Goatfish" in out["refused"]["text"]
+    assert out["refused"]["offered"] == ["Use Spotted Goatfish"]
+    assert out["refused"]["check"] is True and out["refused"]["add"] is False
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        MATCH_GOATFISH,
+        "/api/review/species-suggestions",
+        "/api/review/species",  # reloaded after the refusal
+        "/api/review/verdicts",
+    ]
+    suggestion, verdict = out["sent"]
+    assert suggestion["body"] == ADDITION
+    assert verdict["body"] == {
+        **BOX_101,
+        "label": "Pseudupeneus maculatus",
+        "life_stage": "juvenile",
+        "label_source": "search",
+        "not_sure": False,
+    }
 
 
 @needs_node
-def test_your_suggestions_say_what_became_of_each(tmp_path):
+def test_a_refusal_the_form_cannot_foresee_leaves_add_usable(tmp_path):
+    """The server also refuses a common name another choice already has at that stage, which
+    the form doesn't mirror: it shows the refusal with "Use …" for that choice, and Add stays
+    usable, so the reviewer can change the common name and add the species after all."""
     out = run_node(
-        [_read("review-core.js")],
+        _page("review-frame.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      const BLUEFISH = { key: "Pomatomus saltatrix|", name: "Pomatomus saltatrix", life_stage: null,
+        common: "Bluefish", aphia_id: 151, celebrities: [] };
+      RV.catalogue = [...listed, BLUEFISH];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      globalThis.species = RV.catalogue;
+      globalThis.suggestReply = { status: 409, data: { error: "already on the list as Bluefish" } };
+      worms[matchNames("Pseudupeneus maculatus")] = { data: [[GOATFISH]] };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const root = document.getElementById("rv-frame");
+      openForm(root, { common_name: "Bluefish", scientific_name: "Pseudupeneus maculatus",
+        life_stage: "juvenile" });
+      checkForm(root); await settle();
+      addButton(root).on.click({}); await settle();
+      const refused = { text: textOf(root), offered: uses(root), add: !addButton(root).disabled };
+      globalThis.species = null;
+      globalThis.suggestReply = { status: 200, data: { key: ADDED.key, name: ADDED.name,
+        life_stage: ADDED.life_stage, common: ADDED.common, suggestion_id: 9 } };
+      fill(root, { common_name: "Spotted Goatfish" });
+      addButton(root).on.click({}); await settle();
+      return { refused, sent: sent() };
+    """,
+        tmp_path,
+    )
+    assert "already on the list as Bluefish" in out["refused"]["text"]
+    assert out["refused"]["offered"] == ["Use Bluefish"] and out["refused"]["add"] is True
+    first, second, verdict = out["sent"]
+    assert first["body"] == {**ADDITION, "common_name": "Bluefish"}
+    assert second["body"] == ADDITION
+    assert verdict["body"] == {**BOX_101, **ADDED_ANSWER, "not_sure": False}
+
+
+@pytest.mark.parametrize("name", ["checkName", "addSpecies"])
+def test_the_add_species_form_is_busy_guarded(name):
+    _assert_busy_guarded(_function_body(_read("review-core.js"), name), name)
+
+
+@needs_node
+def test_species_you_added_say_what_became_of_each(tmp_path):
+    out = run_node(
+        _page(),
         FRAME_STUB
         + SUGGEST_STUB
         + """
@@ -1332,70 +1841,38 @@ def test_your_suggestions_say_what_became_of_each(tmp_path):
         common: "Bridled Goby", life_stage: null }];
       RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
       const none = { scientific_name: null, life_stage: null, decision_note: null, rejected_to_name: null,
-        rejected_to_stage: null, approved_common: null };
+        rejected_to_stage: null, approved_common: null, aphia_id: null };
       globalThis.mine = [
-        { ...none, id: 4, common_name: "Spotted Goatfish", life_stage: "juvenile",
-          status_text: "waiting for approval" },
-        { ...none, id: 3, common_name: "spotted goatfish", status_text: "added",
-          approved_common: "Spotted Goatfish" },
-        { ...none, id: 2, common_name: "Banded goby", status_text: "not added",
+        { ...none, id: 5, common_name: "Spotted Goatfish", life_stage: "juvenile", status_text: "added",
+          approved_common: "Spotted Goatfish", aphia_id: 126994 },
+        { ...none, id: 4, common_name: "Banded goby", status_text: "removed",
           rejected_to_name: "Coryphopterus glaucofraenum", decision_note: "It's a bridled goby." },
-        { ...none, id: 1, common_name: "Blur", status_text: "not added" },
+        { ...none, id: 3, common_name: "Blur", status_text: "removed" },
+        // ai #49 leftovers: one an admin approved under another name, one still waiting.
+        { ...none, id: 2, common_name: "spotted goatfish", status_text: "added",
+          approved_common: "Spotted Goatfish" },
+        { ...none, id: 1, common_name: "Yellow goatfish", status_text: "waiting for approval" },
       ];
       const holder = document.createElement("div");
-      RV.suggestSpecies(holder, () => {});
+      RV.suggestSpecies(holder, () => {}, () => {});
       await settle();
-      return find(holder, (n) => n.tag === "ul").children.map(textOf);
+      const mine = find(holder, (n) => n.className === "rv-suggest-mine");
+      return { heading: textOf(mine.children[0]), items: find(mine, (n) => n.tag === "ul").children.map(textOf) };
     """,
         tmp_path,
     )
-    assert out == [
-        "Spotted Goatfish (juvenile) · waiting for approval",
+    assert out["heading"] == "Species you added"
+    assert out["items"] == [
+        "Spotted Goatfish (juvenile) · added",
+        "Banded goby · removed; its answers now say Bridled GobyIt's a bridled goby.",
+        "Blur · removed; its answers now say can't identify",
         "spotted goatfish · added as Spotted Goatfish",
-        "Banded goby · not added; your answers now say Bridled GobyIt's a bridled goby.",
-        "Blur · not added; your answers now say can't identify",
+        "Yellow goatfish · waiting for approval",
     ]
 
 
-@needs_node
-def test_adding_a_species_answers_the_single_box_but_never_a_second_opinion(tmp_path):
-    out = run_node(
-        [_read("review-core.js"), _read("review-single.js")],
-        FRAME_STUB
-        + SUGGEST_STUB
-        + f"""
-      RV.catalogue = [...listed, ENTRY];
-      const root = document.getElementById("rv-single");
-      await RV.views.single.enter({{ payload: payload(2) }});     // a blind second opinion
-      const blind = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
-      await RV.views.single.enter({{ payload: payload(1) }});
-      const first = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
-      openForm(root, {FILLED});
-      submitForm(root); await settle();
-      return {{ blind, first, sent: sent() }};
-    """,
-        tmp_path,
-    )
-    assert out["blind"] == {"link": False, "offers": ""}
-    assert (
-        out["first"]["link"] and "Spotted Goatfish (waiting for approval)" in out["first"]["offers"]
-    )
-    suggestion, verdict = out["sent"]
-    assert suggestion == {"url": "/api/review/species-suggestions", "body": SUGGESTION}
-    assert verdict == {
-        "url": "/api/review/verdicts",
-        "body": {
-            "event_id": 101,
-            "review_item_id": 11,
-            "outcome": "species",
-            **SUGGESTED_ANSWER,
-            "not_sure": False,
-        },
-    }
-
-
-# The volunteer moved on while the suggestion was being saved: the frame selects box 2,
-# or the single view shows the next box. The new species answers neither.
+# The volunteer moved on while the species was being added: the frame selects box 2, or the
+# single view shows the next box. The new species answers neither.
 MOVE_ON = {
     "single": (
         "await RV.views.single.enter({ payload: payload(1) });",
@@ -1413,16 +1890,18 @@ MOVE_ON = {
 def test_a_box_left_while_the_species_is_being_added_is_not_answered_with_it(view, tmp_path):
     enter, move_on = MOVE_ON[view]
     out = run_node(
-        [_read("review-core.js"), _read(f"review-{view}.js")],
+        _page(f"review-{view}.js"),
         FRAME_STUB
         + SUGGEST_STUB
         + f"""
       let reply;
       globalThis.gate = new Promise((r) => {{ reply = r; }});
+      worms[matchNames("Pseudupeneus maculatus")] = {{ data: [[GOATFISH]] }};
       {enter}
       const root = document.getElementById("rv-{view}");
-      openForm(root, {FILLED});
-      submitForm(root); await settle();
+      openForm(root, {GOATFISH_FORM});
+      checkForm(root); await settle();
+      addButton(root).on.click({{}}); await settle();
       {move_on}
       reply(); await settle();
       return {{ sent: sent().map((c) => c.url), toast: document.getElementById("rv-toast").textContent }};
@@ -1556,37 +2035,34 @@ def test_the_form_offers_the_servers_stages():
     assert None in STAGES  # the form's "none"
 
 
-NEW_SPECIES_HINT = "A new species can't be marked on the rest until it's approved."
-
-
 @needs_node
-def test_m_marks_nothing_right_after_a_new_species(tmp_path):
-    """Task 7 review, Important 1: box 1 answered with a listed species, then a box with a
-    new one. M must not offer the earlier species, and the panel says why; answering a
-    listed species again brings M back."""
+def test_a_species_waiting_for_approval_still_marks_nothing(tmp_path):
+    """An ai #49 leftover waiting for an admin is not on the list, so "mark the rest" can't use
+    it -- and must not offer the species given before it either (Task 7 review, Important 1).
+    An addition, by contrast, marks the rest like any species
+    (test_an_exact_worms_match_adds_and_answers_the_box)."""
     out = run_node(
         [_read("review-core.js"), _read("review-frame.js")],
         FRAME_STUB
         + SUGGEST_STUB
-        + f"""
-      const shown = () => textOf(document.getElementById("rv-frame"));
-      await RV.views.frame.enter({{ savedFrameId: 7 }});
+        + """
+      RV.catalogue = [...listed, ENTRY];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      await RV.views.frame.enter({ savedFrameId: 7 });
       key("a"); await settle();                     // a listed species: M would mark with it
       const root = document.getElementById("rv-frame");
-      openForm(root, {FILLED});
-      submitForm(root); await settle();             // then a new one
-      const afterNew = {{ m: key("m"), text: shown() }};
-      key("a"); await settle();                     // a listed species again
-      return {{ afterNew, again: key("m"), againText: shown(), marks: posted().filter((c) =>
-        c.url.endsWith("/mark-rest")).length }};
+      offered(root, "spotted");
+      find(root, (n) => n.tag === "li" && textOf(n).startsWith("Spotted Goatfish")).on.mousedown(
+        { preventDefault() {} });
+      await settle();
+      const verdicts = calls.filter((c) => c.url === "/api/review/verdicts").map((c) => c.body);
+      return { verdict: verdicts[1], m: key("m"), text: textOf(root) };
     """,
         tmp_path,
     )
-    assert out["afterNew"]["m"] is False
-    assert NEW_SPECIES_HINT in out["afterNew"]["text"]
-    assert HINT not in out["afterNew"]["text"] and "Mark the" not in out["afterNew"]["text"]
-    assert out["again"] is True and NEW_SPECIES_HINT not in out["againText"]
-    assert out["marks"] == 0  # M only asked
+    assert out["verdict"]["label_source"] == "suggested"
+    assert out["verdict"]["species_suggestion_id"] == 4
+    assert out["m"] is False and "Mark the" not in out["text"]
 
 
 # ---- 2026-11-21: an admin decides new species from Browse ---------------------------

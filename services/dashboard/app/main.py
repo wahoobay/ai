@@ -691,6 +691,7 @@ def build_app() -> FastAPI:
             BASE_DIR / "templates" / "index.html",
             BASE_DIR / "static" / "review.css",
             BASE_DIR / "static" / "review-core.js",
+            BASE_DIR / "static" / "review-worms.js",
             BASE_DIR / "static" / "review-single.js",
             BASE_DIR / "static" / "review-frame.js",
             BASE_DIR / "static" / "review-browse.js",

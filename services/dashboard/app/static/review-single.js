@@ -230,24 +230,23 @@ RV.views.single = (() => {
     const pickerSlot = RV.el("div", { class: "rv-picker" });
     side.append(RV.el("div", { class: "rv-label", text: c.model ? "Or pick the species" : "Pick the species" }),
       pickerSlot);
-    // Spec 2026-11-21: a blind second opinion can't use or add a new species, so only a
-    // first-pass box offers species waiting for approval and "Add a species".
-    const suggesting = c.item.pass !== 2;
+    // Any box may add a species, a blind second opinion included (spec
+    // 2026-11-21-species-worms-check); only a first-pass box offers the ai #49 suggestions
+    // still waiting for approval, which a second opinion can't use.
     picker = new RV.SpeciesPicker(pickerSlot, (entry) => {
       const source = hintName && entry.name === hintName ? "hint" : "search";
       hintName = null;
       pickSpecies(entry, source);
-    }, { pending: suggesting });
-    if (suggesting) {
-      side.append(RV.addSpeciesBlock((entry) => {
-        // Only the box the form was opened on: not one shown since (S, a reopen).
-        if (current !== c) {
-          RV.toast("The new species was added. Pick it from the search to answer a box with it.");
-          return undefined;
-        }
-        return submit("species", RV.answerExtra(entry));
-      }));
-    }
+    }, { pending: c.item.pass !== 2 });
+    // Only the box the form was opened on: not one shown since (S, a reopen).
+    const stillHere = () => current === c;
+    side.append(RV.addSpeciesBlock((entry) => {
+      if (!stillHere()) {
+        RV.toast("The new species was added. Pick it from the search to answer a box with it.");
+        return undefined;
+      }
+      return submit("species", RV.answerExtra(entry));
+    }, (entry) => { if (stillHere()) pickSpecies(entry, "search"); }));
     const chips = hintChips(c);
     if (chips) side.append(chips);
     side.append(RV.el("div", { class: "rv-row" },
@@ -293,9 +292,9 @@ RV.views.single = (() => {
       if (editor && editor.moved && outcome !== "no_animal") body.bbox = editor.box;
       if (notes.trim()) body.notes = notes.trim();
       const r = await RV.post("/api/review/verdicts", body);
-      // Review Focus 5: the species list may have changed since the page loaded
-      // (RV.STALE_SPECIES) -- including a new species an admin decided meanwhile,
-      // which the server refuses with a 409 (2026-11-21) though the box is unchanged.
+      // The species list may have changed since the page loaded (RV.STALE_SPECIES) -- a
+      // species a reviewer added that an admin has removed since, say -- which the server
+      // refuses with a 409 though the box is unchanged.
       const stale = RV.STALE_SPECIES.has(r.data.error);
       // A box that changed out from under the volunteer -- someone else
       // just answered it (409), this claim was never really theirs (403

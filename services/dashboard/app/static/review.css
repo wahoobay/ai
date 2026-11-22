@@ -102,7 +102,7 @@
   border-radius: 4px; }
 .rv-mark-confirm p { margin: 0 0 6px; }
 /* Adding a species (2026-11-21): a link under the picker opens a short form, with the
-   volunteer's own suggestions under it. [hidden] is restated: display: flex beats it. */
+   species the volunteer added under it. [hidden] is restated: display: flex beats it. */
 .rv-side button.rv-add-species { align-self: flex-start; padding: 2px 0; font-size: 13px; }
 .rv-add { display: flex; flex-direction: column; gap: 6px; }
 .rv-suggest { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid var(--rv-line);
@@ -114,6 +114,16 @@
 .rv-field { width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--rv-line);
   background: var(--bg); color: var(--ink); font: inherit; }
 .rv-suggest-error { color: var(--rv-bad-ink); font-size: 13px; }
+/* Checking with WoRMS (2026-11-21-species-worms-check): the record found or "Did you mean?"
+   choices, then what the list rules say, with "Use …" for a species already listed. */
+.rv-worms, .rv-worms-verdict { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.rv-worms:empty, .rv-worms-verdict:empty { display: none; }
+.rv-worms p, .rv-worms-verdict p { margin: 0; }
+.rv-worms a { color: var(--accent); white-space: nowrap; }
+.rv-worms-note { color: var(--muted); }
+.rv-worms-choices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rv-worms-choice label { display: inline-flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.rv-worms-verdict .rv-row > button { flex: 0 1 auto; }
 .rv-suggest-mine ul { list-style: none; margin: 4px 0 0; padding: 0; font-size: 13px; }
 .rv-suggest-mine li { padding: 4px 0; border-bottom: 1px solid var(--rv-line); }
 .rv-notes { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--rv-line); border-radius: 6px; }
