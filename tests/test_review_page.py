@@ -119,8 +119,15 @@ def test_frame_mutating_handlers_share_the_busy_guard(name):
 # plain re-reads (same class as review-single.js's loadNext() and
 # review-frame.js's reload(), neither of which is in the lists above), so
 # only this one gets the guard. Since 2026-11-21 the new-species panel's
-# approve, reject and per-box "Not this species" share it too.
-BROWSE_MUTATING_HANDLERS = ("adjudicate", "approveSuggestion", "rejectSuggestion", "detachBox")
+# approve, reject and per-box "Not this species" share it too, and so does
+# removing a species a reviewer added.
+BROWSE_MUTATING_HANDLERS = (
+    "adjudicate",
+    "approveSuggestion",
+    "rejectSuggestion",
+    "detachBox",
+    "removeAddition",
+)
 
 
 @pytest.mark.parametrize("name", BROWSE_MUTATING_HANDLERS)
@@ -1457,6 +1464,35 @@ def test_a_synonym_of_a_listed_species_offers_use_it(tmp_path):
 
 
 @needs_node
+def test_a_conflict_never_shows_the_word_null(tmp_path):
+    """Browser walk with the real WoRMS (Task 5): "already on the list as Striped Parrotfish"
+    had the word "null" under its Use button. DOM replaceChildren() turns a null argument (here,
+    no hint) into that text; this stub keeps it as a null child instead."""
+    out = run_node(
+        _page("review-frame.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      RV.catalogue = [...listed, { key: "Scarus iseri|", name: "Scarus iseri", life_stage: null,
+        common: "Striped Parrotfish", aphia_id: 276052, celebrities: [] }];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      worms[matchNames("Scarus croicensis")] = { data: [[record(308924, "Scarus croicensis", {
+        status: "unaccepted", authority: "Bloch, 1790", valid_AphiaID: 276052, valid_name: "Scarus iseri",
+        valid_authority: "(Bloch, 1789)", family: "Labridae" })]] };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const root = document.getElementById("rv-frame");
+      openForm(root, { scientific_name: "Scarus croicensis" });
+      checkForm(root); await settle();
+      const holes = all(root, (n) => kids(n).some((c) => c === null || c === undefined));
+      return { text: textOf(root), holes: holes.map((n) => n.className || n.tag) };
+    """,
+        tmp_path,
+    )
+    assert "already on the list as Striped Parrotfish" in out["text"]
+    assert out["holes"] == []
+
+
+@needs_node
 def test_stage_none_for_a_staged_only_species_offers_its_stages(tmp_path):
     """Dan's option a: a plain entry for a species listed only by phase is refused, so the form
     offers its listed phases; a new stage of it may still be added."""
@@ -2173,7 +2209,9 @@ def test_a_species_waiting_for_approval_still_marks_nothing(tmp_path):
 # Spec 2026-11-21, "Admin panel": every waiting suggestion with the boxes answered with it,
 # a per-box "Not this species", Approve under the admin's names and stage, Reject as the
 # listed species it really is or as can't-identify; decided ones fold away, and the Browse
-# button counts the waiting ones for admins.
+# button counts the waiting ones for admins. Since the WoRMS check (spec
+# 2026-11-21-species-worms-check) nothing new waits: the panel is shown only while an ai #49
+# leftover does, and "Species added by reviewers" (tests at the end) is the main one.
 
 ADMIN_STUB = (
     ELEMENT_STUB
@@ -2198,10 +2236,28 @@ ADMIN_STUB = (
   globalThis.waiting = [{ ...none, id: 3, common_name: "Spotted Goatfish",
     scientific_name: "Pseudupeneus maculatus", life_stage: "juvenile", note: "Two barbels under the chin",
     suggested_by_name: "Roy", answers: 2, created_at: "2026-11-21T15:00:00+00:00", status: "pending" }];
+  // Species reviewers added since the WoRMS check (spec 2026-11-21-species-worms-check): one on
+  // the list, one an admin removed. The server's decided list holds them too.
+  const worms = (id) => `https://www.marinespecies.org/aphia.php?p=taxdetails&id=${id}`;
+  const PARROTFISH = { ...none, id: 7, common_name: "Striped Parrotfish", scientific_name: "Scarus iseri",
+    life_stage: "initial phase", note: "Seen on the pier", suggested_by_name: "Roy", answers: 3,
+    created_at: "2026-11-21T15:00:00+00:00", status: "approved", aphia_id: 276052, family: "Labridae",
+    approved_name: "Scarus iseri", approved_common: "Striped Parrotfish", approved_stage: "initial phase",
+    decided_at: "2026-11-21T15:00:00+00:00", decision_note: "WoRMS AphiaID 276052", worms_url: worms(276052) };
+  const SNAPPER = { ...none, id: 5, common_name: "Yellowtail Snapper", scientific_name: "Ocyurus chrysurus",
+    life_stage: null, note: null, suggested_by_name: "Roy", answers: 0, created_at: "2026-11-20T15:00:00+00:00",
+    status: "rejected", aphia_id: 159801, family: "Lutjanidae", approved_name: "Ocyurus chrysurus",
+    approved_common: "Yellowtail Snapper", decided_at: "2026-11-20T18:00:00+00:00",
+    decision_note: "Not a snapper: a grunt.", rejected_to_name: "Haemulon chrysargyreum", worms_url: worms(159801) };
+  globalThis.additions = [PARROTFISH, SNAPPER];
+  globalThis.addedBoxes = [201, 202, 203];
+  RV.catalogue.push({ key: "Scarus iseri|initial phase", name: "Scarus iseri", life_stage: "initial phase",
+    common: "Striped Parrotfish", aphia_id: 276052 });
+  RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
   const DECIDED = [{ ...none, id: 2, common_name: "Banded goby", scientific_name: null, life_stage: null,
     note: null, suggested_by_name: "Roy", answers: 1, created_at: "2026-11-20T15:00:00+00:00",
     status: "rejected", decided_at: "2026-11-20T16:00:00+00:00", rejected_to_name: "Haemulon chrysargyreum",
-    decision_note: "A grunt, seen side on." }];
+    decision_note: "A grunt, seen side on." }, PARROTFISH, SNAPPER];
   globalThis.boxes = [101, 102];
   const PROGRESS = { kpis: { verified_boxes: 0, species_with_verified: 0, complete_frames: 0,
     session_verified: 0, open: { check: 0, identify: 0 } }, species: [], target: 100, stale: false };
@@ -2230,6 +2286,19 @@ ADMIN_STUB = (
       globalThis.boxes = globalThis.boxes.filter((id) => id !== body.event_id);
       return reply(200, { answers: 1 });
     }
+    if (url === "/api/review/species-additions") return reply(200, { additions: globalThis.additions });
+    const added = url.match(/^\/api\/review\/species-additions\/7\/boxes\?page=(\d+)$/);
+    if (added) {
+      const at = 24 * Number(added[1]);
+      return reply(200, { total: globalThis.addedBoxes.length, boxes: globalThis.addedBoxes.slice(at, at + 24)
+        .map((id) => ({ zoom_url: `/api/review/boxes/${id}/zoom.jpg`, by: id === 201 ? "Dan" : "Roy" })) });
+    }
+    if (url === "/api/review/species-additions/7/remove") {
+      globalThis.additions = globalThis.additions.map((s) => (s.id !== 7 ? s : { ...s, status: "rejected",
+        decided_at: "2026-11-21T16:00:00+00:00", decision_note: body.note, rejected_to_name: body.as_label,
+        rejected_to_stage: body.as_life_stage }));
+      return reply(200, { answers: 4, drawn: 1 });
+    }
     if (url === "/api/review/progress") return reply(200, PROGRESS);
     if (url.startsWith("/api/review/browse?")) return reply(200, { cells: [], has_more: false });
     if (url === "/api/review/disputes") return reply(200, { disputes: [] });
@@ -2246,7 +2315,18 @@ ADMIN_STUB = (
   const alertOf = () => attr(admin(), "role", "alert");
   const notThis = () => all(admin(), (n) => n.tag === "button" && textOf(n) === "Not this species");
   const card = () => textOf(find(admin(), (n) => n.className === "rv-sg"));
-  const heading = () => textOf(find(admin(), (n) => n.tag === "h4"));
+  // ai #49's "New species" panel: "" once nothing waits, as it is then left out.
+  const waitingPanel = () => find(admin(), (n) => (n.className || "").includes("rv-species-waiting"));
+  const heading = () => textOf(find(waitingPanel(), (n) => n.tag === "h4"));
+  // "Species added by reviewers": a card per addition on the list, removed ones folded away.
+  const additionsPanel = () => find(admin(), (n) => (n.className || "").includes("rv-additions"));
+  const liveCards = () => all(additionsPanel(), (n) => n.className === "rv-sg rv-addition");
+  const removedFold = () => find(additionsPanel(), (n) => n.tag === "details"
+    && (n.className || "").includes("rv-sg-history"));
+  const within = (root, text) => find(root, (n) => n.tag === "button" && textOf(n) === text);
+  const radioIn = (root, value) => find(root, (n) => n.attrs && n.attrs.type === "radio" && n.attrs.value === value);
+  const alertIn = (root) => attr(root, "role", "alert");
+  const figures = (root) => all(root, (n) => n.tag === "figure");
   const posted = () => calls.filter((c) => c.body);
   // Whether a request matching `wanted` went out after the first request for `url`.
   const askedAfter = (url, wanted) => {
@@ -2296,10 +2376,13 @@ def test_the_panel_lists_pending_species_and_approves(tmp_path):
         assert text in shown["card"], text
     assert shown["thumbs"] == 2
     assert shown["prefilled"] == ["Pseudupeneus maculatus", "Spotted Goatfish", "juvenile"]
-    assert shown["filter"] == ["Haemulon chrysargyreum"]  # no species waiting for approval
+    # no species waiting for approval
+    assert shown["filter"] == ["Haemulon chrysargyreum", "Scarus iseri"]
     assert shown["history"]["open"] is False
     for text in ("Banded goby", "not added", "Smallmouth grunt", "A grunt, seen side on."):
         assert text in shown["history"]["text"], text
+    for text in ("Striped Parrotfish", "Yellowtail Snapper"):  # additions have their own panel
+        assert text not in shown["history"]["text"], text
     assert out["posted"] == [
         {
             "url": "/api/review/species-suggestions/3/approve",
@@ -2311,7 +2394,7 @@ def test_the_panel_lists_pending_species_and_approves(tmp_path):
             },
         }
     ]
-    assert out["heading"] == "New species (0 waiting)"
+    assert out["heading"] == ""  # nothing waits: the panel is left out
     assert out["badge"] == ""
     assert out["reloaded"] == [True, True]  # the pickers' list and the grid's names
 
@@ -2405,7 +2488,7 @@ def test_reject_needs_a_choice(choice, body, tmp_path):
     assert out["picked"]["as"] is True and "Smallmouth grunt" in out["picked"]["card"]
     assert out["picked"]["cleared"] is True
     assert out["posted"] == [{"url": "/api/review/species-suggestions/3/reject", "body": body}]
-    assert out["heading"] == "New species (0 waiting)"
+    assert out["heading"] == ""  # nothing waits: the panel is left out
     assert out["reloaded"] == [True, True]
 
 
@@ -2445,7 +2528,7 @@ def test_a_suggestion_decided_by_another_admin_reloads_the_lists(action, tmp_pat
         tmp_path,
     )
     assert out == {
-        "heading": "New species (0 waiting)",
+        "heading": "",  # nothing waits: the panel is left out
         "card": False,
         "reloaded": True,
         "toast": "this suggestion was already decided",
@@ -2527,3 +2610,190 @@ def test_browse_never_shows_the_word_null(role, tmp_path):
     )
     assert "null" not in out
     assert out[-1] == ("section" if role == "admin" else "div")
+
+
+# ---- spec 2026-11-21-species-worms-check: "Species added by reviewers" -----------------------
+# The admin's main species panel: each species a reviewer added, with its names and stage, its
+# WoRMS record, who added it and when, how many answers use it and its boxes (24 a page, asked for
+# when the admin opens them); Remove "as" a listed species (never an ai #49 one still waiting) or
+# can't identify, with a note. Removed ones fold away.
+
+REMOVE_URL = "/api/review/species-additions/7/remove"
+
+
+@needs_node
+def test_the_panel_lists_additions_and_removes_one(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      globalThis.waiting = [];
+      globalThis.addedBoxes = Array.from({ length: 26 }, (_, i) => 201 + i);
+      await RV.views.browse.enter(); await settle();
+      const live = liveCards()[0];
+      const shown = { headings: all(admin(), (n) => n.tag === "h4").map(textOf), cards: liveCards().length,
+        card: textOf(live), link: find(live, (n) => n.tag === "a").attrs,
+        boxesAsked: calls.some((c) => c.url.includes("/species-additions/7/boxes")),
+        removed: { open: "open" in removedFold().attrs, text: textOf(removedFold()) } };
+      // Its boxes, 24 at a time, asked for once the admin opens them.
+      const used = find(live, (n) => n.tag === "details" && (n.className || "").includes("rv-sg-used"));
+      used.open = true; used.on.toggle({}); await settle();
+      const first = figures(live).length;
+      within(live, "Next →").on.click({}); await settle();
+      const second = { thumbs: figures(live).length, by: textOf(find(live, (n) => n.tag === "figcaption")) };
+      used.open = false; used.on.toggle({}); used.open = true; used.on.toggle({}); await settle();
+      // Remove it as a listed species.
+      const waitingOffered = offered(live, "spotted");
+      offered(live, "grunt");
+      find(live, (n) => n.tag === "li" && textOf(n).startsWith("Smallmouth grunt")).on.mousedown(
+        { preventDefault() {} });
+      const picked = { as: radioIn(live, "as").checked,
+        chosen: textOf(find(live, (n) => n.className === "rv-sg-chosen")) };
+      attr(live, "name", "note").value = " A grunt, seen side on ";
+      within(live, "Remove").on.click({}); within(live, "Remove").on.click({});   // a double click sends it once
+      await settle();
+      return { shown, first, second, waitingOffered, picked, posted: posted(),
+        pages: calls.filter((c) => c.url.includes("/species-additions/7/boxes")).map((c) => c.url.split("?")[1]),
+        toast: document.getElementById("rv-toast").textContent,
+        after: { cards: liveCards().length, panel: textOf(additionsPanel()), removed: textOf(removedFold()) },
+        reloaded: [askedAfter("REMOVE", catalogueReload),
+          askedAfter("REMOVE", (u) => u === "/api/review/species-additions"), askedAfter("REMOVE", gridReload)] };
+    """.replace("REMOVE", REMOVE_URL),
+        tmp_path,
+    )
+    shown = out["shown"]
+    # ai #49's panel is left out while nothing waits.
+    assert shown["headings"] == [
+        "Species added by reviewers",
+        "Disputes (0)",
+        "Agreement on spot-checks",
+        "Pool status",
+    ]
+    assert shown["cards"] == 1
+    for text in (
+        "Striped Parrotfish",
+        "Scarus iseri · initial phase",
+        "Labridae",
+        "AphiaID 276052",
+        "Added by Roy",
+        "3 answers",
+        "Seen on the pier",
+    ):
+        assert text in shown["card"], text
+    # Once, with the link: the row's automatic note ("WoRMS AphiaID 276052") is not the reviewer's.
+    assert shown["card"].count("AphiaID 276052") == 1
+    assert shown["link"] == {
+        "href": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=276052",
+        "target": "_blank",
+        "rel": "noopener noreferrer",
+    }
+    assert shown["boxesAsked"] is False  # not until the admin opens them
+    assert shown["removed"]["open"] is False
+    for text in (
+        "Removed (1)",
+        "Yellowtail Snapper",
+        "removed; its answers now say Smallmouth grunt",
+        "Not a snapper: a grunt.",
+    ):
+        assert text in shown["removed"]["text"], text
+    assert out["first"] == 24
+    assert out["second"] == {"thumbs": 2, "by": "Roy"}
+    assert out["pages"] == ["page=0", "page=1"]  # opened again: not asked again
+    assert out["waitingOffered"] == ""  # never a species still waiting for approval
+    assert out["picked"] == {"as": True, "chosen": "Smallmouth grunt"}
+    assert out["posted"] == [
+        {
+            "url": REMOVE_URL,
+            "body": {
+                "as_label": "Haemulon chrysargyreum",
+                "as_life_stage": None,
+                "unidentifiable": False,
+                "note": "A grunt, seen side on",
+            },
+        }
+    ]
+    assert out["toast"] == "Removed Striped Parrotfish; its answers now say Smallmouth grunt."
+    assert out["after"]["cards"] == 0
+    assert "Removed (2)" in out["after"]["removed"]
+    assert "Striped Parrotfish" in out["after"]["removed"]
+    assert out["reloaded"] == [True, True, True]  # the pickers' list, this panel and the grid
+
+
+@needs_node
+def test_remove_needs_a_choice(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      globalThis.waiting = [];
+      await RV.views.browse.enter(); await settle();
+      const live = liveCards()[0];
+      const labels = ["It's actually…", "Can't identify"].map((t) =>
+        Boolean(find(live, (n) => n.tag === "label" && textOf(n).startsWith(t))));
+      within(live, "Remove").on.click({}); await settle();      // neither chosen: nothing is sent
+      const neither = { said: alertIn(live).textContent, shown: !alertIn(live).hidden, sent: posted().length };
+      radioIn(live, "as").checked = true; radioIn(live, "as").on.change({});
+      const cleared = alertIn(live).hidden;                     // a choice clears the message
+      within(live, "Remove").on.click({}); await settle();      // "It's actually…" with no species
+      const noSpecies = { said: alertIn(live).textContent, sent: posted().length };
+      offered(live, "parrot");                                   // the species being removed itself
+      find(live, (n) => n.tag === "li" && textOf(n).startsWith("Striped Parrotfish")).on.mousedown(
+        { preventDefault() {} });
+      within(live, "Remove").on.click({}); await settle();
+      const itself = { said: alertIn(live).textContent, sent: posted().length };
+      radioIn(live, "as").checked = false; radioIn(live, "cant").checked = true;
+      within(live, "Remove").on.click({}); await settle();
+      return { labels, neither, cleared, noSpecies, itself, posted: posted(),
+        toast: document.getElementById("rv-toast").textContent };
+    """,
+        tmp_path,
+    )
+    assert out["labels"] == [True, True]
+    assert out["neither"] == {"said": REJECT_NEITHER, "shown": True, "sent": 0}
+    assert out["cleared"] is True
+    assert out["noSpecies"] == {"said": "pick the species it actually is", "sent": 0}
+    # Browser walk: its own picker lists it; the server's refusal would say "pick a species from
+    # the list".
+    assert out["itself"] == {"said": "pick the species it actually is, not this one", "sent": 0}
+    assert out["posted"] == [
+        {
+            "url": REMOVE_URL,
+            "body": {"as_label": None, "as_life_stage": None, "unidentifiable": True, "note": None},
+        }
+    ]
+    assert out["toast"] == "Removed Striped Parrotfish; its answers now say can't identify."
+
+
+@needs_node
+def test_a_remove_409_reloads_the_lists(tmp_path):
+    """Another admin removed it first (or the Species Log lists it now): the server answers 409
+    and the card is stale. The panel and the species list are reloaded, and the reason is a
+    toast, since the card that would have shown it is gone."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      globalThis.waiting = [];
+      const stubbed = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {
+        if (url !== "REMOVE") return stubbed(url, opts);
+        calls.push({ url, body: JSON.parse(opts.body) });
+        globalThis.additions = globalThis.additions.map((s) => (s.id !== 7 ? s   // the other admin's removal
+          : { ...s, status: "rejected", decided_at: "2026-11-21T16:00:00+00:00", decision_note: null }));
+        return { status: 409, ok: false, json: async () => ({ error: "this species was already removed" }) };
+      };
+      await RV.views.browse.enter(); await settle();
+      const live = liveCards()[0];
+      radioIn(live, "cant").checked = true;
+      within(live, "Remove").on.click({}); await settle();
+      return { cards: liveCards().length, removed: textOf(removedFold()),
+        toast: document.getElementById("rv-toast").textContent,
+        reloaded: [askedAfter("REMOVE", (u) => u === "/api/review/species-additions"),
+          askedAfter("REMOVE", catalogueReload)] };
+    """.replace("REMOVE", REMOVE_URL),
+        tmp_path,
+    )
+    assert out["cards"] == 0
+    assert "Striped Parrotfish" in out["removed"]
+    assert out["toast"] == "this species was already removed"
+    assert out["reloaded"] == [True, True]

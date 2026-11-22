@@ -20,6 +20,11 @@
 // start with "New species", where suggested species are approved or
 // rejected; its Approve, Reject and per-box "Not this species" share that
 // same busy guard.
+//
+// 2026-11-21 (species checked against WoRMS): reviewers' species join the
+// list at once, so the main species panel is "Species added by reviewers",
+// where an admin can remove one (under the same busy guard); "New species"
+// is shown only while an ai #49 suggestion is still waiting.
 "use strict";
 
 RV.views.browse = (() => {
@@ -179,17 +184,24 @@ RV.views.browse = (() => {
   async function loadAdmin() {
     const section = document.getElementById("rv-admin");
     if (!section) return;
-    const [pending, decided, disputes, agreement, status] = await Promise.all([
+    const [additions, pending, decided, disputes, agreement, status] = await Promise.all([
+      RV.get("/api/review/species-additions"),
       RV.get("/api/review/species-suggestions?status=pending"),
       RV.get("/api/review/species-suggestions?status=decided"),
       RV.get("/api/review/disputes"), RV.get("/api/review/agreement"), RV.get("/api/review/status")]);
     if (pending.ok) RV.setSpeciesBadge(pending.data.pending);
-    section.replaceChildren(
+    // ai #49 suggestions still waiting come first, while any do: they wait on an admin. Their
+    // history leaves out the additions (rows with a WoRMS record), which have their own panel.
+    const waiting = pending.ok ? pending.data.suggestions : [];
+    const history = decided.ok ? decided.data.suggestions.filter((s) => s.aphia_id == null) : [];
+    section.replaceChildren(...[
       RV.el("h3", { text: "Administrator" }),
-      speciesPanel(pending.ok ? pending.data.suggestions : null, decided.ok ? decided.data.suggestions : []),
+      waiting.length ? speciesPanel(waiting, history) : null,
+      additionsPanel(additions.ok ? additions.data.additions : null),
       disputesPanel(disputes.ok ? disputes.data.disputes : []),
       agreementPanel(agreement.ok ? agreement.data : null),
-      statusPanel(status.ok ? status.data : null));
+      statusPanel(status.ok ? status.data : null),
+    ].filter(Boolean));
   }
 
   // Shared by disputesPanel()'s "Use answer" / "Relabel…" buttons and
@@ -201,7 +213,8 @@ RV.views.browse = (() => {
   // like review-frame.js's reload() -- since it's a plain re-fetch these
   // actions call once they're done, not something a click fires directly.
   // Since 2026-11-21 speciesPanel()'s approveSuggestion(), rejectSuggestion()
-  // and detachBox() share it too.
+  // and detachBox() share it too, and so does additionsPanel()'s
+  // removeAddition().
   let busy = false;
 
   async function adjudicate(eventId, body) {
@@ -217,6 +230,89 @@ RV.views.browse = (() => {
     }
   }
 
+  // ---- species panels: shared parts ----
+
+  const BOXES_PER_PAGE = 24;   // the server's page size
+  const stageText = (stage) => (stage ? ` · ${stage}` : "");
+  const answersText = (n) => `${n} answer${n === 1 ? "" : "s"}`;
+  const formField = (label, control) => RV.el("label", { class: "rv-suggest-field" },
+    RV.el("span", { class: "rv-label", text: label }), control);
+  const value = (control) => (control.value || "").trim() || null;
+  // What a rejected suggestion's or a removed addition's answers say now.
+  const movedTo = (name, stage) => (name ? RV.listedName(name, stage) : "can't identify");
+
+  // A 409 from Approve, Reject or "Not this species": another admin decided the suggestion
+  // first (or, on Approve, listed the same choice), so its card is stale. The lists are
+  // reloaded to replace it, and the reason goes to a toast, since the card's own alert line
+  // goes with it (final review). Since the WoRMS check, Remove too: another admin removed the
+  // species first, or the Species Log lists it now. The pickers' species list is reloaded with
+  // the panels, as such a decision changes it.
+  async function reloadStale(r) {
+    RV.toast(r.data.error || "That suggestion was already decided.");
+    await RV.loadCatalogue();
+    await loadAdmin();
+  }
+
+  // The boxes `url` lists (?page=N), a page at a time, each drawn by `figure(box)`. Only the
+  // latest page asked for is shown; a page left empty (its last box detached) steps back one.
+  function boxPages(url, figure) {
+    const boxes = RV.el("div", { class: "rv-sg-boxes" }, RV.el("p", { class: "rv-muted", text: "Loading…" }));
+    const pager = RV.el("div", { class: "rv-row rv-small" });
+    let page = 0;
+    let asked = 0;
+    async function show() {
+      const mine = ++asked;
+      const r = await RV.get(`${url}?page=${page}`);
+      if (mine !== asked) return;
+      if (!r.ok) {
+        boxes.replaceChildren(RV.el("p", { text: r.data.error || "Couldn't load its boxes." }));
+        pager.replaceChildren();
+        return;
+      }
+      const { total, boxes: shown } = r.data;
+      if (!shown.length && page > 0) { page -= 1; await show(); return; }
+      boxes.replaceChildren(...(shown.length ? shown.map(figure)
+        : [RV.el("p", { class: "rv-muted", text: "No answers use it now." })]));
+      const from = page * BOXES_PER_PAGE;
+      pager.replaceChildren(...(total > BOXES_PER_PAGE ? [
+        RV.el("button", { type: "button", disabled: page === 0, onclick: () => { page -= 1; show(); } },
+          "← Previous"),
+        RV.el("span", { class: "rv-muted", text: `boxes ${from + 1}–${from + shown.length} of ${total}` }),
+        RV.el("button", { type: "button", disabled: from + BOXES_PER_PAGE >= total,
+          onclick: () => { page += 1; show(); } }, "Next →"),
+      ] : []));
+    }
+    return { boxes, pager, show };
+  }
+
+  // "It's actually…" a listed species (the picker leaves out the ai #49 ones still waiting,
+  // which a rejection or a removal can't name), or "Can't identify": the radios (group `group`)
+  // and the picker, and body(note), the request body, or null once `say` has said what is
+  // missing.
+  function actuallyChoice(group, say) {
+    const radio = (v) => RV.el("input", { type: "radio", name: group, value: v, onchange: () => say(null) });
+    const asIt = radio("as");
+    const cant = radio("cant");
+    const chosen = RV.el("span", { class: "rv-sg-chosen" });
+    const slot = RV.el("div", { class: "rv-picker" });
+    let actually = null;
+    new RV.SpeciesPicker(slot, (e) => {
+      actually = e;
+      asIt.checked = true;
+      say(null);
+      chosen.textContent = (e.common || e.name) + (e.life_stage ? ` (${e.life_stage})` : "");
+    });
+    const body = (note) => {
+      if (!asIt.checked && !cant.checked) { say("choose “It's actually…” or “Can't identify”"); return null; }
+      if (asIt.checked && !actually) { say("pick the species it actually is"); return null; }
+      return asIt.checked
+        ? { as_label: actually.name, as_life_stage: actually.life_stage, unidentifiable: false, note }
+        : { as_label: null, as_life_stage: null, unidentifiable: true, note };
+    };
+    return { body, nodes: [RV.el("label", { class: "rv-check" }, asIt, "It's actually…", chosen), slot,
+      RV.el("label", { class: "rv-check" }, cant, "Can't identify")] };
+  }
+
   // ---- new species (spec 2026-11-21, "Admin panel") ----
   // Every suggested species waiting for a decision, with the boxes answered with it -- their
   // only check, since such answers get no spot-check -- each with "Not this species" (that
@@ -224,21 +320,8 @@ RV.views.browse = (() => {
   // under the admin's names and stage; Reject says what it really is (a listed species, never
   // one still waiting) or that it can't be identified. Either rewrites its answers and
   // reloads the species list. Decided ones fold into a short history.
-
-  const BOXES_PER_PAGE = 24;   // the server's page size
-  const stageText = (stage) => (stage ? ` · ${stage}` : "");
-  const answersText = (n) => `${n} answer${n === 1 ? "" : "s"}`;
-  const formField = (label, control) => RV.el("label", { class: "rv-suggest-field" },
-    RV.el("span", { class: "rv-label", text: label }), control);
-
-  // A 409 from Approve, Reject or "Not this species": another admin decided the suggestion
-  // first (or, on Approve, listed the same choice), so its card is stale. The lists are
-  // reloaded to replace it, and the reason goes to a toast, since the card's own alert line
-  // goes with it (final review).
-  async function reloadStale(r) {
-    RV.toast(r.data.error || "That suggestion was already decided.");
-    await loadAdmin();
-  }
+  // Since the WoRMS check nothing new waits: loadAdmin() shows this panel only while an ai #49
+  // suggestion still does.
 
   async function approveSuggestion(id, body, say) {
     if (busy) return;
@@ -262,8 +345,7 @@ RV.views.browse = (() => {
       const r = await RV.post(`/api/review/species-suggestions/${id}/reject`, body);
       if (r.status === 409) { await reloadStale(r); return; }
       if (!r.ok) { say(r.data.error || "That wasn't saved."); return; }
-      RV.toast(`Not added; its answers now say ${body.unidentifiable
-        ? "can't identify" : RV.listedName(body.as_label, body.as_life_stage)}.`);
+      RV.toast(`Not added; its answers now say ${movedTo(body.as_label, body.as_life_stage)}.`);
       await RV.loadCatalogue();
       await Promise.all([loadAdmin(), loadGrid()]);
     } finally {
@@ -286,15 +368,10 @@ RV.views.browse = (() => {
     }
   }
 
+  // `pending`: the suggestions waiting (at least one); `decided`: ai #49's decided ones.
   function speciesPanel(pending, decided) {
-    const panel = RV.el("div", { class: "rv-panel rv-species-panel" });
-    if (!pending) {
-      panel.append(RV.el("h4", { text: "New species" }), RV.el("p", { text: "Unavailable." }));
-      return panel;
-    }
-    panel.append(RV.el("h4", { text: `New species (${pending.length} waiting)` }),
-      ...(pending.length ? pending.map(suggestionCard)
-        : [RV.el("p", { class: "rv-muted", text: "Nothing waiting." })]));
+    const panel = RV.el("div", { class: "rv-panel rv-species-panel rv-species-waiting" },
+      RV.el("h4", { text: `New species (${pending.length} waiting)` }), ...pending.map(suggestionCard));
     if (decided.length) {
       panel.append(RV.el("details", { class: "rv-sg-history" },
         RV.el("summary", { text: `Decided (${decided.length})` }),
@@ -308,43 +385,17 @@ RV.views.browse = (() => {
     const count = RV.el("span", { text: answersText(s.answers) });
     const error = RV.el("p", { class: "rv-suggest-error", role: "alert", hidden: true });
     const say = (message) => { error.textContent = message || ""; error.hidden = !message; };
-    const value = (control) => (control.value || "").trim() || null;
 
-    // The boxes answered with it, a page at a time; only the latest page asked for is shown.
-    const boxes = RV.el("div", { class: "rv-sg-boxes" }, RV.el("p", { class: "rv-muted", text: "Loading…" }));
-    const pager = RV.el("div", { class: "rv-row rv-small" });
-    let page = 0;
-    let asked = 0;
-    async function showBoxes() {
-      const mine = ++asked;
-      const r = await RV.get(`/api/review/species-suggestions/${s.id}/boxes?page=${page}`);
-      if (mine !== asked) return;
-      if (!r.ok) {
-        boxes.replaceChildren(RV.el("p", { text: r.data.error || "Couldn't load its boxes." }));
-        pager.replaceChildren();
-        return;
-      }
-      const { total, boxes: shown } = r.data;
-      if (!shown.length && page > 0) { page -= 1; await showBoxes(); return; }
-      boxes.replaceChildren(...(shown.length ? shown.map((b) => RV.el("figure", { class: "rv-sg-box" },
-        RV.el("img", { src: b.zoom_url, alt: "", loading: "lazy" }),
-        RV.el("figcaption", { class: "rv-muted", text: b.by }),
-        RV.el("button", { type: "button", onclick: () => detachBox(s.id, b.event_id, afterDetach) },
-          "Not this species")))
-        : [RV.el("p", { class: "rv-muted", text: "No answers use it now." })]));
-      const from = page * BOXES_PER_PAGE;
-      pager.replaceChildren(...(total > BOXES_PER_PAGE ? [
-        RV.el("button", { type: "button", disabled: page === 0, onclick: () => { page -= 1; showBoxes(); } },
-          "← Previous"),
-        RV.el("span", { class: "rv-muted", text: `boxes ${from + 1}–${from + shown.length} of ${total}` }),
-        RV.el("button", { type: "button", disabled: from + BOXES_PER_PAGE >= total,
-          onclick: () => { page += 1; showBoxes(); } }, "Next →"),
-      ] : []));
-    }
+    // The boxes answered with it, a page at a time.
+    const boxes = boxPages(`/api/review/species-suggestions/${s.id}/boxes`, (b) => RV.el("figure", { class: "rv-sg-box" },
+      RV.el("img", { src: b.zoom_url, alt: "", loading: "lazy" }),
+      RV.el("figcaption", { class: "rv-muted", text: b.by }),
+      RV.el("button", { type: "button", onclick: () => detachBox(s.id, b.event_id, afterDetach) },
+        "Not this species")));
     async function afterDetach(answers) {
       s.answers -= answers;
       count.textContent = answersText(s.answers);
-      await showBoxes();
+      await boxes.show();
     }
 
     // Approve: the names and stage as the admin corrects them, the scientific name required.
@@ -372,35 +423,20 @@ RV.views.browse = (() => {
 
     // Reject: "It's actually…" a listed species (the picker leaves out the ones still
     // waiting, which a rejection can't name), or "Can't identify".
-    const radio = (value) => RV.el("input", { type: "radio", name: `reject-${s.id}`, value,
-      onchange: () => say(null) });
-    const asIt = radio("as");
-    const cant = radio("cant");
-    const chosen = RV.el("span", { class: "rv-sg-chosen" });
-    const slot = RV.el("div", { class: "rv-picker" });
-    let actually = null;
-    new RV.SpeciesPicker(slot, (e) => {
-      actually = e;
-      asIt.checked = true;
-      say(null);
-      chosen.textContent = (e.common || e.name) + (e.life_stage ? ` (${e.life_stage})` : "");
-    });
+    const choice = actuallyChoice(`reject-${s.id}`, say);
     const reject = () => {
-      if (!asIt.checked && !cant.checked) { say("choose “It's actually…” or “Can't identify”"); return; }
-      if (asIt.checked && !actually) { say("pick the species it actually is"); return; }
-      rejectSuggestion(s.id, asIt.checked
-        ? { as_label: actually.name, as_life_stage: actually.life_stage, unidentifiable: false, note: value(note) }
-        : { as_label: null, as_life_stage: null, unidentifiable: true, note: value(note) }, say);
+      const body = choice.body(value(note));
+      if (body) rejectSuggestion(s.id, body, say);
     };
 
-    showBoxes();
+    boxes.show();
     return RV.el("div", { class: "rv-sg" },
       RV.el("div", {},
         RV.el("span", { class: "rv-common", text: s.common_name }), " ",
         RV.el("span", { class: "rv-latin", text: (s.scientific_name || "no scientific name") + stageText(s.life_stage) })),
       s.note ? RV.el("p", { class: "rv-note", text: s.note }) : null,
       RV.el("p", { class: "rv-muted rv-small" }, `Suggested by ${who} · ${RV.fmtTime(s.created_at)} · `, count),
-      boxes, pager,
+      boxes.boxes, boxes.pager,
       formField(`Note to ${who} (optional)`, note),
       RV.el("div", { class: "rv-sg-decide" },
         RV.el("div", { class: "rv-sg-fields" },
@@ -410,8 +446,7 @@ RV.views.browse = (() => {
           RV.el("button", { type: "button", class: "rv-primary", onclick: approve }, "Approve")),
         RV.el("div", { class: "rv-sg-fields" },
           RV.el("span", { class: "rv-label", text: "Or reject" }),
-          RV.el("label", { class: "rv-check" }, asIt, "It's actually…", chosen), slot,
-          RV.el("label", { class: "rv-check" }, cant, "Can't identify"),
+          ...choice.nodes,
           RV.el("button", { type: "button", onclick: reject }, "Reject"))),
       error);
   }
@@ -420,12 +455,114 @@ RV.views.browse = (() => {
     const suggested = s.life_stage ? `${s.common_name} (${s.life_stage})` : s.common_name;
     const what = s.status === "approved"
       ? `added as ${s.approved_common} (${s.approved_name}${stageText(s.approved_stage)})`
-      : `not added; its answers now say ${s.rejected_to_name
-        ? RV.listedName(s.rejected_to_name, s.rejected_to_stage) : "can't identify"}`;
+      : `not added; its answers now say ${movedTo(s.rejected_to_name, s.rejected_to_stage)}`;
     return RV.el("li", {},
       RV.el("span", { class: "rv-common", text: suggested }), ` · ${what}`,
       RV.el("div", { class: "rv-muted rv-small",
         text: `Suggested by ${s.suggested_by_name || "a volunteer"} · decided ${RV.fmtTime(s.decided_at)}` }),
+      s.decision_note ? RV.el("div", { class: "rv-muted", text: s.decision_note }) : null);
+  }
+
+  // ---- species added by reviewers (spec 2026-11-21-species-worms-check) ----
+  // Each species a reviewer added from WoRMS, on everyone's list since, newest first: its names
+  // and stage, its WoRMS record, who added it and when, and how many answers use it -- whoever
+  // gave them, boxes volunteers drew included -- with their boxes a page at a time once the
+  // admin opens them (a panel of many additions would otherwise ask for every one's boxes on
+  // each reload). Remove takes it off the list: every one of those answers becomes what it
+  // really is (a listed species) or can't-identify, the admin's note goes to the reviewer, and
+  // the species list is reloaded. There is no per-box "Not this species": the ordinary review
+  // tools fix single boxes. Removed ones fold away.
+  // The remove result's `answers` counts answer rows, history included, while the panel's
+  // counts boxes, so the toast leaves the numbers out.
+
+  async function removeAddition(s, body, say) {
+    if (busy) return;
+    busy = true;
+    try {
+      const r = await RV.post(`/api/review/species-additions/${s.id}/remove`, body);
+      if (r.status === 409) { await reloadStale(r); return; }
+      if (!r.ok) { say(r.data.error || "That wasn't saved."); return; }
+      RV.toast(`Removed ${s.approved_common}; its answers now say ${movedTo(body.as_label, body.as_life_stage)}.`);
+      await RV.loadCatalogue();
+      await Promise.all([loadAdmin(), loadGrid()]);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // The server builds the link from the row's AphiaID.
+  const wormsLink = (s) => RV.el("a", { href: s.worms_url, target: "_blank", rel: "noopener noreferrer",
+    text: `WoRMS AphiaID ${s.aphia_id} ↗` });
+
+  function additionsPanel(list) {
+    const panel = RV.el("div", { class: "rv-panel rv-species-panel rv-additions" },
+      RV.el("h4", { text: "Species added by reviewers" }));
+    if (!list) { panel.append(RV.el("p", { text: "Unavailable." })); return panel; }
+    const live = list.filter((s) => s.status === "approved");
+    const removed = list.filter((s) => s.status === "rejected");
+    panel.append(...(live.length ? live.map(additionCard) : [RV.el("p", { class: "rv-muted",
+      text: removed.length ? "None on the list now." : "No reviewer has added a species yet." })]));
+    if (removed.length) {
+      panel.append(RV.el("details", { class: "rv-sg-history" },
+        RV.el("summary", { text: `Removed (${removed.length})` }),
+        RV.el("ul", {}, removed.map(removedItem))));
+    }
+    return panel;
+  }
+
+  function additionCard(s) {
+    const who = s.suggested_by_name || "the volunteer";
+    const error = RV.el("p", { class: "rv-suggest-error", role: "alert", hidden: true });
+    const say = (message) => { error.textContent = message || ""; error.hidden = !message; };
+
+    // Its boxes, asked for the first time the admin opens them.
+    const boxes = boxPages(`/api/review/species-additions/${s.id}/boxes`, (b) => RV.el("figure", { class: "rv-sg-box" },
+      RV.el("img", { src: b.zoom_url, alt: "", loading: "lazy" }),
+      RV.el("figcaption", { class: "rv-muted", text: b.by })));
+    let asked = false;
+    const used = RV.el("details", { class: "rv-sg-used", ontoggle: () => {
+      if (used.open && !asked) { asked = true; boxes.show(); }
+    } }, RV.el("summary", { text: "Its boxes" }), boxes.boxes, boxes.pager);
+
+    const note = RV.el("textarea", { name: "note", class: "rv-field", rows: "2", maxlength: "500",
+      placeholder: `${who} sees it in “Species you added”` });
+    const choice = actuallyChoice(`remove-${s.id}`, say);
+    // The picker lists this species too, and the server's refusal of it would say "pick a species
+    // from the list" (browser walk).
+    const itself = (b) => b.as_label === s.approved_name && (b.as_life_stage || null) === (s.approved_stage || null);
+    const remove = () => {
+      const body = choice.body(value(note));
+      if (body && itself(body)) say("pick the species it actually is, not this one");
+      else if (body) removeAddition(s, body, say);
+    };
+
+    // A row's decision_note says "WoRMS AphiaID N" until an admin removes it; the link says that.
+    return RV.el("div", { class: "rv-sg rv-addition" },
+      RV.el("div", {},
+        RV.el("span", { class: "rv-common", text: s.approved_common }), " ",
+        RV.el("span", { class: "rv-latin", text: s.approved_name + stageText(s.approved_stage) })),
+      RV.el("p", { class: "rv-small" }, s.family ? `${s.family} · ` : null, wormsLink(s)),
+      RV.el("p", { class: "rv-muted rv-small",
+        text: `Added by ${who} · ${RV.fmtTime(s.created_at)} · ${answersText(s.answers)}` }),
+      s.note ? RV.el("p", { class: "rv-note", text: s.note }) : null,
+      used,
+      RV.el("details", { class: "rv-sg-remove" },
+        RV.el("summary", { text: "Remove…" }),
+        RV.el("div", { class: "rv-sg-fields" },
+          ...choice.nodes,
+          formField(`Note to ${who} (optional)`, note),
+          RV.el("button", { type: "button", onclick: remove }, "Remove")),
+        error));
+  }
+
+  function removedItem(s) {
+    const added = s.approved_stage ? `${s.approved_common} (${s.approved_stage})` : s.approved_common;
+    return RV.el("li", {},
+      RV.el("span", { class: "rv-common", text: added }), " ",
+      RV.el("span", { class: "rv-latin", text: s.approved_name }),
+      ` · removed; its answers now say ${movedTo(s.rejected_to_name, s.rejected_to_stage)}`,
+      RV.el("div", { class: "rv-muted rv-small" },
+        `Added by ${s.suggested_by_name || "a volunteer"} · removed ${RV.fmtTime(s.decided_at)} · `, wormsLink(s)),
       s.decision_note ? RV.el("div", { class: "rv-muted", text: s.decision_note }) : null);
   }
 

@@ -430,10 +430,12 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
       if (message.startsWith("already on the list as ") || !e.life_stage) return base;
       return base.toLowerCase().includes(e.life_stage) ? base : `${base} (${e.life_stage})`;
     };
-    verdict.replaceChildren(RV.el("p", { text: message }),
+    // The nulls are left out: replaceChildren() would show each as the word "null" (browser
+    // walk with the real WoRMS, 2026-11-21).
+    verdict.replaceChildren(...[RV.el("p", { text: message }),
       uses.length ? RV.el("div", { class: "rv-row" }, uses.map((e) => RV.el("button", { type: "button",
         onclick: () => { if (!busy) onUse(e); } }, `Use ${label(e)}`))) : null,
-      hint ? RV.el("p", { class: "rv-muted", text: hint }) : null);
+      hint ? RV.el("p", { class: "rv-muted", text: hint }) : null].filter(Boolean));
   }
 
   function judge() {

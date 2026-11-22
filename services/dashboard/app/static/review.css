@@ -221,6 +221,15 @@
 .rv-sg-history li { padding: 4px 0; border-bottom: 1px solid var(--rv-line); }
 .rv-tabs .rv-badge { margin-left: 6px; background: var(--warn); color: var(--rv-on-accent); font-size: 11px;
   font-weight: 700; }
+/* Species added by reviewers (spec 2026-11-21-species-worms-check): the admin's main species
+   panel, full width like "New species" (now shown only while an ai #49 suggestion waits). Each
+   addition is a card with its WoRMS link; its boxes and Remove fold open on demand, and removed
+   ones fold away like decided suggestions. */
+.rv-addition a, .rv-sg-history a { color: var(--accent); white-space: nowrap; }
+.rv-sg-used summary, .rv-sg-remove summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.rv-sg-used[open] > summary, .rv-sg-remove[open] > summary { margin-bottom: 6px; }
+.rv-sg-remove .rv-sg-fields { max-width: 460px; }
+.rv-sg-remove .rv-suggest-error { margin: 6px 0 0; }
 
 /* The whole-frame instructions: a call-out under the frame. The swatches copy
    the frame boxes' colours and line styles (.rv-fb-*) on a dark underwater
