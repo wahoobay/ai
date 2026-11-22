@@ -4,6 +4,7 @@ checklist in Task 12."""
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -1436,11 +1437,18 @@ def test_a_box_left_while_the_species_is_being_added_is_not_answered_with_it(vie
 
 
 @needs_node
+@pytest.mark.parametrize(
+    "error",
+    [
+        "that species suggestion was already decided; pick from the list",
+        "that species was removed from the list; pick from the list",
+    ],
+)
 @pytest.mark.parametrize("view", ["single", "frame"])
-def test_a_new_species_decided_meanwhile_reloads_the_list_and_keeps_the_box(view, tmp_path):
-    """The species list loaded before an admin approved (or rejected) the volunteer's new
-    species: the verdict's 409 names that, and the page reloads the list instead of
-    moving on from a box that is still theirs."""
+def test_a_new_species_decided_meanwhile_reloads_the_list_and_keeps_the_box(view, error, tmp_path):
+    """The species list loaded before an admin decided the volunteer's new species, or removed
+    a species a reviewer added: the verdict's 409 names that, and the page reloads the list
+    instead of moving on from a box that is still theirs."""
     enter = (
         "await RV.views.single.enter({ payload: payload(1) });"
         if view == "single"
@@ -1452,8 +1460,7 @@ def test_a_new_species_decided_meanwhile_reloads_the_list_and_keeps_the_box(view
         + SUGGEST_STUB
         + f"""
       RV.catalogue = [...listed, ENTRY];
-      globalThis.verdictReply = {{ status: 409,
-        data: {{ error: "that species suggestion was already decided; pick from the list" }} }};
+      globalThis.verdictReply = {{ status: 409, data: {{ error: {json.dumps(error)} }} }};
       {enter}
       const root = document.getElementById("rv-{view}");
       offered(root, "spotted");

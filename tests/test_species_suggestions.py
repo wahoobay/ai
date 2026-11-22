@@ -756,7 +756,8 @@ async def test_someone_elses_suggestion_is_refused_but_an_admin_may_use_it(rdb, 
     assert row["label_source"] == "suggested"
 
 
-async def test_a_decided_suggestion_cannot_be_used(rdb, tmp_path, cat):
+async def test_a_missing_or_rejected_suggestion_cannot_be_used(rdb, tmp_path, cat):
+    """An approved one is an ordinary answer (the added-species tests below)."""
     roy = await make_user(rdb, "roy")
     sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     _f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
@@ -768,23 +769,19 @@ async def test_a_decided_suggestion_cannot_be_used(rdb, tmp_path, cat):
             **_suggested(sid + 1000, event_id=eid, review_item_id=item),
         )
     assert missing.value.message == "no such species suggestion"
-    for status in ("approved", "rejected"):
-        async with rdb.connection() as conn:
-            await conn.execute(
-                "UPDATE species_suggestions SET status = %s, decided_at = now() WHERE id = %s",
-                (status, sid),
-            )
-        with pytest.raises(Conflict) as decided:
-            await _answer(
-                rdb,
-                cat,
-                roy,
-                **_suggested(sid, event_id=eid, review_item_id=item),
-            )
-        assert (
-            decided.value.message
-            == "that species suggestion was already decided; pick from the list"
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE species_suggestions SET status = 'rejected', decided_at = now() WHERE id = %s",
+            (sid,),
         )
+    with pytest.raises(Conflict) as rejected:
+        await _answer(
+            rdb,
+            cat,
+            roy,
+            **_suggested(sid, event_id=eid, review_item_id=item),
+        )
+    assert rejected.value.message == "that species was removed from the list; pick from the list"
     assert await _verdicts(rdb) == [] and await _item_status(rdb, item) == "claimed"
 
 
@@ -944,6 +941,186 @@ async def test_suggested_answer_over_http(rdb, rclient, tmp_path):
     assert r.json()["label"] == "Pomatomus saltatrix"
     [row] = await _verdicts(rdb)
     assert row["species_suggestion_id"] == sid
+
+
+# ---- answering with an added species --------------------------------------------------------
+# WoRMS confirms the name, not the fish: an answer with a species a reviewer added gets second
+# opinions like any other (spec 2026-11-21-species-worms-check, "Second opinions").
+
+GOATFISH_ADDED = {**GOATFISH, "common_name": "Spotted Goatfish"}
+
+
+async def _spot_check_of(rdb, event_id):
+    async with rdb.connection() as conn:
+        return await fetch_one(
+            conn,
+            """SELECT id, status, retired_reason, exclude_user_id, first_correction_id
+                 FROM review_items WHERE event_id = %s AND pass = 2""",
+            (event_id,),
+        )
+
+
+async def _claimed_second_opinion(rdb, tmp_path, n, *, first_by, claimed_by):
+    """A box `first_by` answered from the list, its pass-2 item claimed by `claimed_by`."""
+    f, eid, _item = await _box(rdb, tmp_path, n, status="done")
+    first = await add_verdict(rdb, eid, first_by, name="Seriola zonata")
+    spot = await add_item(
+        rdb,
+        f,
+        pass_=2,
+        exclude_user_id=first_by,
+        first_correction_id=first,
+        status="claimed",
+        claimed_by=claimed_by,
+        claimed_until=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    return eid, first, spot
+
+
+async def test_an_added_species_answer_is_sampled_for_a_second_opinion(
+    rdb, rclient, tmp_path, cat, monkeypatch
+):
+    roy, ann = await make_user(rdb, "roy"), await make_user(rdb, "ann")
+    sid = (await _suggest(rdb, roy, cat, **GOATFISH_ADDED))["suggestion_id"]
+    merged = await _merged(rdb, cat)
+    _f, eid, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
+    out = await _answer(
+        rdb,
+        merged,
+        roy,
+        spot=1.0,
+        # the addition names the fish; a label and stage sent with it are ignored
+        **_suggested(sid, event_id=eid, review_item_id=item, label="Seriola zonata"),
+    )
+    assert out["label"] == "Pseudupeneus maculatus" and out["first_pass"] is True
+    assert out["spot_check_scheduled"] is True and out["counts"] is True
+    [row] = await _verdicts(rdb)
+    assert (row["label_source"], row["species_suggestion_id"]) == ("suggested", sid)
+    assert row["corrected_name"] == row["corrected_species_id"] == "Pseudupeneus maculatus"
+    assert row["life_stage"] is None and row["review_item_id"] == item
+    spot = await _spot_check_of(rdb, eid)
+    assert (spot["status"], spot["exclude_user_id"], spot["first_correction_id"]) == (
+        "open",
+        roy,
+        row["id"],
+    )
+
+    # Someone else's addition is still theirs to answer with (or an admin's).
+    _g, ann_eid, ann_item = await _box(rdb, tmp_path, 1, claimed_by=ann)
+    with pytest.raises(Forbidden) as refused:
+        await _answer(
+            rdb, merged, ann, **_suggested(sid, event_id=ann_eid, review_item_id=ann_item)
+        )
+    assert refused.value.message == "that suggestion isn't yours"
+
+    # A box sampled from an earlier answer keeps its second opinion when changed to it.
+    listed = {"outcome": "species", "label": "Seriola zonata", "label_source": "search"}
+    _h, changed, changed_item = await _box(rdb, tmp_path, 2, claimed_by=roy)
+    await _answer(
+        rdb, merged, roy, spot=1.0, event_id=changed, review_item_id=changed_item, **listed
+    )
+    kept = await _spot_check_of(rdb, changed)
+    out = await _answer(rdb, merged, roy, spot=1.0, **_suggested(sid, event_id=changed))
+    assert out["first_pass"] is True and out["counts"] is True
+    assert await _spot_check_of(rdb, changed) == kept  # still open, not retired, not replaced
+
+    # The verdict route notes it in the pool's live count.
+    calls = []
+    monkeypatch.setattr(
+        "app.review_pool.ReviewPool.note_verified", lambda self, name: calls.append(name)
+    )
+    login(rclient, "roy")
+    _i, posted, _j = await _box(rdb, tmp_path, 3)
+    r = rclient.post("/api/review/verdicts", json=_suggested(sid, event_id=posted), headers=CSRF)
+    assert r.status_code == 200, r.text
+    assert r.json()["label"] == "Pseudupeneus maculatus" and r.json()["counts"] is True
+    again = rclient.post(
+        "/api/review/verdicts", json=_suggested(sid, event_id=posted), headers=CSRF
+    ).json()  # a double submit describes the stored answer, and is not noted twice
+    assert again["duplicate"] is True and again["counts"] is True
+    assert calls == ["Pseudupeneus maculatus"]
+
+
+async def test_a_blind_second_opinion_may_add_and_use_a_species(rdb, tmp_path, cat):
+    one, roy = await make_user(rdb, "one"), await make_user(rdb, "roy")
+    eid, first, spot = await _claimed_second_opinion(rdb, tmp_path, 0, first_by=one, claimed_by=roy)
+    sid = (await _suggest(rdb, roy, cat, **GOATFISH_ADDED))["suggestion_id"]
+    out = await _answer(
+        rdb,
+        await _merged(rdb, cat),
+        roy,
+        spot=1.0,
+        **_suggested(sid, event_id=eid, review_item_id=spot),
+    )
+    assert out["label"] == "Pseudupeneus maculatus" and out["first_pass"] is False
+    assert out["spot_check_scheduled"] is False and out["counts"] is True
+    first_row, row = await _verdicts(rdb)
+    assert first_row["id"] == first
+    assert (row["review_item_id"], row["user_id"]) == (spot, roy)
+    assert (row["label_source"], row["species_suggestion_id"]) == ("suggested", sid)
+    assert row["corrected_name"] == "Pseudupeneus maculatus" and row["life_stage"] is None
+    assert await _item_status(rdb, spot) == "done"
+
+
+async def test_a_removed_species_cannot_be_answered(rdb, rclient, tmp_path, cat):
+    """Review Focus 4: an admin removes an addition while a reviewer still has it in their
+    picker. The removed text is one the page reloads its species list on (RV.STALE_SPECIES)."""
+    roy = await make_user(rdb, "roy")
+    await make_user(rdb, "boss", role="admin")
+    sid = (await _suggest(rdb, roy, cat, **GOATFISH_ADDED))["suggestion_id"]
+    _f, eid, _item = await _box(rdb, tmp_path)
+    url = "/api/review/verdicts"
+    plain = {
+        "event_id": eid,
+        "outcome": "species",
+        "label": "Pseudupeneus maculatus",
+        "label_source": "search",
+    }
+    login(rclient, "roy")
+    names = {s["name"] for s in rclient.get("/api/review/species").json()["species"]}
+    assert "Pseudupeneus maculatus" in names  # in the picker
+
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """UPDATE species_suggestions
+                  SET status = 'rejected', decided_at = now(), decision_note = 'a rudderfish',
+                      rejected_to_name = 'Seriola zonata', rejected_to_stage = NULL
+                WHERE id = %s""",
+            (sid,),
+        )
+    for who in ("roy", "boss"):
+        login(rclient, who)
+        r = rclient.post(url, json=_suggested(sid, event_id=eid), headers=CSRF)
+        assert r.status_code == 409, who
+        assert r.json()["error"] == "that species was removed from the list; pick from the list"
+    login(rclient, "roy")
+    names = {s["name"] for s in rclient.get("/api/review/species").json()["species"]}
+    assert "Pseudupeneus maculatus" not in names  # the list refreshed
+    r = rclient.post(url, json=plain, headers=CSRF)
+    assert r.status_code == 400 and r.json()["error"] == "pick a species from the list"
+    assert await _verdicts(rdb) == []
+
+
+async def test_pending_rules_still_hold_for_leftovers(rdb, tmp_path, cat):
+    """A pending suggestion left over from ai #49 keeps every #49 rule: its answers wait for the
+    admin's decision as their check, so they get no spot-check and no blind use."""
+    one, roy = await make_user(rdb, "one"), await make_user(rdb, "roy")
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
+    _f, eid, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
+    out = await _answer(
+        rdb, cat, roy, spot=1.0, **_suggested(sid, event_id=eid, review_item_id=item)
+    )
+    assert out["spot_check_scheduled"] is False and out["counts"] is False
+    assert await _spot_check_events(rdb) == []
+
+    blind_eid, first, spot = await _claimed_second_opinion(
+        rdb, tmp_path, 1, first_by=one, claimed_by=roy
+    )
+    with pytest.raises(Invalid) as refused:
+        await _answer(rdb, cat, roy, **_suggested(sid, event_id=blind_eid, review_item_id=spot))
+    assert refused.value.message == "a second opinion can't use a new species"
+    assert [v["id"] for v in await _verdicts(rdb)] == [out["id"], first]
+    assert await _item_status(rdb, spot) == "claimed"
 
 
 # ---- keeping pending answers out ------------------------------------------------------------

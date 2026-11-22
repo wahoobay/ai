@@ -248,9 +248,11 @@ RV.SpeciesPicker = class SpeciesPicker {
 RV.STAGES = ["juvenile", "intermediate", "adult", "initial phase", "terminal phase"];
 
 // A verdict refused because the page's species list is out of date: a species taken off
-// the list, or a new species an admin has decided since the list loaded (a 409). The box
-// is still the volunteer's to answer; reload the list.
+// the list, or one a reviewer added that an admin has removed since (a 409; the last text
+// is what the server said under ai #49 for a suggestion an admin had decided). The box is
+// still the volunteer's to answer; reload the list.
 RV.STALE_SPECIES = new Set(["pick a species from the list",
+  "that species was removed from the list; pick from the list",
   "that species suggestion was already decided; pick from the list"]);
 
 // A listed species by its common name, as review-single.js's mineText() names one: what a
