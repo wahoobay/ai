@@ -68,15 +68,18 @@ from .species_suggestions import (
     DetachIn,
     RejectIn,
     SuggestionIn,
+    addition_boxes,
     approve,
     create_suggestion,
     detach,
+    list_additions,
     list_for_admin,
     list_mine,
     merged_catalogue,
     pending_count,
     pending_entries,
     reject,
+    remove_addition,
     suggestion_boxes,
 )
 
@@ -259,8 +262,9 @@ def build_review_router(cfg, state, templates) -> APIRouter:
 
     @router.get("/api/review/species")
     async def species(user=Depends(reviewer)):
-        """Every choice, plus the pending species this caller may pick (their own; all of
-        them for an admin), marked "waiting for approval"."""
+        """Every choice, reviewers' additions included, plus any pending suggestion left over
+        from ai #49 that this caller may pick (their own; all of them for an admin), marked
+        "waiting for approval"."""
         async with _db().connection() as conn:
             catalogue = await _catalogue(conn)
             pending = await pending_entries(conn, user=user, catalogue=catalogue)
@@ -268,6 +272,9 @@ def build_review_router(cfg, state, templates) -> APIRouter:
 
     @router.post("/api/review/species-suggestions", dependencies=[Depends(require_csrf)])
     async def suggest_species(body: SuggestionIn, user=Depends(reviewer)):
+        """Add the species the reviewer chose from WoRMS to everyone's list at once. The
+        response is the new choice (`key`, `name`, `life_stage`, `common`) and its
+        `suggestion_id`, for the page to answer the box with; a refusal is 400 or 409."""
         async with _db().connection() as conn:
             try:
                 return JSONResponse(
@@ -283,7 +290,49 @@ def build_review_router(cfg, state, templates) -> APIRouter:
         async with _db().connection() as conn:
             return JSONResponse({"suggestions": await list_mine(conn, user=user)})
 
-    # ---- an admin decides suggested species (spec 2026-11-21, "Admin panel") ----
+    # ---- an admin removes a species a reviewer added (spec 2026-11-21-species-worms-check) ----
+    # A removal leaves the review pool's in-memory counts alone, as a decision below does: its
+    # next refresh_progress reads the moved answers.
+
+    @router.get("/api/review/species-additions")
+    async def admin_additions(user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            return JSONResponse({"additions": await list_additions(conn)})
+
+    @router.get("/api/review/species-additions/{suggestion_id}/boxes")
+    async def admin_addition_boxes(
+        suggestion_id: int, page: int = Query(0, ge=0, le=100000), user=Depends(admin_only)
+    ):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await addition_boxes(conn, suggestion_id=suggestion_id, page=page)
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    @router.post(
+        "/api/review/species-additions/{suggestion_id}/remove",
+        dependencies=[Depends(require_csrf)],
+    )
+    async def remove_species_addition(suggestion_id: int, body: RejectIn, user=Depends(admin_only)):
+        async with _db().connection() as conn:
+            try:
+                return JSONResponse(
+                    await remove_addition(
+                        conn,
+                        user=user,
+                        suggestion_id=suggestion_id,
+                        body=body,
+                        catalogue=await _catalogue(conn),
+                        base=await state["review_catalogue"].aget(),
+                    )
+                )
+            except ReviewError as e:
+                return _fail(e)
+
+    # ---- an admin decides suggested species left over from ai #49 (spec 2026-11-21, "Admin
+    # panel") ----
     # Approve and reject leave the review pool's in-memory counts alone: its next
     # refresh_progress reads the settled answers.
 

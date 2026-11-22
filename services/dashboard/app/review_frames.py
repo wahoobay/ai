@@ -37,6 +37,7 @@ from .review_queue import (
     VerdictIn,
     fetch_all,
     fetch_one,
+    hold_addition,
     not_skipped,
     safe_frame_size,
     submit_verdict,
@@ -453,10 +454,19 @@ async def _is_complete(conn, saved_frame_id: int) -> bool:
     )
 
 
+async def _hold_label(conn, v: dict, catalogue) -> None:
+    """A drawn box naming a species a reviewer added holds that addition's row (FOR SHARE,
+    Ruling W2), and is refused if it was removed since `catalogue` was read. Taken first in
+    the transaction, before the drawn box's own row lock: a removal locks the addition's row,
+    then the drawn boxes naming it, so taken after it the two could wait on each other."""
+    await hold_addition(conn, catalogue=catalogue, name=v["label"], life_stage=v["life_stage"])
+
+
 async def add_box(conn, *, saved_frame_id: int, user, body: AddedBoxIn, catalogue) -> dict:
     fr = await frame_record(conn, saved_frame_id)
     v = _validate_added(body, catalogue=catalogue, width=fr["width"], height=fr["height"])
     async with conn.transaction():
+        await _hold_label(conn, v, catalogue)
         if not _is_admin(user) and await _is_complete(conn, saved_frame_id):
             raise Conflict("this frame is already marked complete")
         row = await fetch_one(
@@ -503,6 +513,7 @@ async def update_box(
     fr = await frame_record(conn, saved_frame_id)
     v = _validate_added(body, catalogue=catalogue, width=fr["width"], height=fr["height"])
     async with conn.transaction():
+        await _hold_label(conn, v, catalogue)
         await _own_box(conn, saved_frame_id=saved_frame_id, box_id=box_id, user=user)
         async with conn.cursor() as cur:
             await cur.execute(

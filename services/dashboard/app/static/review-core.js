@@ -156,8 +156,8 @@ RV.entry = function entry(name, lifeStage) {
     || RV.catalogue.find((e) => e.name === name) || null;
 };
 
-// `pending`: also match the species waiting for approval that /api/review/species
-// returns to their suggester (spec 2026-11-21); see RV.SpeciesPicker.
+// `pending`: also match the ai #49 suggestions still waiting for approval that
+// /api/review/species returns to their suggester; see RV.SpeciesPicker.
 RV.search = function search(query, limit, pending) {
   const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
@@ -178,9 +178,9 @@ RV.search = function search(query, limit, pending) {
 };
 
 RV.SpeciesPicker = class SpeciesPicker {
-  // options.pending: offer this volunteer's species waiting for approval too -- only
-  // where an answer may use one (spec 2026-11-21): never on a blind second opinion or a
-  // drawn box, nor for an admin's adjudication, which all need a species on the list.
+  // options.pending: offer this volunteer's ai #49 suggestions still waiting for approval too
+  // -- only where an answer may use one: never on a blind second opinion or a drawn box, nor
+  // for an admin's adjudication, which all need a species on the list.
   constructor(container, onPick, options) {
     this.onPick = onPick;
     this.pending = Boolean(options && options.pending);
@@ -237,94 +237,318 @@ RV.SpeciesPicker = class SpeciesPicker {
   pick(entry) { this.clear(); this.input.blur(); this.onPick(entry); }
 };
 
-// ---- adding a species (spec 2026-11-21) ------------------------------------------------
-// A fish that isn't on the list can be suggested from under the picker and the box
-// answered with it at once. The suggestion waits for an admin; meanwhile it is in this
-// volunteer's own list, marked "(waiting for approval)", and an answer with it names the
-// suggestion (label_source "suggested"): the server stores the suggestion's own name and
-// stage. A blind second opinion can't use or add one, nor can a box a volunteer drew
-// (Ruling P4), so the views show the link only where an answer may use it.
+// ---- adding a species (spec 2026-11-21-species-worms-check) ------------------------------
+// A fish that isn't on the list can be added from under any species picker -- a blind second
+// opinion and a box a volunteer drew included -- and the box answered with it at once. The form
+// checks the name with WoRMS (review-worms.js) and the reviewer picks the WoRMS record; the
+// server applies the list rules and puts the species on everyone's list straight away. The
+// answer that adds it names the addition (label_source "suggested"); later picks of it, by
+// anyone, are ordinary answers. Species suggested under ai #49 that still wait for an admin
+// ("pending") are only in their suggester's picker, marked "(waiting for approval)", where an
+// answer may use one: never on a blind second opinion or a drawn box.
 
 RV.STAGES = ["juvenile", "intermediate", "adult", "initial phase", "terminal phase"];
 
-// A verdict refused because the page's species list is out of date: a species taken off
-// the list, or a new species an admin has decided since the list loaded (a 409). The box
-// is still the volunteer's to answer; reload the list.
+// A verdict refused because the page's species list is out of date: a species taken off the
+// list, one a reviewer added that an admin has removed since, or an ai #49 suggestion still
+// waiting when the page loaded that an admin has decided since (a 409). The box is still the
+// volunteer's to answer; reload the list.
 RV.STALE_SPECIES = new Set(["pick a species from the list",
+  "that species was removed from the list; pick from the list",
   "that species suggestion was already decided; pick from the list"]);
 
 // A listed species by its common name, as review-single.js's mineText() names one: what a
-// rejected suggestion's answers now say, for its suggester and in the admin's history.
+// removed addition's answers now say, for the reviewer who added it.
 RV.listedName = function listedName(name, lifeStage) {
   const e = RV.entry(name, lifeStage);
   return (e && e.common) || (lifeStage ? `${name} (${lifeStage})` : name);
 };
 
-// The answer's species fields for a picked entry. `source` ("hint" or "search") says
-// where a listed species came from; one waiting for approval names its suggestion.
+// The answer's species fields for a picked entry. `source` ("hint" or "search") says where a
+// listed species came from; the species just added, or an ai #49 one waiting for approval,
+// names its suggestion.
 RV.answerExtra = function answerExtra(entry, source) {
-  if (entry.pending) {
+  if (entry.pending || entry.suggestion_id) {
     return { label: entry.name, life_stage: entry.life_stage, label_source: "suggested",
       species_suggestion_id: entry.suggestion_id };
   }
   return { label: entry.name, life_stage: entry.life_stage, label_source: source };
 };
 
-// The form, rendered into `container`: common name (required), scientific name, stage,
-// note, "Add and answer this box", and "Your suggestions" with what became of each.
-// Submitting creates the suggestion, reloads the species list (the new one is in it from
-// now on) and calls `onCreated(entry)` with its picker entry, which answers the box; a
-// refusal (already listed, already suggested, a malformed name) is shown in the form.
-RV.suggestSpecies = function suggestSpecies(container, onCreated) {
-  let busy = false;
+// What the server's list rules (species_suggestions.create_suggestion) would say to adding the
+// WoRMS `record` at `stage` (null: none), judged against the listed choices -- an ai #49 one
+// waiting for approval is not listed: null when they allow it, otherwise {message, uses}, the
+// server's words and the listed choices to offer instead. The server stays the authority; this
+// only lets the form offer "Use …" rather than a refusal. A choice is the same species by its
+// AphiaID or its name; a species listed only by stage takes no plain entry, and one listed
+// without a stage takes no stage (Dan's option a); a new stage of one listed by stage may be
+// added.
+RV.listConflict = function listConflict(record, stage) {
+  const listed = RV.catalogue.filter((e) => !e.pending);
+  const same = listed.find((e) => e.aphia_id && e.aphia_id === record.aphia_id);
+  const name = same ? same.name : record.name;
+  const stages = listed.filter((e) => e.name === name);
+  const at = (s) => stages.find((e) => (e.life_stage || null) === s);
+  const already = (e) => ({ message: `already on the list as ${e.common || e.name}`, uses: [e] });
+  if (at(stage)) return already(at(stage));
+  if (stages.length && !at(null) && stage === null) {
+    return { message: `pick a stage: ${stages.map((e) => e.life_stage).join(", ")}, or add a new one`,
+      uses: stages };
+  }
+  if (at(null) && stage !== null) return already(at(null));
+  return null;
+};
+
+RV.formCount = 0;   // each form's radio group gets its own name
+
+// The form, rendered into `container`: common name (optional), scientific name, stage, note,
+// "Check with WoRMS" (Enter in a field too), what WoRMS found, "Add and answer this box", and
+// "Species you added" with what became of each. Adding posts the record chosen, reloads the
+// species list (the new species is on it from now on) and calls `onCreated(entry)` with its
+// entry and suggestion_id, which answers the box. A species already listed is offered as
+// "Use …", which calls `onUse(entry)` with the listed entry instead; nothing is added. A
+// refusal from the server is shown in the form.
+RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
+  let busy = false;      // checking with WoRMS, or adding
+  let searched = null;   // the query the result shown answers: {scientific, common}
+  let shown = 0;         // bumped by each check and reset, so a stale answer is dropped
+  let chosen = null;     // the WoRMS record picked: always the accepted one
+  let picks = 0;         // bumped by each choice and reset, so a stale English name is dropped
+  let naming = false;    // the chosen record's English name is being asked for; Add waits
+  let filled = null;     // the common name the form last filled in itself
+  const group = `rv-worms-${++RV.formCount}`;
   const textInput = (name, attrs) => RV.el("input", { type: "text", name, class: "rv-field",
     autocomplete: "off", ...attrs });
   const common = textInput("common_name", { maxlength: "120" });
-  const scientific = textInput("scientific_name", { maxlength: "120", placeholder: "Genus species" });
+  const scientific = textInput("scientific_name", { maxlength: "160", placeholder: "Genus species" });
   const stage = RV.el("select", { name: "life_stage", class: "rv-field" },
     RV.el("option", { value: "", text: "none" }),
     RV.STAGES.map((s) => RV.el("option", { value: s, text: s })));
   const note = RV.el("textarea", { name: "note", class: "rv-field", rows: "2", maxlength: "500",
-    placeholder: "Anything that helps the admin check it" });
+    placeholder: "Anything that helps others check it" });
   const error = RV.el("p", { class: "rv-suggest-error", role: "alert", hidden: true });
-  const button = RV.el("button", { type: "submit", class: "rv-primary" }, "Add and answer this box");
+  const checkButton = RV.el("button", { type: "submit" }, "Check with WoRMS");
+  const result = RV.el("div", { class: "rv-worms", role: "status" });
+  const verdict = RV.el("div", { class: "rv-worms-verdict" });
+  const addButton = RV.el("button", { type: "button", class: "rv-primary", onclick: () => addSpecies() },
+    "Add and answer this box");
+  addButton.disabled = true;
   const mine = RV.el("div", { class: "rv-suggest-mine" });
   const field = (label, control) => RV.el("label", { class: "rv-suggest-field" },
     RV.el("span", { class: "rv-label", text: label }), control);
   const value = (control) => (control.value || "").trim() || null;
+  const name = (control) => (control.value || "").split(/\s+/).filter(Boolean).join(" ") || null;
+  const query = () => (name(scientific) ? { scientific: name(scientific), common: null }
+    : { scientific: null, common: name(common) });
   const say = (message) => { error.textContent = message || ""; error.hidden = !message; };
 
-  async function addSpecies(ev) {
-    ev.preventDefault();
+  // The common name the form filled in named the record chosen before; once another is chosen,
+  // or a new check starts, it is cleared, so without an English name for the next one its
+  // scientific name is listed, not the last one's common name (final review I1). A common name
+  // the reviewer typed is never cleared.
+  function unfill() {
+    if (filled !== null && name(common) === filled) common.value = "";
+    filled = null;
+  }
+
+  function reset() {
+    shown += 1;
+    picks += 1;
+    searched = null;
+    chosen = null;
+    naming = false;
+    unfill();
+    result.replaceChildren();
+    verdict.replaceChildren();
+    addButton.disabled = true;
+  }
+
+  // A change to the name the result shown was searched by makes it stale -- not a change to
+  // the common name once that is the name to be listed: beside a scientific-name search, or
+  // once a record is chosen.
+  function edited() {
+    if (searched === null) return;
+    if (name(scientific) !== searched.scientific
+        || (!searched.scientific && !chosen && name(common) !== searched.common)) reset();
+  }
+
+  // Choosing a record. Nothing reviews an addition, so a search fragment ("spotted goat")
+  // must not become a species' name on everyone's list: the common name is filled in with
+  // WoRMS's English one, in Title Case, when the field is the form's to fill -- empty, still
+  // the text a common-name search was run with, or what the form put there itself (cleared
+  // first: it named the record chosen before). Add waits for it. With no English name from
+  // WoRMS the field is left as it is; it stays editable.
+  const fillable = () => {
+    const now = name(common);
+    return !now || now === (searched && searched.common) || now === filled;
+  };
+  const titleCase = (s) => s.replace(/(^|\s)(\S)/g, (m, space, first) => space + first.toUpperCase());
+  async function choose(rec) {
+    const pick = ++picks;
+    chosen = rec;
+    unfill();
+    naming = fillable();
+    judge();
+    if (!naming) return;
+    const english = await RV.worms.englishName(rec.aphia_id);
+    if (pick !== picks) return;   // another record chosen, or the result cleared, since
+    naming = false;
+    if (english && fillable()) {
+      common.value = titleCase(english);
+      filled = name(common);
+    }
+    judge();
+  }
+
+  // "Name Authority · Family", the name in italics.
+  const recordText = (rec) => [RV.el("i", { text: rec.name }), rec.authority ? ` ${rec.authority}` : null,
+    rec.family ? ` · ${rec.family}` : null];
+  const wormsLink = (rec) => RV.el("a", { href: rec.url, target: "_blank", rel: "noopener noreferrer",
+    text: "WoRMS ↗" });
+  const SAY = {
+    none: "WoRMS doesn't know this name. Check the spelling, or answer Can't identify for now.",
+    genus: "pick a species, not a genus",
+    down: "WoRMS isn't answering right now; try again in a minute, or answer Can't identify for now.",
+  };
+
+  function showFound(found) {
+    const parts = [];
+    if (found.note) parts.push(RV.el("p", { class: "rv-worms-note", text: found.note }));
+    if (found.status === "match") {
+      const rec = found.records[0];
+      parts.push(RV.el("p", { class: "rv-worms-match" }, "✓ ", recordText(rec), " ", wormsLink(rec)));
+      choose(rec);
+    } else if (found.status === "choose") {
+      parts.push(RV.el("p", { text: "Did you mean?" }),
+        RV.el("ul", { class: "rv-worms-choices" }, found.records.map((rec) => RV.el("li", {
+          class: "rv-worms-choice" },
+        RV.el("label", {},
+          RV.el("input", { type: "radio", name: group, value: String(rec.aphia_id),
+            onchange: () => choose(rec) }),
+          recordText(rec)),
+        " ", wormsLink(rec)))));
+    } else {
+      parts.push(RV.el("p", { class: "rv-suggest-error", text: SAY[found.status] }));
+    }
+    result.replaceChildren(...parts);
+  }
+
+  // What the list rules say to the chosen record at the stage chosen, and "Use …" for the
+  // listed choices it names: "already on the list as X" offers "Use X"; "pick a stage" names
+  // each listed stage on its button. `hint`, if any, says what the reviewer can do instead.
+  function showConflict(message, uses, hint) {
+    const label = (e) => {
+      const base = e.common || e.name;
+      if (message.startsWith("already on the list as ") || !e.life_stage) return base;
+      return base.toLowerCase().includes(e.life_stage) ? base : `${base} (${e.life_stage})`;
+    };
+    // The nulls are left out: replaceChildren() would show each as the word "null" (browser
+    // walk with the real WoRMS, 2026-11-21).
+    verdict.replaceChildren(...[RV.el("p", { text: message }),
+      uses.length ? RV.el("div", { class: "rv-row" }, uses.map((e) => RV.el("button", { type: "button",
+        onclick: () => { if (!busy) onUse(e); } }, `Use ${label(e)}`))) : null,
+      hint ? RV.el("p", { class: "rv-muted", text: hint }) : null].filter(Boolean));
+  }
+
+  function judge() {
+    verdict.replaceChildren();
+    addButton.disabled = true;
+    if (!chosen) return;
+    const conflict = RV.listConflict(chosen, value(stage));
+    if (conflict) { showConflict(conflict.message, conflict.uses); return; }
+    addButton.disabled = busy || naming;
+  }
+
+  async function checkName(ev) {
+    if (ev) ev.preventDefault();
     if (busy) return;
-    const body = { common_name: value(common), scientific_name: value(scientific),
-      life_stage: value(stage), note: value(note) };
-    if (!body.common_name) { say("write the fish's common name"); common.focus(); return; }
+    const q = query();
+    if (!q.scientific && !q.common) {
+      say("write the fish's common name or its scientific name");
+      common.focus();
+      return;
+    }
     busy = true;
-    button.disabled = true;
+    checkButton.disabled = true;
+    say(null);
+    if (q.common) filled = null;   // a filled name searched by is the reviewer's search text now
+    reset();
+    const mark = shown;
+    searched = q;
+    result.replaceChildren(RV.el("p", { class: "rv-muted", text: "Asking WoRMS…" }));
     try {
-      const r = await RV.post("/api/review/species-suggestions", body);
-      if (!r.ok) { say(r.data.error || "That species wasn't added. Try again."); return; }
-      say(null);
-      await RV.loadCatalogue();
-      await onCreated(r.data);
+      const found = await RV.worms.check(q);
+      if (mark === shown) showFound(found);
     } finally {
       busy = false;
-      button.disabled = false;
+      checkButton.disabled = false;
+      if (mark === shown) judge();
+    }
+  }
+
+  // The server said no. A 409 may mean the list changed since the page read it (another
+  // reviewer added the same species a moment ago), so the list is reloaded and what is listed
+  // now offered. Answers whether Add may be tried again: not for a choice the list now holds;
+  // yes after a refusal the page can't see coming (a common name another choice already has,
+  // say: the reviewer may change it), or a failure to reach the server. "Use X" is offered
+  // only when X is the species WoRMS matched: a shared common name says nothing about that,
+  // and one click would label the box as another species.
+  async function refused(r, record, lifeStage) {
+    if (r.status !== 400 && r.status !== 409) {
+      say(r.status === 0 || !r.data.error ? "That species wasn't added. Try again." : r.data.error);
+      return true;
+    }
+    if (r.status === 409) await RV.loadCatalogue();
+    const conflict = RV.listConflict(record, lifeStage);
+    if (conflict) { showConflict(conflict.message, conflict.uses); return false; }
+    const listedAs = /^already on the list as (.+)$/.exec(r.data.error || "");
+    const named = listedAs ? RV.catalogue.filter((e) => !e.pending && (e.common || e.name) === listedAs[1]) : [];
+    const same = named.filter((e) => (e.aphia_id ? e.aphia_id === record.aphia_id : e.name === record.name));
+    const use = same.find((e) => (e.life_stage || null) === lifeStage) || same[0];
+    if (use || !named.length) {
+      showConflict(r.data.error || "That species wasn't added.", use ? [use] : []);
+    } else {
+      showConflict(`${r.data.error} (${named[0].name})`, [], "Give this species another common name to add it.");
+    }
+    return true;
+  }
+
+  async function addSpecies() {
+    if (!chosen || naming || busy) return;
+    const record = chosen;
+    const lifeStage = value(stage);
+    if (RV.listConflict(record, lifeStage)) { judge(); return; }
+    busy = true;
+    addButton.disabled = true;
+    checkButton.disabled = true;
+    say(null);
+    let again = false;
+    try {
+      const r = await RV.post("/api/review/species-suggestions", { aphia_id: record.aphia_id,
+        scientific_name: record.name, family: record.family, common_name: name(common) || record.name,
+        life_stage: lifeStage, note: value(note) });
+      if (!r.ok) { again = await refused(r, record, lifeStage); return; }
+      await RV.loadCatalogue();
+      const entry = RV.byKey.get(r.data.key) || r.data;
+      await onCreated({ ...entry, suggestion_id: r.data.suggestion_id });
+    } finally {
+      busy = false;
+      checkButton.disabled = false;
+      addButton.disabled = !again;
     }
   }
 
   function mineItem(s) {
     let what = s.status_text;
     if (s.status_text === "added" && s.approved_common && s.approved_common !== s.common_name) {
-      what += ` as ${s.approved_common}`;
-    } else if (s.status_text === "not added") {
-      what += `; your answers now say ${s.rejected_to_name
+      what += ` as ${s.approved_common}`;   // an ai #49 suggestion an admin renamed
+    } else if (s.status_text === "removed") {
+      what += `; its answers now say ${s.rejected_to_name
         ? RV.listedName(s.rejected_to_name, s.rejected_to_stage) : "can't identify"}`;
     }
-    const suggested = s.life_stage ? `${s.common_name} (${s.life_stage})` : s.common_name;
+    const added = s.life_stage ? `${s.common_name} (${s.life_stage})` : s.common_name;
     return RV.el("li", {},
-      RV.el("span", { class: "rv-common", text: suggested }),
+      RV.el("span", { class: "rv-common", text: added }),
       ` · ${what}`,
       s.decision_note ? RV.el("div", { class: "rv-muted", text: s.decision_note }) : null);
   }
@@ -332,28 +556,32 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated) {
     const r = await RV.get("/api/review/species-suggestions/mine");
     const list = (r.ok && r.data.suggestions) || [];
     if (list.length) {
-      mine.replaceChildren(RV.el("div", { class: "rv-label", text: "Your suggestions" }),
+      mine.replaceChildren(RV.el("div", { class: "rv-label", text: "Species you added" }),
         RV.el("ul", {}, list.map(mineItem)));
     }
   }
 
+  common.addEventListener("input", edited);
+  scientific.addEventListener("input", edited);
+  stage.addEventListener("change", () => { if (!busy) judge(); });
   container.replaceChildren(
-    RV.el("form", { class: "rv-suggest-form", onsubmit: addSpecies },
+    RV.el("form", { class: "rv-suggest-form", onsubmit: checkName },
       RV.el("p", { class: "rv-muted rv-small",
-        text: "An admin checks each new species. Until then it is only in your list, marked “waiting for approval”." }),
-      field("Common name", common),
-      field("Scientific name (optional)", scientific),
-      field("Life stage or phase", stage),
+        text: "Write either name and check it with WoRMS, the World Register of Marine Species. A species it knows joins everyone's list at once." }),
+      field("Common name (optional)", common),
+      field("Scientific name", scientific),
+      field("Stage or phase", stage),
       field("Note (optional)", note),
-      error, button),
+      checkButton, error, result, verdict, addButton),
     mine);
   showMine();
   common.focus();
 };
 
-// "Not on the list? Add a species" under the picker, and the form it opens (built on
-// first open). `onCreated(entry)` answers the box with the new species.
-RV.addSpeciesBlock = function addSpeciesBlock(onCreated) {
+// "Not on the list? Add a species" under the picker, and the form it opens (built on first
+// open). `onCreated(entry)` answers the box with the new species; `onUse(entry)` with a listed
+// one the form offers instead.
+RV.addSpeciesBlock = function addSpeciesBlock(onCreated, onUse) {
   const form = RV.el("div", { class: "rv-suggest", hidden: true });
   let built = false;
   const link = RV.el("button", { type: "button", class: "rv-link rv-add-species", "aria-expanded": "false",
@@ -362,7 +590,7 @@ RV.addSpeciesBlock = function addSpeciesBlock(onCreated) {
       link.setAttribute("aria-expanded", String(!form.hidden));
       if (!form.hidden && !built) {
         built = true;
-        RV.suggestSpecies(form, onCreated);
+        RV.suggestSpecies(form, onCreated, onUse);
       }
     } }, "Not on the list? Add a species");
   return RV.el("div", { class: "rv-add" }, link, form);

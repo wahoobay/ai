@@ -1,19 +1,28 @@
-"""Species a reviewer adds because the list lacks them (spec 2026-11-21, "The species list").
+"""Species a reviewer adds because the list lacks them (spec 2026-11-21-species-worms-check).
 
-A suggestion waits ('pending') until an admin approves or rejects it. While it waits only its
-suggester, and admins, can pick it (pending_entries). Once approved it joins everyone's list:
-merged_catalogue() is the file-built catalogue plus every approved suggestion. The dashboard
-keeps no state between requests and may run as several instances, so each request reads a
-cheap stamp of the approved set and the merge is rebuilt only when the stamp changes.
+The reviewer's browser checks the name against WoRMS; create_suggestion applies the list rules
+and inserts the row already 'approved', with the WoRMS record chosen (aphia_id, family), so it
+joins everyone's list at once: merged_catalogue() is the file-built catalogue plus every approved
+row. The dashboard keeps no state between requests and may run as several instances, so each
+request reads a cheap stamp of the approved set and the merge is rebuilt only when it changes.
 
 Duplicates are judged on name and stage together, the scientific name mapped through the
-taxonomy first; a new stage of a listed species is a new choice.
+taxonomy first, and an AphiaID a listed entry carries names that entry. How a listed species is
+staged is not one reviewer's to change (Dan's option a): no plain entry for a species listed
+only with stages, no stage for one listed without. A new stage of a species listed with stages
+is a new choice.
 
-An admin's decision settles the answers linked to a suggestion in place ("Approving and
-rejecting"): approval gives them the approved name and stage, rejection the listed species it
-really is or can't-identify. They keep label_source 'suggested' and their link, and the row keeps
-what was suggested, so the trail survives. "Not this species" (detach) turns one box's answers
-into can't-identify and unlinks them before the rest are decided.
+An admin can remove an addition (remove_addition): every answer naming the choice, whoever gave
+it, and every live box a volunteer drew with it, becomes the listed choice it really is or
+can't-identify, and the row turns 'rejected', so the choice leaves the list.
+
+Suggestions made under ai #49 waited ('pending') for an admin, and only their suggester, and
+admins, could pick them (pending_entries). Any left over are still decided that way ("Approving
+and rejecting", spec 2026-11-21-reviewer-species-suggestions): approval gives the answers linked
+to one the approved name and stage, rejection the listed species it really is or can't-identify.
+They keep label_source 'suggested' and their link, and the row keeps what was suggested, so the
+trail survives. "Not this species" (detach) turns one box's answers into can't-identify and
+unlinks them before the rest are decided.
 """
 
 from __future__ import annotations
@@ -38,16 +47,18 @@ STAGES: tuple[str | None, ...] = (
     "terminal phase",
 )
 
-STATUS_TEXT = {"pending": "waiting for approval", "approved": "added", "rejected": "not added"}
+STATUS_TEXT = {"pending": "waiting for approval", "approved": "added", "rejected": "removed"}
 
-_SCIENTIFIC = re.compile(r"^[A-Z][a-z]+(?: [a-z]+(?:-[a-z]+)?){0,2}$")
-
-# One reviewer's suggestions are made one at a time, so a double submit cannot slip two
-# identical pending rows past the duplicate check (namespaced, transaction-scoped, as
-# review_queue.EVENT_LOCK_SQL).
-_SUGGESTER_LOCK_SQL = (
-    "SELECT pg_advisory_xact_lock(hashtextextended('species-suggestion:' || %s::text, 0))"
+# Genus, an optional subgenus in parentheses as WoRMS writes it, species, optional subspecies.
+_SCIENTIFIC = re.compile(
+    r"^[A-Z][a-z]+(?: \([A-Z][a-z]+\))? [a-z]+(?:-[a-z]+)?(?: [a-z]+(?:-[a-z]+)?)?$"
 )
+_GENUS = re.compile(r"^[A-Z][a-z]+$")
+
+# Additions of one species are made one at a time, so two reviewers adding the same choice at
+# nearly the same moment cannot both pass the duplicate check (namespaced, transaction-scoped,
+# as review_queue.EVENT_LOCK_SQL).
+_ADD_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('species-add:' || %s::text))"
 
 _ENTRY_COLUMNS = "id, common_name, scientific_name, life_stage"
 
@@ -60,10 +71,12 @@ _MINE_KEYS = (
     "rejected_to_name",
     "rejected_to_stage",
     "approved_common",
+    "aphia_id",
 )
 
 
 DECIDED_SHOWN = 50  # the admin panel's history of decided suggestions
+ADDITIONS_SHOWN = 200  # the admin panel's list of additions
 
 # A can't-identify answer names nothing: no species, stage or individual, and it is 'certain'
 # (validate_label refuses 'not sure' and a named individual without a species).
@@ -71,10 +84,27 @@ _CANT_IDENTIFY = """unidentifiable = true, corrected_name = NULL, corrected_spec
                     life_stage = NULL, is_endorsement = false, confidence = 'certain',
                     celebrity_id = NULL"""
 
+# The answers (detection_corrections c) a decision rewrites: those linked to a suggestion, for
+# a #49 leftover, or every one naming a choice, for an addition. An answer linked to a #49
+# leftover still pending can name the same choice (its provisional name); it is that
+# suggestion's decision to settle, under its lock, so _NAMING leaves it alone. One linked to a
+# decided suggestion (rejected "as" an addition, say) is an ordinary answer. The drawn boxes
+# (review_added_boxes b) naming a choice: they carry no link.
+_LINKED = "c.species_suggestion_id = %(sid)s"
+_NAMING = """c.corrected_name = %(was_name)s AND c.life_stage IS NOT DISTINCT FROM %(was_stage)s
+             AND NOT EXISTS (SELECT 1 FROM species_suggestions p
+                              WHERE p.id = c.species_suggestion_id AND p.status = 'pending')"""
+_DRAWN_NAMING = """b.removed_at IS NULL AND b.label = %(was_name)s
+                   AND b.life_stage IS NOT DISTINCT FROM %(was_stage)s"""
+
 
 class SuggestionIn(BaseModel):
-    common_name: str = Field(..., min_length=1, max_length=120)
-    scientific_name: str | None = Field(None, max_length=120)
+    """The WoRMS record the reviewer chose, and the common name, stage and note they gave."""
+
+    aphia_id: int = Field(..., gt=0, lt=2**31)  # the column is an INTEGER
+    scientific_name: str = Field(..., min_length=1, max_length=160)  # WoRMS's accepted name
+    family: str | None = Field(None, max_length=120)
+    common_name: str | None = Field(None, max_length=120)
     life_stage: str | None = Field(None, max_length=40)
     note: str | None = Field(None, max_length=500)
 
@@ -123,11 +153,14 @@ def _note(raw: str | None) -> str | None:
 
 
 def clean_scientific(raw: str | None) -> str | None:
-    """'  Gymnothorax   moringa ' -> 'Gymnothorax moringa'; None for nothing given."""
+    """'  Gymnothorax   moringa ' -> 'Gymnothorax moringa'; None for nothing given. A genus
+    alone is refused: only a species can be a choice."""
     name = _squash(raw)
-    if name is not None and not _SCIENTIFIC.fullmatch(name):
-        raise Invalid("write the scientific name as Genus species")
-    return name
+    if name is None or _SCIENTIFIC.fullmatch(name):
+        return name
+    if _GENUS.fullmatch(name):
+        raise Invalid("pick a species, not a genus")
+    raise Invalid("write the scientific name as Genus species")
 
 
 def provisional_name(row: dict, catalogue) -> str:
@@ -160,58 +193,111 @@ def _listed_as(entry: CatalogueEntry) -> Conflict:
     return Conflict(f"already on the list as {entry.common_name or entry.name}")
 
 
-def _listed_by_common_name(catalogue, common: str, stage: str | None) -> CatalogueEntry | None:
-    """The listed choice a common name and stage already are (Ruling X1), judged on species
-    and stage together: an entry with exactly this common name at this stage, or a species
-    whose own common name is this one, stage words taken out, listed at this stage. A
-    stage a listed species lacks is a new choice, even typed as its plain common name."""
+def _refuse_by_stage(listed: dict[str | None, CatalogueEntry], stage: str | None) -> None:
+    """The list rules on one species' stages, `listed` being its listed entries by stage, in
+    list order: the same choice is refused, and so (Dan's option a) are a plain entry for a
+    species listed only with stages and a stage for one listed without."""
+    if stage in listed:
+        raise _listed_as(listed[stage])
+    if listed and None not in listed and stage is None:
+        raise Conflict(f"pick a stage: {', '.join(s for s in listed if s)}, or add a new one")
+    if None in listed and stage is not None:
+        raise _listed_as(listed[None])
+
+
+def _listed_by_common_name(
+    catalogue, common: str, name: str, stage: str | None
+) -> CatalogueEntry | None:
+    """The listed choice of another species than `name` that already goes by this common name
+    (Ruling X1, final review I2): a listed species' common name is its own at every stage, or
+    the picker would show one name for two species. Found when the name is exactly one of
+    that species' entries' common names, or, stage words taken out, its own common name; the
+    entry named is then the one with that name, or else the species' entry at `stage`, its
+    stage-less one, or its first. The species `name` itself is left to create_suggestion's
+    staging rules: a new stage of it may carry its common name."""
     folded = common.casefold()
     for e in catalogue.entries:
-        if e.life_stage == stage and (_squash(e.common_name) or "").casefold() == folded:
+        if e.name != name and (_squash(e.common_name) or "").casefold() == folded:
             return e
     plain = without_stage_words(common).casefold()
     if not plain:
         return None
-    for name in catalogue.names():
-        if (catalogue.common_name(name) or "").casefold() == plain:
-            listed = catalogue.entry(name, stage)
-            if listed is not None:
-                return listed
+    for other in catalogue.names():
+        if other != name and (catalogue.common_name(other) or "").casefold() == plain:
+            return (
+                catalogue.entry(other, stage)
+                or catalogue.entry(other, None)
+                or catalogue.entry(other, catalogue.stages(other)[0])
+            )
     return None
 
 
 async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dict:
-    """Record `user`'s suggestion, pending, and return its picker entry."""
+    """Add the species `user` chose from WoRMS to everyone's list at once, already approved,
+    unless the list rules refuse it, and return the new choice. `catalogue` is the merged one,
+    read before the lock: the stage rules are checked again under it, with the additions
+    committed since."""
     stage = _stage(body.life_stage)
-    common = _common(body.common_name)
     scientific = clean_scientific(body.scientific_name)
-    if scientific is not None:
-        listed = catalogue.entry(catalogue.accepted(scientific), stage)
-        if listed is not None:
-            raise _listed_as(listed)
-    listed = _listed_by_common_name(catalogue, common, stage)
-    if listed is not None:
-        raise _listed_as(listed)
-    folded = common.casefold()
+    if scientific is None:
+        raise Invalid("write the scientific name as Genus species")
+    name = next(
+        (e.name for e in catalogue.entries if e.aphia_id == body.aphia_id),
+        catalogue.accepted(scientific),
+    )
+    listed = {s: catalogue.entry(name, s) for s in catalogue.stages(name)}
+    _refuse_by_stage(listed, stage)
+    common = _squash(body.common_name) or scientific
+    by_common = _listed_by_common_name(catalogue, common, name, stage)
+    if by_common is not None:
+        raise _listed_as(by_common)
     async with conn.transaction():
-        await conn.execute(_SUGGESTER_LOCK_SQL, (user.id,))
-        waiting = await fetch_all(
+        await conn.execute(_ADD_LOCK_SQL, (name,))
+        added = await fetch_all(
             conn,
-            """SELECT common_name, life_stage FROM species_suggestions
-                WHERE suggested_by = %s AND status = 'pending'""",
-            (user.id,),
+            """SELECT approved_stage, approved_common FROM species_suggestions
+                WHERE status = 'approved' AND approved_name = %s
+                ORDER BY decided_at, id""",
+            (name,),
         )
-        if any(r["common_name"].casefold() == folded and r["life_stage"] == stage for r in waiting):
-            raise Conflict("you already suggested this; it is waiting for approval")
+        for r in added:
+            listed.setdefault(
+                r["approved_stage"],
+                CatalogueEntry(
+                    name=name, life_stage=r["approved_stage"], common_name=r["approved_common"]
+                ),
+            )
+        _refuse_by_stage(listed, stage)
         row = await fetch_one(
             conn,
-            f"""INSERT INTO species_suggestions (common_name, scientific_name, life_stage, note,
-                                                 suggested_by, location_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING {_ENTRY_COLUMNS}""",
-            (common, scientific, stage, _note(body.note), user.id, location_id()),
+            """INSERT INTO species_suggestions
+                       (common_name, scientific_name, life_stage, note, suggested_by,
+                        location_id, aphia_id, family, status, approved_name, approved_common,
+                        approved_stage, decided_at, decided_by, decision_note)
+                VALUES (%(common)s, %(scientific)s, %(stage)s, %(note)s, %(uid)s,
+                        %(location)s, %(aphia_id)s, %(family)s, 'approved', %(name)s, %(common)s,
+                        %(stage)s, now(), NULL, %(decision_note)s)
+                RETURNING id""",
+            {
+                "common": common,
+                "scientific": scientific,
+                "stage": stage,
+                "note": _note(body.note),
+                "uid": user.id,
+                "location": location_id(),
+                "aphia_id": body.aphia_id,
+                "family": _squash(body.family),
+                "name": name,
+                "decision_note": f"WoRMS AphiaID {body.aphia_id}",
+            },
         )
-    return entry_json(row, catalogue)
+    return {
+        "key": f"{name}|{stage or ''}",
+        "name": name,
+        "life_stage": stage,
+        "common": common,
+        "suggestion_id": row["id"],
+    }
 
 
 async def pending_entries(conn, *, user, catalogue) -> list[dict]:
@@ -285,7 +371,9 @@ async def list_mine(conn, *, user) -> list[dict]:
 # Each decision locks the suggestion row first and takes no event lock: submit_verdict locks
 # the event, then its review item, then the suggestion, so an event lock taken after the
 # suggestion's could deadlock against it. The suggestion's lock alone is enough here, because
-# every answer that links to a suggestion is written under it.
+# every answer that links to a suggestion is written under it, and every answer or drawn box
+# naming an addition is written under its row's FOR SHARE lock (review_queue.hold_addition,
+# Ruling W2): one landing first is moved by the decision, one waiting is refused after it.
 
 
 async def _lock_pending(conn, suggestion_id: int) -> dict:
@@ -299,35 +387,61 @@ async def _lock_pending(conn, suggestion_id: int) -> dict:
     return row
 
 
-async def _name_answers(conn, suggestion_id: int, name: str, stage: str | None, catalogue) -> int:
-    """Give every answer linked to the suggestion `name` at `stage`; is_endorsement is
-    recomputed against each box's model guess. A named individual stays only if it is recorded
-    for `name` (final review I4: the public gallery would list the box under them). Returns how
-    many answers changed."""
+async def _name_answers(
+    conn, where: str, params: dict, name: str, stage: str | None, catalogue
+) -> int:
+    """Give every answer `where` picks out (_LINKED or _NAMING, filled in from `params`) `name`
+    at `stage`, as a species answer: never also can't-identify or not-a-fish, which
+    resolve_all would read first. is_endorsement is recomputed against each box's model guess.
+    A named individual stays only if it is recorded for `name` (final review I4: the public
+    gallery would list the box under them). Returns how many answers changed."""
     rows = await fetch_all(
         conn,
-        """SELECT c.id, de.best_species_id FROM detection_corrections c
-             JOIN detection_events de ON de.id = c.event_id
-            WHERE c.species_suggestion_id = %s""",
-        (suggestion_id,),
+        f"""SELECT c.id, de.best_species_id FROM detection_corrections c
+              JOIN detection_events de ON de.id = c.event_id
+             WHERE {where}""",
+        params,
     )
     endorsed = [r["id"] for r in rows if catalogue.accepted(r["best_species_id"]) == name]
     cur = await conn.execute(
-        """UPDATE detection_corrections
-              SET corrected_name = %(name)s, corrected_species_id = %(name)s,
-                  life_stage = %(stage)s, is_endorsement = (id = ANY(%(endorsed)s::bigint[])),
-                  celebrity_id = CASE WHEN celebrity_id = ANY(%(celebrities)s::text[])
-                                      THEN celebrity_id END
-            WHERE species_suggestion_id = %(sid)s""",
+        f"""UPDATE detection_corrections c
+               SET corrected_name = %(name)s, corrected_species_id = %(name)s,
+                   unidentifiable = false, not_a_fish = false,
+                   life_stage = %(stage)s, is_endorsement = (c.id = ANY(%(endorsed)s::bigint[])),
+                   celebrity_id = CASE WHEN c.celebrity_id = ANY(%(celebrities)s::text[])
+                                       THEN c.celebrity_id END
+             WHERE {where}""",
         {
+            **params,
             "name": name,
             "stage": stage,
             "endorsed": endorsed,
             "celebrities": sorted(catalogue.celebrity_ids(name)),
-            "sid": suggestion_id,
         },
     )
     return cur.rowcount
+
+
+async def _unidentify_answers(conn, where: str, params: dict) -> int:
+    """Make every answer `where` picks out can't-identify; how many changed."""
+    cur = await conn.execute(
+        f"UPDATE detection_corrections c SET {_CANT_IDENTIFY} WHERE {where}", params
+    )
+    return cur.rowcount
+
+
+def _moved_to(body: RejectIn, catalogue) -> CatalogueEntry | None:
+    """The listed choice a rejection or removal moves the answers to, from the merged
+    `catalogue` (Ruling P3); None for can't-identify."""
+    label = _squash(body.as_label)
+    if (label is not None) == body.unidentifiable:  # both, or neither
+        raise Invalid("say what it is, or that it can't be identified")
+    if label is None:
+        return None
+    entry = catalogue.entry(label, body.as_life_stage)
+    if entry is None:
+        raise Invalid("pick a species from the list")
+    return entry
 
 
 async def _record_decision(conn, suggestion_id: int, *, user, status: str, note, **columns):
@@ -356,7 +470,7 @@ async def approve(conn, *, user, suggestion_id: int, body: ApproveIn, catalogue)
         if listed is not None:
             x = listed.common_name or listed.name
             raise Conflict(f"already listed as {x}; reject it as 'it's actually {x}' instead")
-        answers = await _name_answers(conn, suggestion_id, name, stage, catalogue)
+        answers = await _name_answers(conn, _LINKED, {"sid": suggestion_id}, name, stage, catalogue)
         await _record_decision(
             conn,
             suggestion_id,
@@ -373,27 +487,16 @@ async def approve(conn, *, user, suggestion_id: int, body: ApproveIn, catalogue)
 async def reject(conn, *, user, suggestion_id: int, body: RejectIn, catalogue) -> dict:
     """Leave the suggestion off the list. Its answers become the listed choice it really is
     (`as_label` at `as_life_stage`, from the merged `catalogue`: Ruling P3) or can't-identify."""
-    label = _squash(body.as_label)
-    if (label is not None) == body.unidentifiable:  # both, or neither
-        raise Invalid("say what it is, or that it can't be identified")
-    entry = None
-    if label is not None:
-        entry = catalogue.entry(label, body.as_life_stage)
-        if entry is None:
-            raise Invalid("pick a species from the list")
+    entry = _moved_to(body, catalogue)
+    linked = {"sid": suggestion_id}
     async with conn.transaction():
         await _lock_pending(conn, suggestion_id)
         if entry is not None:
             answers = await _name_answers(
-                conn, suggestion_id, entry.name, entry.life_stage, catalogue
+                conn, _LINKED, linked, entry.name, entry.life_stage, catalogue
             )
         else:
-            cur = await conn.execute(
-                f"UPDATE detection_corrections SET {_CANT_IDENTIFY}"
-                " WHERE species_suggestion_id = %s",
-                (suggestion_id,),
-            )
-            answers = cur.rowcount
+            answers = await _unidentify_answers(conn, _LINKED, linked)
         await _record_decision(
             conn,
             suggestion_id,
@@ -422,6 +525,73 @@ async def detach(conn, *, user, suggestion_id: int, event_id: int) -> dict:
     return {"answers": cur.rowcount}
 
 
+async def _move_drawn(conn, params: dict, entry: CatalogueEntry | None, catalogue) -> int:
+    """Give every live drawn box naming the choice in `params` the listed `entry`, keeping a
+    named individual only if it is recorded for it, or make it can't-identify ('certain',
+    naming nothing, as a can't-identify answer). Returns how many boxes changed."""
+    if entry is None:
+        sets = """outcome = 'unidentifiable', label = NULL, life_stage = NULL,
+                  celebrity_id = NULL, confidence = 'certain'"""
+        values = {}
+    else:
+        sets = """label = %(name)s, life_stage = %(stage)s,
+                  celebrity_id = CASE WHEN b.celebrity_id = ANY(%(celebrities)s::text[])
+                                      THEN b.celebrity_id END"""
+        values = {
+            "name": entry.name,
+            "stage": entry.life_stage,
+            "celebrities": sorted(catalogue.celebrity_ids(entry.name)),
+        }
+    cur = await conn.execute(
+        f"UPDATE review_added_boxes b SET {sets}, updated_at = now() WHERE {_DRAWN_NAMING}",
+        {**params, **values},
+    )
+    return cur.rowcount
+
+
+async def remove_addition(
+    conn, *, user, suggestion_id: int, body: RejectIn, catalogue, base
+) -> dict:
+    """Take a reviewer's addition off the list. Every answer naming the choice, whoever gave it
+    and however it was picked, becomes the listed choice it really is (`as_label` at
+    `as_life_stage`, from the merged `catalogue`) or can't-identify, and so does every live box
+    a volunteer drew with it; the row turns 'rejected' and keeps where they went. A choice the
+    file catalogue `base` has gained since (the Species Log listing it) is the files', and is
+    not removed. Returns how many answers and drawn boxes changed."""
+    entry = _moved_to(body, catalogue)
+    async with conn.transaction():
+        row = await fetch_one(
+            conn, "SELECT * FROM species_suggestions WHERE id = %s FOR UPDATE", (suggestion_id,)
+        )
+        if row is None:
+            raise NotFound("no such species suggestion")
+        name, stage = row["approved_name"], row["approved_stage"]
+        if entry is not None and (entry.name, entry.life_stage) == (name, stage):
+            raise Invalid("pick a species from the list")  # "as" itself
+        if row["status"] != "approved":
+            raise Conflict("this species was already removed")
+        if base.entry(name, stage) is not None:
+            raise Conflict("this species is now on the Species Log")
+        naming = {"was_name": name, "was_stage": stage}
+        if entry is not None:
+            answers = await _name_answers(
+                conn, _NAMING, naming, entry.name, entry.life_stage, catalogue
+            )
+        else:
+            answers = await _unidentify_answers(conn, _NAMING, naming)
+        drawn = await _move_drawn(conn, naming, entry, catalogue)
+        await _record_decision(
+            conn,
+            suggestion_id,
+            user=user,
+            status="rejected",
+            note=body.note,
+            rejected_to_name=entry.name if entry else None,
+            rejected_to_stage=entry.life_stage if entry else None,
+        )
+    return {"answers": answers, "drawn": drawn}
+
+
 async def list_for_admin(conn, *, status: Literal["pending", "decided"]) -> list[dict]:
     """The admin panel's suggestions, newest first (by decision, once decided): every pending
     one, or the last DECIDED_SHOWN decided ones. Each has its columns, `suggested_by_name` and
@@ -438,6 +608,10 @@ async def list_for_admin(conn, *, status: Literal["pending", "decided"]) -> list
             LIMIT %(limit)s""",
         {"pending": status == "pending", "limit": None if status == "pending" else DECIDED_SHOWN},
     )
+    return _iso_times(rows)
+
+
+def _iso_times(rows: list[dict]) -> list[dict]:
     for r in rows:
         for key in ("created_at", "decided_at"):
             r[key] = r[key].isoformat() if r[key] is not None else None
@@ -486,6 +660,107 @@ async def suggestion_boxes(conn, *, suggestion_id: int, page: int, per_page: int
     }
 
 
+def worms_url(aphia_id: int) -> str:
+    return f"https://www.marinespecies.org/aphia.php?p=taxdetails&id={aphia_id}"
+
+
+async def list_additions(conn) -> list[dict]:
+    """The admin panel's species reviewers added (rows with a WoRMS record), newest first, the
+    last ADDITIONS_SHOWN. Each has its columns, `suggested_by_name`, `worms_url` and `answers`:
+    the boxes with an answer naming its choice plus the live boxes drawn with it. The answers
+    are counted in one pass over the table, not once per addition."""
+    rows = await fetch_all(
+        conn,
+        """WITH additions AS (
+               SELECT ss.*, u.display_name AS suggested_by_name
+                 FROM species_suggestions ss
+                 JOIN users u ON u.id = ss.suggested_by
+                WHERE ss.aphia_id IS NOT NULL
+                ORDER BY ss.created_at DESC, ss.id DESC
+                LIMIT %(limit)s
+           ), answered AS (
+               SELECT c.corrected_name AS name, c.life_stage AS stage,
+                      count(DISTINCT c.event_id) AS n
+                 FROM detection_corrections c
+                WHERE c.corrected_name IN (SELECT approved_name FROM additions)
+                  AND NOT EXISTS (SELECT 1 FROM species_suggestions p  -- as _NAMING
+                                   WHERE p.id = c.species_suggestion_id AND p.status = 'pending')
+                GROUP BY 1, 2
+           ), drawn AS (
+               SELECT b.label AS name, b.life_stage AS stage, count(*) AS n
+                 FROM review_added_boxes b
+                WHERE b.removed_at IS NULL
+                  AND b.label IN (SELECT approved_name FROM additions)
+                GROUP BY 1, 2
+           )
+           SELECT a.*, COALESCE(an.n, 0) + COALESCE(dr.n, 0) AS answers
+             FROM additions a
+             LEFT JOIN answered an
+                    ON an.name = a.approved_name AND an.stage IS NOT DISTINCT FROM a.approved_stage
+             LEFT JOIN drawn dr
+                    ON dr.name = a.approved_name AND dr.stage IS NOT DISTINCT FROM a.approved_stage
+            ORDER BY a.created_at DESC, a.id DESC""",
+        {"limit": ADDITIONS_SHOWN},
+    )
+    for r in rows:
+        r["worms_url"] = worms_url(r["aphia_id"])
+    return _iso_times(rows)
+
+
+async def addition_boxes(conn, *, suggestion_id: int, page: int, per_page: int = 24) -> dict:
+    """The boxes an addition's removal would move, `per_page` at a time: first each box with an
+    answer naming its choice (by event, with the latest such answer's reviewer), then each live
+    box drawn with it (by id, with who drew it)."""
+    row = await fetch_one(
+        conn,
+        "SELECT approved_name, approved_stage FROM species_suggestions WHERE id = %s",
+        (suggestion_id,),
+    )
+    if row is None:
+        raise NotFound("no such species suggestion")
+    naming = {"was_name": row["approved_name"], "was_stage": row["approved_stage"]}
+    total = await fetch_one(
+        conn,
+        f"""SELECT (SELECT count(DISTINCT c.event_id) FROM detection_corrections c
+                     WHERE {_NAMING})
+                 + (SELECT count(*) FROM review_added_boxes b WHERE {_DRAWN_NAMING}) AS n""",
+        naming,
+    )
+    rows = await fetch_all(
+        conn,
+        f"""SELECT drawn, id, who FROM (
+               (SELECT DISTINCT ON (c.event_id) false AS drawn, c.event_id AS id,
+                       COALESCE(u.display_name, c.reviewer) AS who
+                  FROM detection_corrections c
+                  LEFT JOIN users u ON u.id = c.user_id
+                 WHERE {_NAMING}
+                 ORDER BY c.event_id, c.created_at DESC, c.id DESC)
+               UNION ALL
+               (SELECT true, b.id, u.display_name
+                  FROM review_added_boxes b
+                  JOIN users u ON u.id = b.user_id
+                 WHERE {_DRAWN_NAMING})
+           ) boxes
+           ORDER BY drawn, id
+           LIMIT %(limit)s OFFSET %(offset)s""",
+        {**naming, "limit": per_page, "offset": page * per_page},
+    )
+    return {
+        "total": total["n"],
+        "boxes": [
+            {
+                "zoom_url": (
+                    f"/api/review/added/{r['id']}/zoom.jpg"
+                    if r["drawn"]
+                    else f"/api/review/boxes/{r['id']}/zoom.jpg"
+                ),
+                "by": r["who"],
+            }
+            for r in rows
+        ],
+    }
+
+
 # The last merge, as (key, base, merged). Holding `base` keeps its id(), part of the key,
 # from being reused by a later file catalogue while this entry stands.
 _merged: tuple | None = None
@@ -493,7 +768,9 @@ _merged: tuple | None = None
 
 async def merged_catalogue(conn, base: Catalogue) -> Catalogue:
     """`base` plus one entry per approved suggestion, rebuilt only when the approved set's
-    stamp (count, latest decided_at) or `base` changes.
+    stamp (count, latest decided_at, sum of ids) or `base` changes. The ids' sum is there
+    because the other two can repeat for another set (final review M4): an addition whose
+    transaction began before a removal's but committed after it.
 
     The reads run on `conn`, the connection the caller already holds (Ruling P1). If it was
     idle, they are rolled back afterwards: an implicit transaction left open would turn the
@@ -503,17 +780,18 @@ async def merged_catalogue(conn, base: Catalogue) -> Catalogue:
     try:
         stamp = await fetch_one(
             conn,
-            """SELECT count(*) AS n, max(decided_at) AS latest
+            """SELECT count(*) AS n, max(decided_at) AS latest, sum(id) AS ids
                  FROM species_suggestions WHERE status = 'approved'""",
         )
         if not stamp["n"]:
             return base
-        key = (id(base), stamp["n"], stamp["latest"])
+        key = (id(base), stamp["n"], stamp["latest"], stamp["ids"])
         if _merged is not None and _merged[0] == key:
             return _merged[2]
         rows = await fetch_all(
             conn,
-            """SELECT approved_name, approved_stage, approved_common FROM species_suggestions
+            """SELECT approved_name, approved_stage, approved_common, aphia_id, family
+                 FROM species_suggestions
                 WHERE status = 'approved' AND approved_name IS NOT NULL
                 ORDER BY decided_at, id""",
         )
@@ -538,5 +816,7 @@ def _approved_entries(base: Catalogue, rows: list[dict]) -> list[CatalogueEntry]
             e.aphia_id, e.rank, e.resolved = taxon.aphia_id, taxon.rank, taxon.resolved
             e.family, e.order = taxon.family, taxon.order
             e.class_, e.phylum = taxon.class_, taxon.phylum
+        elif r["aphia_id"] is not None:  # a species new to the list: the WoRMS record chosen
+            e.aphia_id, e.family, e.rank, e.resolved = r["aphia_id"], r["family"], "Species", True
         added[(name, stage)] = e
     return list(added.values())
