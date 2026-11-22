@@ -1822,6 +1822,49 @@ def test_reject_needs_a_choice(choice, body, tmp_path):
     assert out["reloaded"] == [True, True]
 
 
+DECIDED_ALREADY = {
+    "approve": 'button("Approve").on.click({});',
+    "reject": 'radio("cant").checked = true; button("Reject").on.click({});',
+    "detach": "notThis()[0].on.click({});",
+}
+
+
+@needs_node
+@pytest.mark.parametrize("action", ["approve", "reject", "detach"])
+def test_a_suggestion_decided_by_another_admin_reloads_the_lists(action, tmp_path):
+    """Final review (promoted minor): another admin decided it first, so the server answers
+    409 and the card is stale. The lists are reloaded, which drops it; the reason is a toast,
+    since the card that would have shown it is gone."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + f"""
+      const stubbed = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {{
+        if (!url.endsWith("/3/{action}")) return stubbed(url, opts);
+        calls.push({{ url, body: JSON.parse(opts.body) }});
+        globalThis.waiting = [];                       // the other admin's decision
+        return {{ status: 409, ok: false,
+          json: async () => ({{ error: "this suggestion was already decided" }}) }};
+      }};
+      await RV.views.browse.enter(); await settle();
+      {DECIDED_ALREADY[action]}
+      await settle();
+      return {{ heading: heading(), card: Boolean(find(admin(), (n) => n.className === "rv-sg")),
+        reloaded: askedAfter("/api/review/species-suggestions/3/{action}",
+          (u) => u === "/api/review/species-suggestions?status=pending"),
+        toast: document.getElementById("rv-toast").textContent }};
+    """,
+        tmp_path,
+    )
+    assert out == {
+        "heading": "New species (0 waiting)",
+        "card": False,
+        "reloaded": True,
+        "toast": "this suggestion was already decided",
+    }
+
+
 @needs_node
 def test_admins_see_the_waiting_count_on_the_browse_button(tmp_path):
     core = _read("review-core.js")

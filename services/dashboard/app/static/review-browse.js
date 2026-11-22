@@ -231,11 +231,21 @@ RV.views.browse = (() => {
   const formField = (label, control) => RV.el("label", { class: "rv-suggest-field" },
     RV.el("span", { class: "rv-label", text: label }), control);
 
+  // A 409 from Approve, Reject or "Not this species": another admin decided the suggestion
+  // first (or, on Approve, listed the same choice), so its card is stale. The lists are
+  // reloaded to replace it, and the reason goes to a toast, since the card's own alert line
+  // goes with it (final review).
+  async function reloadStale(r) {
+    RV.toast(r.data.error || "That suggestion was already decided.");
+    await loadAdmin();
+  }
+
   async function approveSuggestion(id, body, say) {
     if (busy) return;
     busy = true;
     try {
       const r = await RV.post(`/api/review/species-suggestions/${id}/approve`, body);
+      if (r.status === 409) { await reloadStale(r); return; }
       if (!r.ok) { say(r.data.error || "That wasn't saved."); return; }
       RV.toast(`Added ${body.common_name} to the species list.`);
       await RV.loadCatalogue();
@@ -250,6 +260,7 @@ RV.views.browse = (() => {
     busy = true;
     try {
       const r = await RV.post(`/api/review/species-suggestions/${id}/reject`, body);
+      if (r.status === 409) { await reloadStale(r); return; }
       if (!r.ok) { say(r.data.error || "That wasn't saved."); return; }
       RV.toast(`Not added; its answers now say ${body.unidentifiable
         ? "can't identify" : RV.listedName(body.as_label, body.as_life_stage)}.`);
@@ -266,6 +277,7 @@ RV.views.browse = (() => {
     busy = true;
     try {
       const r = await RV.post(`/api/review/species-suggestions/${id}/detach`, { event_id: eventId });
+      if (r.status === 409) { await reloadStale(r); return; }
       if (!r.ok) { RV.toast(r.data.error || "That wasn't saved."); return; }
       RV.toast("That box's answer now says can't identify.");
       await Promise.all([after(r.data.answers), loadGrid()]);
