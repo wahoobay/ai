@@ -43,6 +43,7 @@ from .review_queue import (
     validate_bbox,
     validate_label,
 )
+from .species_suggestions import PENDING_SUFFIX, pending_shown_answers
 
 
 class AddedBoxIn(BaseModel):
@@ -186,6 +187,7 @@ async def frame_state(
     )
     ids = [e["id"] for e in events]
     resolved = await resolve_all(conn, ids) if ids else {}
+    waiting = await pending_shown_answers(conn, resolved)
     items = (
         await fetch_all(
             conn,
@@ -308,6 +310,7 @@ async def frame_state(
             "outcome": None,
             "label": None,
             "common": None,
+            "pending_species": False,
             "status": None,
             "model": None,
             "hints": None,
@@ -320,6 +323,8 @@ async def frame_state(
                 common=catalogue.common_name(r.species),
                 status=r.status,
             )
+            if e["id"] in waiting:
+                box.update(common=f"{waiting[e['id']]}{PENDING_SUFFIX}", pending_species=True)
             if box["can_change"]:
                 # What a change made in the frame offers: the model's guess and
                 # the hints of the box's latest first-pass item, the same list

@@ -111,8 +111,9 @@ def test_frame_mutating_handlers_share_the_busy_guard(name):
 # no setting.) Loading the grid, the progress KPIs and the admin panels are
 # plain re-reads (same class as review-single.js's loadNext() and
 # review-frame.js's reload(), neither of which is in the lists above), so
-# only this one gets the guard.
-BROWSE_MUTATING_HANDLERS = ("adjudicate",)
+# only this one gets the guard. Since 2026-11-21 the new-species panel's
+# approve, reject and per-box "Not this species" share it too.
+BROWSE_MUTATING_HANDLERS = ("adjudicate", "approveSuggestion", "rejectSuggestion", "detachBox")
 
 
 @pytest.mark.parametrize("name", BROWSE_MUTATING_HANDLERS)
@@ -1085,3 +1086,857 @@ def test_the_frame_says_how_to_mark_the_rest_until_a_species_is_given(tmp_path):
     assert HINT in out["first"] and HINT in out["afterNone"]
     assert HINT not in out["afterSpecies"]
     assert "Mark the 2 unanswered boxes as Smallmouth grunt" in out["afterSpecies"]
+
+
+# ---- 2026-11-21: reviewers add a species from the picker and answer with it ----------
+# Spec 2026-11-21 (reviewer species suggestions), "Answering with a suggestion": POST the
+# suggestion, then the verdict. SUGGEST_STUB goes after FRAME_STUB: elements keep their
+# listeners and attributes (ELEMENT_STUB, shared with the Browse admin tests below), so a
+# test can click the link, fill the form and submit it.
+
+ELEMENT_STUB = r"""
+  const plainEl = document.createElement;
+  document.createElement = (tag) => Object.assign(plainEl(tag), {
+    on: {}, attrs: {}, focus() {}, select() {}, blur() {},
+    addEventListener(type, fn) { this.on[type] = fn; },
+    setAttribute(k, v) { this.attrs[k] = v; } });
+  const kids = (n) => (n && n.children) || [];
+  const textOf = (n) => (!n || typeof n !== "object") ? ""
+    : (n.textContent || n.text || "") + kids(n).map(textOf).join("");
+  const find = (n, pred) => {
+    if (!n || typeof n !== "object") return null;
+    if (pred(n)) return n;
+    for (const c of kids(n)) { const f = find(c, pred); if (f) return f; }
+    return null;
+  };
+  const attr = (root, k, v) => find(root, (n) => n.attrs && n.attrs[k] === v);
+  // What the picker in `root` offers for `query`.
+  const offered = (root, query) => {
+    const input = attr(root, "type", "search");
+    input.value = query;
+    input.on.input();
+    return textOf(attr(root, "role", "listbox"));
+  };
+"""
+
+SUGGEST_STUB = (
+    ELEMENT_STUB
+    + r"""
+  const ADD = "Not on the list? Add a species";
+  const addLink = (root) => find(root, (n) => n.tag === "button" && textOf(n) === ADD);
+  const submitForm = (root) => find(root, (n) => n.tag === "form").on.submit({ preventDefault() {} });
+  // Open the form under the picker in `root` and fill it in.
+  const openForm = (root, fields) => {
+    addLink(root).on.click({});
+    for (const [name, value] of Object.entries(fields || {})) attr(root, "name", name).value = value;
+  };
+  const ENTRY = { key: "suggestion:9", name: "Pseudupeneus maculatus", life_stage: "juvenile",
+    common: "Spotted Goatfish (waiting for approval)", suggestion_id: 9, pending: true,
+    in_species_log: false, in_classifier: false };
+  const listed = RV.catalogue.slice();
+  globalThis.suggestReply = { status: 200, data: ENTRY };
+  globalThis.mine = [];
+  const pageFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const reply = (status, data) => ({ status, ok: status < 400, json: async () => data });
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (url === "/api/review/species-suggestions") {
+      calls.push({ url, body });
+      await globalThis.gate;               // a test may hold the reply back
+      return reply(globalThis.suggestReply.status, globalThis.suggestReply.data);
+    }
+    if (url === "/api/review/species-suggestions/mine") {
+      calls.push({ url, body });
+      return reply(200, { suggestions: globalThis.mine });
+    }
+    if (url === "/api/review/species") {
+      calls.push({ url, body });
+      return reply(200, { species: [...listed, ENTRY] });
+    }
+    if (url === "/api/review/verdicts" && globalThis.verdictReply) {
+      calls.push({ url, body });
+      return reply(globalThis.verdictReply.status, globalThis.verdictReply.data);
+    }
+    return pageFetch(url, opts);
+  };
+  const sent = () => calls.filter((c) => c.body && !c.url.endsWith("/open"));
+  // A box the queue served to the single view.
+  const payload = (pass) => ({ item: { id: 11, event_id: 101, pass },
+    box: { bbox: [10, 10, 50, 50], model_bbox: [10, 10, 50, 50], saved_frame_id: 7 },
+    frame: { url: "/f.jpg", width: 1280, height: 720 }, zoom: { url: "/z.jpg", region: [0, 0, 200, 200] },
+    other_boxes: [], model: null, hints: [], counts_toward: null, editable: true });
+"""
+)
+
+SUGGESTION = {
+    "common_name": "Spotted Goatfish",
+    "scientific_name": "Pseudupeneus maculatus",
+    "life_stage": "juvenile",
+    "note": None,
+}
+SUGGESTED_ANSWER = {
+    "label": "Pseudupeneus maculatus",
+    "life_stage": "juvenile",
+    "label_source": "suggested",
+    "species_suggestion_id": 9,
+}
+FILLED = (
+    '{ common_name: " Spotted Goatfish ", scientific_name: "Pseudupeneus maculatus", '
+    'life_stage: "juvenile" }'
+)
+
+
+@needs_node
+def test_adding_a_species_answers_the_frame_box_with_it(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      await RV.views.frame.enter({{ savedFrameId: 7 }});    // box 1 is selected
+      const root = document.getElementById("rv-frame");
+      openForm(root, {FILLED});
+      submitForm(root); submitForm(root);                  // a double click sends it once
+      await settle();
+      const asked = calls.map((c) => c.url).filter((u) => u.startsWith("/api/review/species")
+        || u === "/api/review/verdicts");
+      return {{ sent: sent(), asked, m: key("m") }};
+    """,
+        tmp_path,
+    )
+    suggestion, verdict = out["sent"]
+    assert suggestion == {"url": "/api/review/species-suggestions", "body": SUGGESTION}
+    assert verdict == {
+        "url": "/api/review/verdicts",
+        "body": {
+            "event_id": 101,
+            "review_item_id": 11,
+            "outcome": "species",
+            **SUGGESTED_ANSWER,
+            "not_sure": False,
+        },
+    }
+    # Your suggestions are read when the form opens; the list is reloaded before answering.
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        "/api/review/species-suggestions",
+        "/api/review/species",
+        "/api/review/verdicts",
+    ]
+    assert out["m"] is False  # a species waiting for approval never marks the rest
+
+
+@needs_node
+def test_drawn_boxes_have_no_add_a_species_link(tmp_path):
+    src = _read("review-frame.js")
+    assert "RV.addSpeciesBlock(" in _function_body(src, "answerControls")
+    for name in ("addedPanel", "pickerAndButtons"):
+        body = _function_body(src, name)
+        assert "suggestSpecies" not in body and "addSpeciesBlock" not in body, name
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      RV.catalogue = [...listed, ENTRY];
+      const frameFetch = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {
+        const r = await frameFetch(url, opts);
+        if (!url.endsWith("/open")) return r;
+        const data = await r.json();
+        data.added = [{ id: 5, bbox: [400, 300, 480, 360], mine: true, by: "you", outcome: "species",
+          label: "Haemulon chrysargyreum", common: "Smallmouth grunt", life_stage: null,
+          not_sure: false, zoom_url: "/a.jpg" }];
+        return { status: 200, ok: true, json: async () => data };
+      };
+      await RV.views.frame.enter({ savedFrameId: 7 });    // box 1, drawn by the model
+      const root = document.getElementById("rv-frame");
+      const model = { link: Boolean(addLink(root)), offers: offered(root, "spotted") };
+      find(root, (n) => n.tag === "li" && textOf(n).startsWith("+ drawn by you")).on.click({});
+      const drawnBox = { link: Boolean(addLink(root)), offers: offered(root, "spotted") };
+      return { model, drawnBox };
+    """,
+        tmp_path,
+    )
+    assert out["model"] == {
+        "link": True,
+        "offers": "Spotted Goatfish (waiting for approval)Pseudupeneus maculatus · juvenile",
+    }
+    assert out["drawnBox"] == {"link": False, "offers": ""}
+
+
+@needs_node
+def test_picking_a_pending_entry_answers_with_its_suggestion(tmp_path):
+    out = run_node(
+        [_read("review-core.js")],
+        """
+      return [RV.answerExtra({ pending: true, suggestion_id: 4, name: "x", life_stage: null }),
+        RV.answerExtra({ key: "Haemulon plumierii|", name: "Haemulon plumierii", life_stage: null },
+          "hint")];
+    """,
+        tmp_path,
+    )
+    assert out == [
+        {"label": "x", "life_stage": None, "label_source": "suggested", "species_suggestion_id": 4},
+        {"label": "Haemulon plumierii", "life_stage": None, "label_source": "hint"},
+    ]
+    assert "RV.answerExtra(entry, source)" in _function_body(
+        _read("review-single.js"), "pickSpecies"
+    )
+    assert "RV.answerExtra(entry, source)" in _function_body(
+        _read("review-frame.js"), "answerControls"
+    )
+
+
+@needs_node
+def test_the_form_shows_the_server_refusal(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      globalThis.suggestReply = { status: 409, data: { error: "already on the list as Bluefish" } };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const root = document.getElementById("rv-frame");
+      openForm(root, { common_name: "   " });
+      submitForm(root); await settle();                    // no common name: nothing is sent
+      const alert = attr(root, "role", "alert");
+      const empty = { said: alert.textContent, shown: !alert.hidden, sent: sent().length };
+      attr(root, "name", "common_name").value = "Bluefish";
+      submitForm(root); await settle();
+      const button = find(root, (n) => n.tag === "button" && textOf(n) === "Add and answer this box");
+      return { empty, said: alert.textContent, shown: !alert.hidden, sent: sent(),
+        ready: !button.disabled };
+    """,
+        tmp_path,
+    )
+    assert out["empty"] == {"said": "write the fish's common name", "shown": True, "sent": 0}
+    assert out["said"] == "already on the list as Bluefish" and out["shown"]
+    assert [c["url"] for c in out["sent"]] == ["/api/review/species-suggestions"]  # no verdict
+    assert out["ready"]  # the button works again
+
+
+def test_the_add_species_form_is_busy_guarded():
+    _assert_busy_guarded(_function_body(_read("review-core.js"), "addSpecies"), "addSpecies")
+
+
+@needs_node
+def test_your_suggestions_say_what_became_of_each(tmp_path):
+    out = run_node(
+        [_read("review-core.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      RV.catalogue = [...listed, { key: "Coryphopterus glaucofraenum|", name: "Coryphopterus glaucofraenum",
+        common: "Bridled Goby", life_stage: null }];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      const none = { scientific_name: null, life_stage: null, decision_note: null, rejected_to_name: null,
+        rejected_to_stage: null, approved_common: null };
+      globalThis.mine = [
+        { ...none, id: 4, common_name: "Spotted Goatfish", life_stage: "juvenile",
+          status_text: "waiting for approval" },
+        { ...none, id: 3, common_name: "spotted goatfish", status_text: "added",
+          approved_common: "Spotted Goatfish" },
+        { ...none, id: 2, common_name: "Banded goby", status_text: "not added",
+          rejected_to_name: "Coryphopterus glaucofraenum", decision_note: "It's a bridled goby." },
+        { ...none, id: 1, common_name: "Blur", status_text: "not added" },
+      ];
+      const holder = document.createElement("div");
+      RV.suggestSpecies(holder, () => {});
+      await settle();
+      return find(holder, (n) => n.tag === "ul").children.map(textOf);
+    """,
+        tmp_path,
+    )
+    assert out == [
+        "Spotted Goatfish (juvenile) · waiting for approval",
+        "spotted goatfish · added as Spotted Goatfish",
+        "Banded goby · not added; your answers now say Bridled GobyIt's a bridled goby.",
+        "Blur · not added; your answers now say can't identify",
+    ]
+
+
+@needs_node
+def test_adding_a_species_answers_the_single_box_but_never_a_second_opinion(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-single.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      RV.catalogue = [...listed, ENTRY];
+      const root = document.getElementById("rv-single");
+      await RV.views.single.enter({{ payload: payload(2) }});     // a blind second opinion
+      const blind = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
+      await RV.views.single.enter({{ payload: payload(1) }});
+      const first = {{ link: Boolean(addLink(root)), offers: offered(root, "spotted") }};
+      openForm(root, {FILLED});
+      submitForm(root); await settle();
+      return {{ blind, first, sent: sent() }};
+    """,
+        tmp_path,
+    )
+    assert out["blind"] == {"link": False, "offers": ""}
+    assert (
+        out["first"]["link"] and "Spotted Goatfish (waiting for approval)" in out["first"]["offers"]
+    )
+    suggestion, verdict = out["sent"]
+    assert suggestion == {"url": "/api/review/species-suggestions", "body": SUGGESTION}
+    assert verdict == {
+        "url": "/api/review/verdicts",
+        "body": {
+            "event_id": 101,
+            "review_item_id": 11,
+            "outcome": "species",
+            **SUGGESTED_ANSWER,
+            "not_sure": False,
+        },
+    }
+
+
+# The volunteer moved on while the suggestion was being saved: the frame selects box 2,
+# or the single view shows the next box. The new species answers neither.
+MOVE_ON = {
+    "single": (
+        "await RV.views.single.enter({ payload: payload(1) });",
+        "await RV.views.single.enter({ payload: { ...payload(1), item: { id: 12, event_id: 102, pass: 1 } } });",
+    ),
+    "frame": (
+        "await RV.views.frame.enter({ savedFrameId: 7 });",
+        "await RV.views.frame.enter({ savedFrameId: 7, selectEventId: 102 });",
+    ),
+}
+
+
+@needs_node
+@pytest.mark.parametrize("view", ["single", "frame"])
+def test_a_box_left_while_the_species_is_being_added_is_not_answered_with_it(view, tmp_path):
+    enter, move_on = MOVE_ON[view]
+    out = run_node(
+        [_read("review-core.js"), _read(f"review-{view}.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      let reply;
+      globalThis.gate = new Promise((r) => {{ reply = r; }});
+      {enter}
+      const root = document.getElementById("rv-{view}");
+      openForm(root, {FILLED});
+      submitForm(root); await settle();
+      {move_on}
+      reply(); await settle();
+      return {{ sent: sent().map((c) => c.url), toast: document.getElementById("rv-toast").textContent }};
+    """,
+        tmp_path,
+    )
+    assert out["sent"] == ["/api/review/species-suggestions"]
+    assert (
+        out["toast"]
+        == "The new species was added. Pick it from the search to answer a box with it."
+    )
+
+
+@needs_node
+@pytest.mark.parametrize("view", ["single", "frame"])
+def test_a_new_species_decided_meanwhile_reloads_the_list_and_keeps_the_box(view, tmp_path):
+    """The species list loaded before an admin approved (or rejected) the volunteer's new
+    species: the verdict's 409 names that, and the page reloads the list instead of
+    moving on from a box that is still theirs."""
+    enter = (
+        "await RV.views.single.enter({ payload: payload(1) });"
+        if view == "single"
+        else "await RV.views.frame.enter({ savedFrameId: 7 });"
+    )
+    out = run_node(
+        [_read("review-core.js"), _read(f"review-{view}.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      RV.catalogue = [...listed, ENTRY];
+      globalThis.verdictReply = {{ status: 409,
+        data: {{ error: "that species suggestion was already decided; pick from the list" }} }};
+      {enter}
+      const root = document.getElementById("rv-{view}");
+      offered(root, "spotted");
+      find(root, (n) => n.tag === "li" && textOf(n).startsWith("Spotted Goatfish")).on.mousedown(
+        {{ preventDefault() {{}} }});
+      await settle();
+      return calls.map((c) => c.url.split("?")[0]).filter((u) => !u.endsWith("/open"));
+    """,
+        tmp_path,
+    )
+    assert out[:2] == ["/api/review/verdicts", "/api/review/species"]
+    assert "/api/review/next" not in out
+
+
+HINTED_ENTER = {
+    "single": """
+      await RV.views.single.enter({ payload: { item: { id: 11, event_id: 101, pass: 1 },
+        box: { bbox: [10, 10, 50, 50], model_bbox: [10, 10, 50, 50], saved_frame_id: 7 },
+        frame: { url: "/f.jpg", width: 1280, height: 720 }, zoom: { url: "/z.jpg", region: [0, 0, 200, 200] },
+        other_boxes: [], model: null, hints: HINTS, counts_toward: null, editable: true } });""",
+    "frame": """
+      const frameFetch = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {
+        const r = await frameFetch(url, opts);
+        if (!url.endsWith("/open")) return r;
+        const data = await r.json();
+        data.boxes[0].hints = HINTS;
+        return { status: 200, ok: true, json: async () => data };
+      };
+      await RV.views.frame.enter({ savedFrameId: 7 });    // box 1 is selected""",
+}
+
+
+@needs_node
+@pytest.mark.parametrize("view", ["single", "frame"])
+def test_a_hint_chip_answers_in_one_click_beside_a_waiting_stage(view, tmp_path):
+    """Final review (promoted minor): a new stage of the hinted species waits for approval (an
+    admin sees every one). The chip still answers with the listed species in one click,
+    rather than sending the volunteer to the picker."""
+    out = run_node(
+        [_read("review-core.js"), _read(f"review-{view}.js")],
+        FRAME_STUB
+        + ELEMENT_STUB
+        + f"""
+      RV.catalogue = [{{ key: "Haemulon chrysargyreum|", name: "Haemulon chrysargyreum",
+          common: "Smallmouth grunt", life_stage: null }},
+        {{ key: "suggestion:5", name: "Haemulon chrysargyreum", life_stage: "juvenile", suggestion_id: 5,
+          pending: true, common: "Juvenile Smallmouth grunt (waiting for approval)" }}];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      const HINTS = [{{ name: "Haemulon chrysargyreum", common: "Smallmouth grunt", p: 0.3 }}];
+      {HINTED_ENTER[view]}
+      find(document.getElementById("rv-{view}"), (n) => n.className === "rv-chip").on.click({{}});
+      await settle();
+      return calls.filter((c) => c.url === "/api/review/verdicts").map((c) => c.body);
+    """,
+        tmp_path,
+    )
+    [verdict] = out
+    assert verdict["event_id"] == 101 and verdict["outcome"] == "species"
+    assert verdict["label"] == "Haemulon chrysargyreum" and verdict["life_stage"] is None
+    assert verdict["label_source"] == "hint" and "species_suggestion_id" not in verdict
+
+
+@needs_node
+def test_looks_right_never_offers_a_stage_waiting_for_approval(tmp_path):
+    """A new stage of a listed species (a striped parrotfish juvenile) waits for approval;
+    "Looks right" on that species asks only for the listed stages, which the server takes."""
+    out = run_node(
+        [_read("review-core.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      const parrot = (stage) => ({ key: `Scarus iseri|${stage}`, name: "Scarus iseri",
+        life_stage: stage, common: "Striped Parrotfish" });
+      RV.catalogue = [parrot("initial phase"), parrot("terminal phase"),
+        { key: "suggestion:3", name: "Scarus iseri", life_stage: "juvenile", pending: true,
+          suggestion_id: 3, common: "Striped Parrotfish juvenile (waiting for approval)" }];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      RV.acceptGuessFlow({ name: "Scarus iseri", common: "Striped Parrotfish" }, "rv-stage", () => {});
+      const chips = find(document.getElementById("rv-stage"), (n) => n.className === "rv-chips");
+      return chips.children.map(textOf);
+    """,
+        tmp_path,
+    )
+    assert out == ["initial phase", "terminal phase"]
+
+
+def test_the_form_offers_the_servers_stages():
+    from app.species_suggestions import STAGES
+
+    m = re.search(r"RV\.STAGES = \[([^\]]*)\];", _read("review-core.js"))
+    assert m and re.findall(r'"([^"]+)"', m.group(1)) == [s for s in STAGES if s]
+    assert None in STAGES  # the form's "none"
+
+
+NEW_SPECIES_HINT = "A new species can't be marked on the rest until it's approved."
+
+
+@needs_node
+def test_m_marks_nothing_right_after_a_new_species(tmp_path):
+    """Task 7 review, Important 1: box 1 answered with a listed species, then a box with a
+    new one. M must not offer the earlier species, and the panel says why; answering a
+    listed species again brings M back."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      const shown = () => textOf(document.getElementById("rv-frame"));
+      await RV.views.frame.enter({{ savedFrameId: 7 }});
+      key("a"); await settle();                     // a listed species: M would mark with it
+      const root = document.getElementById("rv-frame");
+      openForm(root, {FILLED});
+      submitForm(root); await settle();             // then a new one
+      const afterNew = {{ m: key("m"), text: shown() }};
+      key("a"); await settle();                     // a listed species again
+      return {{ afterNew, again: key("m"), againText: shown(), marks: posted().filter((c) =>
+        c.url.endsWith("/mark-rest")).length }};
+    """,
+        tmp_path,
+    )
+    assert out["afterNew"]["m"] is False
+    assert NEW_SPECIES_HINT in out["afterNew"]["text"]
+    assert HINT not in out["afterNew"]["text"] and "Mark the" not in out["afterNew"]["text"]
+    assert out["again"] is True and NEW_SPECIES_HINT not in out["againText"]
+    assert out["marks"] == 0  # M only asked
+
+
+# ---- 2026-11-21: an admin decides new species from Browse ---------------------------
+# Spec 2026-11-21, "Admin panel": every waiting suggestion with the boxes answered with it,
+# a per-box "Not this species", Approve under the admin's names and stage, Reject as the
+# listed species it really is or as can't-identify; decided ones fold away, and the Browse
+# button counts the waiting ones for admins.
+
+ADMIN_STUB = (
+    ELEMENT_STUB
+    + r"""
+  globalThis.Node = Object;
+  document.createTextNode = (t) => ({ text: t });
+  const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const all = (n, pred, out = []) => {
+    if (!n || typeof n !== "object") return out;
+    if (pred(n)) out.push(n);
+    for (const c of kids(n)) all(c, pred, out);
+    return out;
+  };
+  RV.role = "admin";
+  RV.catalogue = [{ key: "Haemulon chrysargyreum|", name: "Haemulon chrysargyreum",
+      common: "Smallmouth grunt", life_stage: null },
+    { key: "suggestion:3", name: "Pseudupeneus maculatus", life_stage: "juvenile", suggestion_id: 3,
+      pending: true, common: "Spotted Goatfish (waiting for approval)" }];
+  RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+  const none = { decided_at: null, decision_note: null, approved_name: null, approved_common: null,
+    approved_stage: null, rejected_to_name: null, rejected_to_stage: null };
+  globalThis.waiting = [{ ...none, id: 3, common_name: "Spotted Goatfish",
+    scientific_name: "Pseudupeneus maculatus", life_stage: "juvenile", note: "Two barbels under the chin",
+    suggested_by_name: "Roy", answers: 2, created_at: "2026-11-21T15:00:00+00:00", status: "pending" }];
+  const DECIDED = [{ ...none, id: 2, common_name: "Banded goby", scientific_name: null, life_stage: null,
+    note: null, suggested_by_name: "Roy", answers: 1, created_at: "2026-11-20T15:00:00+00:00",
+    status: "rejected", decided_at: "2026-11-20T16:00:00+00:00", rejected_to_name: "Haemulon chrysargyreum",
+    decision_note: "A grunt, seen side on." }];
+  globalThis.boxes = [101, 102];
+  const PROGRESS = { kpis: { verified_boxes: 0, species_with_verified: 0, complete_frames: 0,
+    session_verified: 0, open: { check: 0, identify: 0 } }, species: [], target: 100, stale: false };
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    calls.push({ url, body });
+    const reply = (status, data) => ({ status, ok: status < 400, json: async () => data });
+    const m = url.match(/^\/api\/review\/species-suggestions\/3\/boxes\?page=(\d+)$/);
+    if (m) {
+      const at = 24 * Number(m[1]);
+      return reply(200, { total: globalThis.boxes.length, boxes: globalThis.boxes.slice(at, at + 24)
+        .map((id) => ({ event_id: id, zoom_url: `/api/review/boxes/${id}/zoom.jpg`, by: "Roy" })) });
+    }
+    if (url === "/api/review/species-suggestions?status=pending") {
+      return reply(200, { suggestions: globalThis.waiting, pending: globalThis.waiting.length });
+    }
+    if (url === "/api/review/species-suggestions?status=decided") {
+      return reply(200, { suggestions: DECIDED, pending: globalThis.waiting.length });
+    }
+    if (url.endsWith("/3/approve") || url.endsWith("/3/reject")) {
+      globalThis.waiting = [];
+      return reply(200, { answers: 2 });
+    }
+    if (url.endsWith("/3/detach")) {
+      globalThis.boxes = globalThis.boxes.filter((id) => id !== body.event_id);
+      return reply(200, { answers: 1 });
+    }
+    if (url === "/api/review/progress") return reply(200, PROGRESS);
+    if (url.startsWith("/api/review/browse?")) return reply(200, { cells: [], has_more: false });
+    if (url === "/api/review/disputes") return reply(200, { disputes: [] });
+    if (url === "/api/review/species") return reply(200, { species: RV.catalogue });
+    return reply(404, { error: "not stubbed" });
+  };
+  const browseButton = document.createElement("button");
+  document.querySelector = (sel) => (sel === '#rv-nav button[data-view="browse"]' ? browseButton : null);
+  const badge = () => browseButton.children.map((b) => (b.hidden ? "" : textOf(b))).join("");
+  const admin = () => document.getElementById("rv-admin");
+  const button = (text) => find(admin(), (n) => n.tag === "button" && textOf(n) === text);
+  const field = (name) => attr(admin(), "name", name);
+  const radio = (value) => find(admin(), (n) => n.attrs && n.attrs.type === "radio" && n.attrs.value === value);
+  const alertOf = () => attr(admin(), "role", "alert");
+  const notThis = () => all(admin(), (n) => n.tag === "button" && textOf(n) === "Not this species");
+  const card = () => textOf(find(admin(), (n) => n.className === "rv-sg"));
+  const heading = () => textOf(find(admin(), (n) => n.tag === "h4"));
+  const posted = () => calls.filter((c) => c.body);
+  // Whether a request matching `wanted` went out after the first request for `url`.
+  const askedAfter = (url, wanted) => {
+    const at = calls.findIndex((c) => c.url === url);
+    return at >= 0 && calls.slice(at + 1).some((c) => wanted(c.url));
+  };
+  const catalogueReload = (u) => u === "/api/review/species";
+  const gridReload = (u) => u.startsWith("/api/review/browse?");
+"""
+)
+
+
+@needs_node
+def test_the_panel_lists_pending_species_and_approves(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      await RV.views.browse.enter(); await settle();
+      const history = find(admin(), (n) => n.tag === "details");
+      const shown = { heading: heading(), badge: badge(), card: card(), thumbs: notThis().length,
+        prefilled: ["scientific_name", "common_name", "life_stage"].map((k) => field(k).value),
+        filter: find(document.getElementById("rv-browse"), (n) => n.tag === "datalist").children
+          .map((o) => o.attrs.value),
+        history: { open: "open" in history.attrs, text: textOf(history) } };
+      field("common_name").value = " Spotted goatfish ";
+      field("life_stage").value = "adult";
+      field("note").value = "Checked the barbels";
+      button("Approve").on.click({}); button("Approve").on.click({});   // a double click sends it once
+      await settle();
+      const approved = "/api/review/species-suggestions/3/approve";
+      return { shown, posted: posted(), heading: heading(), badge: badge(),
+        reloaded: [askedAfter(approved, catalogueReload), askedAfter(approved, gridReload)] };
+    """,
+        tmp_path,
+    )
+    shown = out["shown"]
+    assert shown["heading"] == "New species (1 waiting)"
+    assert shown["badge"] == "1"
+    for text in (
+        "Spotted Goatfish",
+        "Pseudupeneus maculatus · juvenile",
+        "Two barbels under the chin",
+        "Suggested by Roy",
+        "2 answers",
+    ):
+        assert text in shown["card"], text
+    assert shown["thumbs"] == 2
+    assert shown["prefilled"] == ["Pseudupeneus maculatus", "Spotted Goatfish", "juvenile"]
+    assert shown["filter"] == ["Haemulon chrysargyreum"]  # no species waiting for approval
+    assert shown["history"]["open"] is False
+    for text in ("Banded goby", "not added", "Smallmouth grunt", "A grunt, seen side on."):
+        assert text in shown["history"]["text"], text
+    assert out["posted"] == [
+        {
+            "url": "/api/review/species-suggestions/3/approve",
+            "body": {
+                "scientific_name": "Pseudupeneus maculatus",
+                "common_name": "Spotted goatfish",
+                "life_stage": "adult",
+                "note": "Checked the barbels",
+            },
+        }
+    ]
+    assert out["heading"] == "New species (0 waiting)"
+    assert out["badge"] == ""
+    assert out["reloaded"] == [True, True]  # the pickers' list and the grid's names
+
+
+@needs_node
+def test_not_this_species_posts_detach(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      globalThis.boxes = Array.from({ length: 26 }, (_, i) => 101 + i);
+      globalThis.waiting[0].answers = 26;
+      await RV.views.browse.enter(); await settle();
+      const first = notThis().length;
+      button("Next →").on.click({}); await settle();
+      const second = notThis().length;
+      notThis()[0].on.click({}); notThis()[0].on.click({});   // a double click sends it once
+      await settle();
+      const after = { thumbs: notThis().length, card: card() };
+      notThis()[0].on.click({}); await settle();             // the page's last box: back a page
+      return { first, second, after, back: notThis().length, posted: posted(),
+        pages: calls.filter((c) => c.url.includes("/boxes?")).map((c) => c.url.split("?")[1]),
+        grid: askedAfter("/api/review/species-suggestions/3/detach", gridReload) };
+    """,
+        tmp_path,
+    )
+    assert (out["first"], out["second"]) == (24, 2)
+    assert out["posted"] == [
+        {"url": "/api/review/species-suggestions/3/detach", "body": {"event_id": 125}},
+        {"url": "/api/review/species-suggestions/3/detach", "body": {"event_id": 126}},
+    ]
+    assert out["after"]["thumbs"] == 1
+    assert "25 answers" in out["after"]["card"] and "26 answers" not in out["after"]["card"]
+    assert out["back"] == 24
+    assert out["pages"] == ["page=0", "page=1", "page=1", "page=1", "page=0"]
+    assert out["grid"]  # the box's cell now says can't identify
+
+
+REJECT_NEITHER = "choose “It's actually…” or “Can't identify”"
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "choice, body",
+    [
+        (
+            "species",
+            {
+                "as_label": "Haemulon chrysargyreum",
+                "as_life_stage": None,
+                "unidentifiable": False,
+                "note": None,
+            },
+        ),
+        ("cant", {"as_label": None, "as_life_stage": None, "unidentifiable": True, "note": None}),
+    ],
+)
+def test_reject_needs_a_choice(choice, body, tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + f"""
+      await RV.views.browse.enter(); await settle();
+      const labels = ["It's actually…", "Can't identify"].map((t) =>
+        Boolean(find(admin(), (n) => n.tag === "label" && textOf(n).startsWith(t))));
+      button("Reject").on.click({{}}); await settle();       // neither chosen: nothing is sent
+      const neither = {{ said: alertOf().textContent, shown: !alertOf().hidden, sent: posted().length }};
+      radio("as").checked = true; radio("as").on.change({{}});
+      const cleared = alertOf().hidden;                      // a choice clears the message
+      button("Reject").on.click({{}}); await settle();       // "It's actually…" with no species
+      const noSpecies = {{ said: alertOf().textContent, sent: posted().length }};
+      const waitingOffered = offered(admin(), "spotted");    // never a species waiting for approval
+      offered(admin(), "grunt");
+      find(admin(), (n) => n.tag === "li" && textOf(n).startsWith("Smallmouth grunt")).on.mousedown(
+        {{ preventDefault() {{}} }});
+      const picked = {{ as: radio("as").checked, card: card(), cleared: alertOf().hidden }};
+      if ("{choice}" === "cant") {{ radio("as").checked = false; radio("cant").checked = true; }}
+      button("Reject").on.click({{}}); button("Reject").on.click({{}});
+      await settle();
+      return {{ labels, neither, cleared, noSpecies, waitingOffered, picked, posted: posted(),
+        heading: heading(), reloaded: [askedAfter("/api/review/species-suggestions/3/reject", catalogueReload),
+          askedAfter("/api/review/species-suggestions/3/reject", gridReload)] }};
+    """,
+        tmp_path,
+    )
+    assert out["labels"] == [True, True]
+    assert out["neither"] == {"said": REJECT_NEITHER, "shown": True, "sent": 0}
+    assert out["cleared"] is True
+    assert out["noSpecies"] == {"said": "pick the species it actually is", "sent": 0}
+    assert out["waitingOffered"] == ""
+    assert out["picked"]["as"] is True and "Smallmouth grunt" in out["picked"]["card"]
+    assert out["picked"]["cleared"] is True
+    assert out["posted"] == [{"url": "/api/review/species-suggestions/3/reject", "body": body}]
+    assert out["heading"] == "New species (0 waiting)"
+    assert out["reloaded"] == [True, True]
+
+
+DECIDED_ALREADY = {
+    "approve": 'button("Approve").on.click({});',
+    "reject": 'radio("cant").checked = true; button("Reject").on.click({});',
+    "detach": "notThis()[0].on.click({});",
+}
+
+
+@needs_node
+@pytest.mark.parametrize("action", ["approve", "reject", "detach"])
+def test_a_suggestion_decided_by_another_admin_reloads_the_lists(action, tmp_path):
+    """Final review (promoted minor): another admin decided it first, so the server answers
+    409 and the card is stale. The lists are reloaded, which drops it; the reason is a toast,
+    since the card that would have shown it is gone."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + f"""
+      const stubbed = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {{
+        if (!url.endsWith("/3/{action}")) return stubbed(url, opts);
+        calls.push({{ url, body: JSON.parse(opts.body) }});
+        globalThis.waiting = [];                       // the other admin's decision
+        return {{ status: 409, ok: false,
+          json: async () => ({{ error: "this suggestion was already decided" }}) }};
+      }};
+      await RV.views.browse.enter(); await settle();
+      {DECIDED_ALREADY[action]}
+      await settle();
+      return {{ heading: heading(), card: Boolean(find(admin(), (n) => n.className === "rv-sg")),
+        reloaded: askedAfter("/api/review/species-suggestions/3/{action}",
+          (u) => u === "/api/review/species-suggestions?status=pending"),
+        toast: document.getElementById("rv-toast").textContent }};
+    """,
+        tmp_path,
+    )
+    assert out == {
+        "heading": "New species (0 waiting)",
+        "card": False,
+        "reloaded": True,
+        "toast": "this suggestion was already decided",
+    }
+
+
+@needs_node
+def test_admins_see_the_waiting_count_on_the_browse_button(tmp_path):
+    core = _read("review-core.js")
+    at = core.index('document.addEventListener("DOMContentLoaded"')
+    handler = _braces_from(core, core.index("{", core.index("=>", at)))
+    assert re.search(r'RV\.role === "admin" \? RV\.refreshSpeciesBadge\(\)', handler)
+    assert handler.index("RV.refreshSpeciesBadge()") < handler.index("await RV.next(landing);")
+    out = run_node(
+        [core],
+        ADMIN_STUB
+        + """
+      await RV.refreshSpeciesBadge();
+      const one = badge();
+      RV.setSpeciesBadge(0);
+      const zero = badge();
+      RV.setSpeciesBadge(3);
+      return { one, zero, three: badge(), spans: browseButton.children.map((b) => b.className),
+        asked: calls.map((c) => c.url) };
+    """,
+        tmp_path,
+    )
+    assert out == {
+        "one": "1",
+        "zero": "",
+        "three": "3",
+        "spans": ["rv-badge"],
+        "asked": ["/api/review/species-suggestions?status=pending"],
+    }
+
+
+@needs_node
+def test_a_box_waiting_on_a_new_species_is_not_badged_verified(tmp_path):
+    """Final review I1: its own status, and the spec's words, not "✓ verified"."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      RV.role = "reviewer";
+      const cellOf = (event_id, status) => ({ kind: "box", event_id, added_id: null, saved_frame_id: 7,
+        zoom_url: "/z.jpg", status, outcome: "species", label: "Seriola zonata",
+        common: "Juvenile Banded Rudderfish (new, waiting for approval)", camera: "seahive",
+        ts: "2026-06-16T12:00:00Z", lane: "check", mine: true, reviewers: ["Roy"],
+        last_at: "2026-11-21T15:00:00Z" });
+      const stubbed = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => (url.startsWith("/api/review/browse?")
+        ? { status: 200, ok: true, json: async () => ({ has_more: false,
+            cells: [cellOf(101, "awaiting_species"), cellOf(102, "single")] }) }
+        : stubbed(url, opts));
+      await RV.views.browse.enter(); await settle();
+      return document.getElementById("rv-grid").children.map((c) =>
+        textOf(find(c, (n) => (n.className || "").startsWith("rv-badge"))));
+    """,
+        tmp_path,
+    )
+    assert out == ["waiting for approval", "✓ verified"]
+
+
+@needs_node
+@pytest.mark.parametrize("role", ["reviewer", "admin"])
+def test_browse_never_shows_the_word_null(role, tmp_path):
+    """Browser walk 2026-11-21: Browse put the word "null" under its counts (DOM
+    replaceChildren() turns a null argument into that text) when the numbers were fresh,
+    and again at the bottom for a reviewer, who has no admin section."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + f"""
+      RV.role = "{role}";
+      await RV.views.browse.enter(); await settle();
+      return document.getElementById("rv-browse").children.map((c) => (c === null ? "null" : c.tag));
+    """,
+        tmp_path,
+    )
+    assert "null" not in out
+    assert out[-1] == ("section" if role == "admin" else "div")

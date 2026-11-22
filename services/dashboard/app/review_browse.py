@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from .config import site_tz
 from .review_labels import agreement_summary, load_verdicts, outcome_of, resolve
 from .review_queue import Invalid, fetch_all, fetch_one
+from .species_suggestions import PENDING_SUFFIX, pending_shown_answers, pending_species_events
 
 
 def local_tz() -> ZoneInfo:
@@ -133,7 +134,11 @@ async def progress_summary(conn, *, pool_obj, catalogue, session_id, target: int
     async with conn.transaction():
         await _set_statement_timeout(conn)
         resolved = await _resolved(conn)
-        verified = [r for r, _v in resolved.values() if r.is_verified]
+        # A box answered with a species waiting for approval counts once it is approved.
+        pending = await pending_species_events(conn)
+        verified = [
+            r for event_id, (r, _v) in resolved.items() if r.is_verified and event_id not in pending
+        ]
         added = await fetch_all(
             conn,
             """SELECT label, outcome FROM review_added_boxes
@@ -185,9 +190,14 @@ async def progress_summary(conn, *, pool_obj, catalogue, session_id, target: int
     }
 
 
-def _status_matches(r, status: str) -> bool:
+def _status_matches(r, status: str, awaiting: bool = False) -> bool:
+    """`awaiting`: the box's shown answer names a species waiting for approval. Until an admin
+    decides it, the box is not verified (the counts leave it out too), so only "any" matches it
+    (final review I1)."""
     if status == "any":
         return True
+    if awaiting:
+        return False
     if status == "verified":
         return r.is_verified
     if status in ("agreed", "adjudicated", "disputed"):
@@ -285,6 +295,7 @@ async def browse(
             for r in await fetch_all(conn, "SELECT id, display_name FROM users")
         }
         cells = []
+        candidates = []  # (cell, its Resolved; None when hidden): every filter but status passed
         for event_id, (r, verdicts) in resolved.items():
             m = meta.get(event_id)
             if m is None:
@@ -295,8 +306,6 @@ async def browse(
             # the first verdict, admins included (spec Sec7).
             hidden = event_id in pending and not mine
             if hidden and (filters.status != "any" or filters.species):
-                continue
-            if not hidden and not _status_matches(r, filters.status):
                 continue
             if filters.species and r.species != filters.species:
                 continue
@@ -345,6 +354,24 @@ async def browse(
                     common=None,
                     reviewers=[],
                 )
+            candidates.append((cell, None if hidden else r))
+        # The boxes whose shown answer names a species waiting for approval, found for every
+        # candidate in one query: the status filter below needs them, and it runs before
+        # paging (final review I1). A hidden cell (its blind second opinion still open) has no
+        # label and stays nameless; a species new to the list has a label but no listed
+        # common name.
+        waiting = await pending_shown_answers(
+            conn, {c["event_id"]: r for c, r in candidates if r is not None}
+        )
+        for cell, r in candidates:
+            named = r is not None and cell["label"] is not None and cell["event_id"] in waiting
+            awaiting = named and r.is_verified
+            if r is not None and not _status_matches(r, filters.status, awaiting):
+                continue
+            if named:
+                cell["common"] = f"{waiting[cell['event_id']]}{PENDING_SUFFIX}"
+            if awaiting:
+                cell["status"] = "awaiting_species"
             cells.append(cell)
         # Drawn boxes have a single, immediate answer -- never pending,
         # agreed, adjudicated or disputed -- so they belong under "any",
@@ -473,7 +500,16 @@ async def list_disputes(conn, *, catalogue) -> list[dict]:
 
 
 async def agreement(conn) -> dict:
-    return agreement_summary({event_id: r for event_id, (r, _v) in (await _resolved(conn)).items()})
+    """Agreement on spot-checks, leaving out boxes with an answer naming a species waiting for
+    approval: that answer is provisional, and the decision may rename it."""
+    pending = await pending_species_events(conn)
+    return agreement_summary(
+        {
+            event_id: r
+            for event_id, (r, _v) in (await _resolved(conn)).items()
+            if event_id not in pending
+        }
+    )
 
 
 async def pool_status(conn, *, pool_obj) -> dict:

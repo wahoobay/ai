@@ -156,11 +156,14 @@ RV.entry = function entry(name, lifeStage) {
     || RV.catalogue.find((e) => e.name === name) || null;
 };
 
-RV.search = function search(query, limit) {
+// `pending`: also match the species waiting for approval that /api/review/species
+// returns to their suggester (spec 2026-11-21); see RV.SpeciesPicker.
+RV.search = function search(query, limit, pending) {
   const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
   const scored = [];
   for (const e of RV.catalogue) {
+    if (e.pending && !pending) continue;
     const common = (e.common || "").toLowerCase();
     const name = e.name.toLowerCase();
     let score = -1;
@@ -175,8 +178,12 @@ RV.search = function search(query, limit) {
 };
 
 RV.SpeciesPicker = class SpeciesPicker {
-  constructor(container, onPick) {
+  // options.pending: offer this volunteer's species waiting for approval too -- only
+  // where an answer may use one (spec 2026-11-21): never on a blind second opinion or a
+  // drawn box, nor for an admin's adjudication, which all need a species on the list.
+  constructor(container, onPick, options) {
     this.onPick = onPick;
+    this.pending = Boolean(options && options.pending);
     this.results = [];
     this.active = -1;
     this.input = RV.el("input", {
@@ -194,7 +201,7 @@ RV.SpeciesPicker = class SpeciesPicker {
   clear() { this.input.value = ""; this.update(); }
 
   update() {
-    this.results = RV.search(this.input.value, 8);
+    this.results = RV.search(this.input.value, 8, this.pending);
     this.active = this.results.length ? 0 : -1;
     this.render();
   }
@@ -230,6 +237,156 @@ RV.SpeciesPicker = class SpeciesPicker {
   pick(entry) { this.clear(); this.input.blur(); this.onPick(entry); }
 };
 
+// ---- adding a species (spec 2026-11-21) ------------------------------------------------
+// A fish that isn't on the list can be suggested from under the picker and the box
+// answered with it at once. The suggestion waits for an admin; meanwhile it is in this
+// volunteer's own list, marked "(waiting for approval)", and an answer with it names the
+// suggestion (label_source "suggested"): the server stores the suggestion's own name and
+// stage. A blind second opinion can't use or add one, nor can a box a volunteer drew
+// (Ruling P4), so the views show the link only where an answer may use it.
+
+RV.STAGES = ["juvenile", "intermediate", "adult", "initial phase", "terminal phase"];
+
+// A verdict refused because the page's species list is out of date: a species taken off
+// the list, or a new species an admin has decided since the list loaded (a 409). The box
+// is still the volunteer's to answer; reload the list.
+RV.STALE_SPECIES = new Set(["pick a species from the list",
+  "that species suggestion was already decided; pick from the list"]);
+
+// A listed species by its common name, as review-single.js's mineText() names one: what a
+// rejected suggestion's answers now say, for its suggester and in the admin's history.
+RV.listedName = function listedName(name, lifeStage) {
+  const e = RV.entry(name, lifeStage);
+  return (e && e.common) || (lifeStage ? `${name} (${lifeStage})` : name);
+};
+
+// The answer's species fields for a picked entry. `source` ("hint" or "search") says
+// where a listed species came from; one waiting for approval names its suggestion.
+RV.answerExtra = function answerExtra(entry, source) {
+  if (entry.pending) {
+    return { label: entry.name, life_stage: entry.life_stage, label_source: "suggested",
+      species_suggestion_id: entry.suggestion_id };
+  }
+  return { label: entry.name, life_stage: entry.life_stage, label_source: source };
+};
+
+// The form, rendered into `container`: common name (required), scientific name, stage,
+// note, "Add and answer this box", and "Your suggestions" with what became of each.
+// Submitting creates the suggestion, reloads the species list (the new one is in it from
+// now on) and calls `onCreated(entry)` with its picker entry, which answers the box; a
+// refusal (already listed, already suggested, a malformed name) is shown in the form.
+RV.suggestSpecies = function suggestSpecies(container, onCreated) {
+  let busy = false;
+  const textInput = (name, attrs) => RV.el("input", { type: "text", name, class: "rv-field",
+    autocomplete: "off", ...attrs });
+  const common = textInput("common_name", { maxlength: "120" });
+  const scientific = textInput("scientific_name", { maxlength: "120", placeholder: "Genus species" });
+  const stage = RV.el("select", { name: "life_stage", class: "rv-field" },
+    RV.el("option", { value: "", text: "none" }),
+    RV.STAGES.map((s) => RV.el("option", { value: s, text: s })));
+  const note = RV.el("textarea", { name: "note", class: "rv-field", rows: "2", maxlength: "500",
+    placeholder: "Anything that helps the admin check it" });
+  const error = RV.el("p", { class: "rv-suggest-error", role: "alert", hidden: true });
+  const button = RV.el("button", { type: "submit", class: "rv-primary" }, "Add and answer this box");
+  const mine = RV.el("div", { class: "rv-suggest-mine" });
+  const field = (label, control) => RV.el("label", { class: "rv-suggest-field" },
+    RV.el("span", { class: "rv-label", text: label }), control);
+  const value = (control) => (control.value || "").trim() || null;
+  const say = (message) => { error.textContent = message || ""; error.hidden = !message; };
+
+  async function addSpecies(ev) {
+    ev.preventDefault();
+    if (busy) return;
+    const body = { common_name: value(common), scientific_name: value(scientific),
+      life_stage: value(stage), note: value(note) };
+    if (!body.common_name) { say("write the fish's common name"); common.focus(); return; }
+    busy = true;
+    button.disabled = true;
+    try {
+      const r = await RV.post("/api/review/species-suggestions", body);
+      if (!r.ok) { say(r.data.error || "That species wasn't added. Try again."); return; }
+      say(null);
+      await RV.loadCatalogue();
+      await onCreated(r.data);
+    } finally {
+      busy = false;
+      button.disabled = false;
+    }
+  }
+
+  function mineItem(s) {
+    let what = s.status_text;
+    if (s.status_text === "added" && s.approved_common && s.approved_common !== s.common_name) {
+      what += ` as ${s.approved_common}`;
+    } else if (s.status_text === "not added") {
+      what += `; your answers now say ${s.rejected_to_name
+        ? RV.listedName(s.rejected_to_name, s.rejected_to_stage) : "can't identify"}`;
+    }
+    const suggested = s.life_stage ? `${s.common_name} (${s.life_stage})` : s.common_name;
+    return RV.el("li", {},
+      RV.el("span", { class: "rv-common", text: suggested }),
+      ` · ${what}`,
+      s.decision_note ? RV.el("div", { class: "rv-muted", text: s.decision_note }) : null);
+  }
+  async function showMine() {
+    const r = await RV.get("/api/review/species-suggestions/mine");
+    const list = (r.ok && r.data.suggestions) || [];
+    if (list.length) {
+      mine.replaceChildren(RV.el("div", { class: "rv-label", text: "Your suggestions" }),
+        RV.el("ul", {}, list.map(mineItem)));
+    }
+  }
+
+  container.replaceChildren(
+    RV.el("form", { class: "rv-suggest-form", onsubmit: addSpecies },
+      RV.el("p", { class: "rv-muted rv-small",
+        text: "An admin checks each new species. Until then it is only in your list, marked “waiting for approval”." }),
+      field("Common name", common),
+      field("Scientific name (optional)", scientific),
+      field("Life stage or phase", stage),
+      field("Note (optional)", note),
+      error, button),
+    mine);
+  showMine();
+  common.focus();
+};
+
+// "Not on the list? Add a species" under the picker, and the form it opens (built on
+// first open). `onCreated(entry)` answers the box with the new species.
+RV.addSpeciesBlock = function addSpeciesBlock(onCreated) {
+  const form = RV.el("div", { class: "rv-suggest", hidden: true });
+  let built = false;
+  const link = RV.el("button", { type: "button", class: "rv-link rv-add-species", "aria-expanded": "false",
+    onclick: () => {
+      form.hidden = !form.hidden;
+      link.setAttribute("aria-expanded", String(!form.hidden));
+      if (!form.hidden && !built) {
+        built = true;
+        RV.suggestSpecies(form, onCreated);
+      }
+    } }, "Not on the list? Add a species");
+  return RV.el("div", { class: "rv-add" }, link, form);
+};
+
+// For admins, the Browse button counts the new species waiting for a decision ("Badge"):
+// read when the page loads, and set again whenever Browse's admin panel reloads.
+RV.setSpeciesBadge = function setSpeciesBadge(n) {
+  const button = document.querySelector('#rv-nav button[data-view="browse"]');
+  if (!button) return;
+  if (!RV.speciesBadge) {
+    RV.speciesBadge = RV.el("span", { class: "rv-badge" });
+    button.append(RV.speciesBadge);
+  }
+  RV.speciesBadge.textContent = String(n);
+  RV.speciesBadge.title = `${n} new species waiting for approval`;
+  RV.speciesBadge.hidden = !(n > 0);
+};
+
+RV.refreshSpeciesBadge = async function refreshSpeciesBadge() {
+  const r = await RV.get("/api/review/species-suggestions?status=pending");
+  if (r.ok) RV.setSpeciesBadge(r.data.pending);
+};
+
 // ---- accepting a model's guess -----------------------------------------------
 
 // "Looks right" sends no life_stage. If the catalogue lists `model`'s guess
@@ -254,7 +411,9 @@ RV.acceptGuessFlow = function acceptGuessFlow(model, stageContainerId, onAnswer)
   const name = model.name;
   const plain = RV.entry(name, null);
   if (plain && !plain.life_stage) { onAnswer({}); return; }
-  const stages = RV.catalogue.filter((e) => e.name === name);
+  // A stage waiting for approval is not on the list, so "Looks right" can't take it
+  // (spec 2026-11-21): the server would refuse that life stage.
+  const stages = RV.catalogue.filter((e) => e.name === name && !e.pending);
   if (stages.length < 2) {
     onAnswer({ life_stage: stages.length ? stages[0].life_stage : null });
     return;
@@ -655,6 +814,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     RV.banner("Couldn't load the species list. Reload the page to try again.");
     return;
   }
-  await RV.refreshMine();
+  await Promise.all([RV.refreshMine(), RV.role === "admin" ? RV.refreshSpeciesBadge() : null]);
   await RV.next(landing);
 });

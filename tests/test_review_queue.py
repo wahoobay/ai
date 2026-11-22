@@ -1405,6 +1405,7 @@ async def test_duplicate_verdict_reads_outcome_from_the_stored_row_not_the_argum
         "celebrity_id": None,
         "notes": None,
         "bbox": None,
+        "species_suggestion_id": None,
     }
     async with rdb.connection() as conn:
         dup = await _duplicate_verdict(conn, event_id=eid, user_id=one, v=v, outcome="species")
