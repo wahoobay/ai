@@ -325,6 +325,29 @@ async def test_a_second_addition_of_the_same_choice_is_refused_even_with_a_stale
     assert await _count(rdb) == 1
 
 
+async def test_the_staging_refusals_hold_even_with_a_stale_catalogue(rdb, cat):
+    """Review Focus 1, for stages: an addition the catalogue has not seen yet still counts, or
+    the species could end up listed both plain and staged, which option (a) forbids."""
+    ann, bob = await make_user(rdb, "ann"), await make_user(rdb, "bob")
+    # plain first: a stage for it is refused
+    await _suggest(rdb, ann, cat, **GOATFISH, common_name="Spotted Goatfish")
+    with pytest.raises(Conflict, match="^already on the list as Spotted Goatfish$"):
+        await _suggest(rdb, bob, cat, **GOATFISH, life_stage="juvenile")
+    # staged first: a plain entry is refused, and another stage is still a new choice
+    await _suggest(
+        rdb, ann, cat, **MORAY, common_name="Juvenile Spotted Moray", life_stage="juvenile"
+    )
+    assert cat.stages("Gymnothorax moringa") == []  # the file catalogue lacks it
+    with pytest.raises(Conflict) as plain:
+        await _suggest(rdb, bob, cat, **MORAY, common_name="Spotted Moray")
+    assert plain.value.message == "pick a stage: juvenile, or add a new one"
+    await _suggest(rdb, bob, cat, **MORAY, common_name="Adult Spotted Moray", life_stage="adult")
+    with pytest.raises(Conflict) as plain:
+        await _suggest(rdb, bob, cat, **MORAY, common_name="Spotted Moray")
+    assert plain.value.message == "pick a stage: juvenile, adult, or add a new one"
+    assert await _count(rdb) == 3
+
+
 async def test_stage_and_scientific_name_are_checked(rdb, cat):
     roy = await make_user(rdb, "roy")
     with pytest.raises(Invalid) as bad_stage:
@@ -548,6 +571,7 @@ async def test_suggestion_routes_over_http(rdb, rclient):
         {k: v for k, v in body.items() if k != "aphia_id"},
         {k: v for k, v in body.items() if k != "scientific_name"},
         {**body, "aphia_id": 0},
+        {**body, "aphia_id": 2**31},  # past the INTEGER column
         {**body, "scientific_name": ""},
     ):
         assert rclient.post(url, json=refused, headers=CSRF).status_code == 422, refused

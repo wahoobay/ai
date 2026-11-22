@@ -83,7 +83,7 @@ _CANT_IDENTIFY = """unidentifiable = true, corrected_name = NULL, corrected_spec
 class SuggestionIn(BaseModel):
     """The WoRMS record the reviewer chose, and the common name, stage and note they gave."""
 
-    aphia_id: int = Field(..., gt=0)
+    aphia_id: int = Field(..., gt=0, lt=2**31)  # the column is an INTEGER
     scientific_name: str = Field(..., min_length=1, max_length=160)  # WoRMS's accepted name
     family: str | None = Field(None, max_length=120)
     common_name: str | None = Field(None, max_length=120)
@@ -175,6 +175,18 @@ def _listed_as(entry: CatalogueEntry) -> Conflict:
     return Conflict(f"already on the list as {entry.common_name or entry.name}")
 
 
+def _refuse_by_stage(listed: dict[str | None, CatalogueEntry], stage: str | None) -> None:
+    """The list rules on one species' stages, `listed` being its listed entries by stage, in
+    list order: the same choice is refused, and so (Dan's option a) are a plain entry for a
+    species listed only with stages and a stage for one listed without."""
+    if stage in listed:
+        raise _listed_as(listed[stage])
+    if listed and None not in listed and stage is None:
+        raise Conflict(f"pick a stage: {', '.join(s for s in listed if s)}, or add a new one")
+    if None in listed and stage is not None:
+        raise _listed_as(listed[None])
+
+
 def _listed_by_common_name(catalogue, common: str, stage: str | None) -> CatalogueEntry | None:
     """The listed choice a common name and stage already are (Ruling X1), judged on species
     and stage together: an entry with exactly this common name at this stage, or a species
@@ -199,7 +211,8 @@ def _listed_by_common_name(catalogue, common: str, stage: str | None) -> Catalog
 async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dict:
     """Add the species `user` chose from WoRMS to everyone's list at once, already approved,
     unless the list rules refuse it, and return the new choice. `catalogue` is the merged one,
-    read before the lock: the check made under it catches an addition committed since."""
+    read before the lock: the stage rules are checked again under it, with the additions
+    committed since."""
     stage = _stage(body.life_stage)
     scientific = clean_scientific(body.scientific_name)
     if scientific is None:
@@ -208,32 +221,29 @@ async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dic
         (e.name for e in catalogue.entries if e.aphia_id == body.aphia_id),
         catalogue.accepted(scientific),
     )
-    listed = catalogue.entry(name, stage)
-    if listed is not None:
-        raise _listed_as(listed)
-    stages = catalogue.stages(name)
-    if stages and None not in stages and stage is None:
-        raise Conflict(f"pick a stage: {', '.join(s for s in stages if s)}, or add a new one")
-    if None in stages and stage is not None:
-        raise _listed_as(catalogue.entry(name, None))
+    listed = {s: catalogue.entry(name, s) for s in catalogue.stages(name)}
+    _refuse_by_stage(listed, stage)
     common = _squash(body.common_name) or scientific
-    listed = _listed_by_common_name(catalogue, common, stage)
-    if listed is not None:
-        raise _listed_as(listed)
+    by_common = _listed_by_common_name(catalogue, common, stage)
+    if by_common is not None:
+        raise _listed_as(by_common)
     async with conn.transaction():
         await conn.execute(_ADD_LOCK_SQL, (name,))
-        added = await fetch_one(
+        added = await fetch_all(
             conn,
-            """SELECT approved_common FROM species_suggestions
+            """SELECT approved_stage, approved_common FROM species_suggestions
                 WHERE status = 'approved' AND approved_name = %s
-                  AND approved_stage IS NOT DISTINCT FROM %s
-                LIMIT 1""",
-            (name, stage),
+                ORDER BY decided_at, id""",
+            (name,),
         )
-        if added is not None:
-            raise _listed_as(
-                CatalogueEntry(name=name, life_stage=stage, common_name=added["approved_common"])
+        for r in added:
+            listed.setdefault(
+                r["approved_stage"],
+                CatalogueEntry(
+                    name=name, life_stage=r["approved_stage"], common_name=r["approved_common"]
+                ),
             )
+        _refuse_by_stage(listed, stage)
         row = await fetch_one(
             conn,
             """INSERT INTO species_suggestions
