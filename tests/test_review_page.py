@@ -1310,8 +1310,8 @@ def test_an_exact_worms_match_adds_and_answers_the_box(tmp_path):
 def test_a_misspelling_offers_did_you_mean(tmp_path):
     """On a blind second opinion, which may add a species now that nothing waits for an admin.
     TAXAMATCH's fuzzy matches are offered as "Did you mean?": species only, each accepted species
-    once, accepted ones first. Picking one enables Add; with no common name typed, the record's
-    English name from WoRMS is posted."""
+    once, accepted ones first. Picking one enables Add once the form has filled the empty common
+    name with the record's English name from WoRMS, in Title Case."""
     out = run_node(
         _page("review-single.js"),
         FRAME_STUB
@@ -1332,10 +1332,11 @@ def test_a_misspelling_offers_did_you_mean(tmp_path):
       openForm(root, { scientific_name: "Pseudupeneus maculatis", life_stage: "juvenile" });
       checkForm(root); await settle();
       const found = { text: textOf(root), choices: choices(root), ready: !addButton(root).disabled };
-      radios(root)[0].on.change({});
+      radios(root)[0].on.change({}); await settle();
       const ready = !addButton(root).disabled;
+      const named = attr(root, "name", "common_name").value;
       addButton(root).on.click({}); await settle();
-      return { found, ready, asked: asked(), sent: sent() };
+      return { found, ready, named, asked: asked(), sent: sent() };
     """,
         tmp_path,
     )
@@ -1345,6 +1346,7 @@ def test_a_misspelling_offers_did_you_mean(tmp_path):
         "Pseudupeneus prayensis (Cuvier, 1829) · Mullidae WoRMS ↗",
     ]
     assert out["found"]["ready"] is False and out["ready"] is True
+    assert out["named"] == "Spotted Goatfish"
     assert out["asked"] == [
         "/api/review/species-suggestions/mine",
         "WoRMS /AphiaRecordsByMatchNames?scientificnames[]=Pseudupeneus%20maculatis&marine_only=false",
@@ -1354,7 +1356,7 @@ def test_a_misspelling_offers_did_you_mean(tmp_path):
         "/api/review/verdicts",
     ]
     suggestion, verdict = out["sent"]
-    assert suggestion["body"] == {**ADDITION, "common_name": "spotted goatfish"}
+    assert suggestion["body"] == ADDITION
     assert verdict["body"] == {**BOX_101, **ADDED_ANSWER, "not_sure": False}
 
 
@@ -1383,7 +1385,7 @@ def test_a_common_name_only_uses_the_vernacular_search(tmp_path):
       const many = choices(root).length;
       fill(root, { common_name: "spotted goatfish" });
       checkForm(root); await settle();
-      radios(root)[0].on.change({});
+      radios(root)[0].on.change({}); await settle();   // WoRMS has no English name for it here
       addButton(root).on.click({}); await settle();
       return { one, cleared, many, asked: asked(), sent: sent() };
     """,
@@ -1399,6 +1401,7 @@ def test_a_common_name_only_uses_the_vernacular_search(tmp_path):
         "WoRMS /AphiaRecordsByVernacular/goatfish?like=false",
         "WoRMS /AphiaRecordsByVernacular/goatfish?like=true",
         "WoRMS /AphiaRecordsByVernacular/spotted%20goatfish?like=false",
+        "WoRMS /AphiaVernacularsByAphiaID/126994",
         "/api/review/species-suggestions",
         "/api/review/species",
         "/api/review/verdicts",
@@ -1787,8 +1790,9 @@ def test_a_refusal_after_the_check_is_shown_with_use_it(tmp_path):
 @needs_node
 def test_a_refusal_the_form_cannot_foresee_leaves_add_usable(tmp_path):
     """The server also refuses a common name another choice already has at that stage, which
-    the form doesn't mirror: it shows the refusal with "Use …" for that choice, and Add stays
-    usable, so the reviewer can change the common name and add the species after all."""
+    the form doesn't mirror. That choice is another species, so it is named, never offered as
+    "Use …" (one click would label a goatfish a bluefish); Add stays usable, so the reviewer can
+    change the common name and add the species after all."""
     out = run_node(
         _page("review-frame.js"),
         FRAME_STUB
@@ -1817,12 +1821,112 @@ def test_a_refusal_the_form_cannot_foresee_leaves_add_usable(tmp_path):
     """,
         tmp_path,
     )
-    assert "already on the list as Bluefish" in out["refused"]["text"]
-    assert out["refused"]["offered"] == ["Use Bluefish"] and out["refused"]["add"] is True
+    assert "already on the list as Bluefish (Pomatomus saltatrix)" in out["refused"]["text"]
+    assert "Give this species another common name to add it." in out["refused"]["text"]
+    assert out["refused"]["offered"] == [] and out["refused"]["add"] is True
     first, second, verdict = out["sent"]
     assert first["body"] == {**ADDITION, "common_name": "Bluefish"}
     assert second["body"] == ADDITION
     assert verdict["body"] == {**BOX_101, **ADDED_ANSWER, "not_sure": False}
+
+
+@needs_node
+def test_a_refusal_naming_the_same_species_offers_use_it(tmp_path):
+    """A refusal the form didn't foresee that names a listed choice of the very species WoRMS
+    matched (same AphiaID) offers that choice."""
+    out = run_node(
+        _page("review-frame.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      const ADULT = { key: "Pseudupeneus maculatus|adult", name: "Pseudupeneus maculatus",
+        life_stage: "adult", common: "Spotted Goatfish", aphia_id: 126994, celebrities: [] };
+      RV.catalogue = [...listed, ADULT];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      globalThis.species = RV.catalogue;
+      globalThis.suggestReply = { status: 409, data: { error: "already on the list as Spotted Goatfish" } };
+      worms[matchNames("Pseudupeneus maculatus")] = { data: [[GOATFISH]] };
+      await RV.views.frame.enter({ savedFrameId: 7 });
+      const root = document.getElementById("rv-frame");
+      openForm(root, {GOATFISH_FORM});           // a juvenile: a new stage, as far as the form knows
+      checkForm(root); await settle();
+      addButton(root).on.click({}); await settle();
+      const useButtons = uses(root);
+      button(root, "Use Spotted Goatfish").on.click({}); await settle();
+      return { useButtons, sent: sent() };
+    """.replace("{GOATFISH_FORM}", GOATFISH_FORM),
+        tmp_path,
+    )
+    assert out["useButtons"] == ["Use Spotted Goatfish"]
+    suggestion, verdict = out["sent"]
+    assert suggestion["url"] == "/api/review/species-suggestions"
+    assert verdict["body"] == {
+        **BOX_101,
+        "label": "Pseudupeneus maculatus",
+        "life_stage": "adult",
+        "label_source": "search",
+        "not_sure": False,
+    }
+
+
+@needs_node
+def test_a_chosen_record_fills_in_its_english_common_name(tmp_path):
+    """Controller ruling (fix round 1, I2): nothing reviews an addition, so a search fragment
+    must not become its name on everyone's list. Once a record is chosen, the form fills the
+    common name with WoRMS's English one, in Title Case, when the reviewer gave none or searched
+    by common name; Add waits for it. A common name typed beside a scientific search is kept;
+    with no English name from WoRMS the field is left as it is, and Add still works."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      const field = (root) => attr(root, "name", "common_name").value || "";
+      const root = document.getElementById("rv-single");
+      // Each case starts from the list before the goatfish was added.
+      const fresh = () => { RV.catalogue = listed.slice(); RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e])); };
+      worms["/AphiaRecordsByVernacular/spotted%20goat?like=true"] = { data: [GOATFISH] };
+      worms["/AphiaVernacularsByAphiaID/126994"] = { data: [
+        { vernacular: "spotted goatfish", language_code: "eng", language: "English" }] };
+      worms[matchNames("Pseudupeneus maculatus")] = { data: [[GOATFISH]] };
+      // A common-name search: the fragment typed is replaced by the English name.
+      fresh();
+      await RV.views.single.enter({ payload: payload(1) });
+      openForm(root, { common_name: "spotted goat", life_stage: "juvenile" });
+      checkForm(root); await settle();
+      radios(root)[0].on.change({});
+      const waiting = addButton(root).disabled;
+      await settle();
+      const searched = { field: field(root), ready: !addButton(root).disabled };
+      addButton(root).on.click({}); await settle();
+      // A scientific search with a common name typed: it is kept, and WoRMS isn't asked.
+      fresh();
+      await RV.views.single.enter({ payload: payload(1) });
+      openForm(root, { common_name: "goatie", scientific_name: "Pseudupeneus maculatus",
+        life_stage: "juvenile" });
+      checkForm(root); await settle();
+      const typed = { field: field(root), ready: !addButton(root).disabled };
+      addButton(root).on.click({}); await settle();
+      // No English name to be had: the field stays empty, and the scientific name is listed.
+      worms["/AphiaVernacularsByAphiaID/126994"] = "reject";
+      fresh();
+      await RV.views.single.enter({ payload: payload(1) });
+      openForm(root, { scientific_name: "Pseudupeneus maculatus", life_stage: "juvenile" });
+      checkForm(root); await settle();
+      const failed = { field: field(root), ready: !addButton(root).disabled };
+      addButton(root).on.click({}); await settle();
+      return { waiting, searched, typed, failed,
+        names: calls.filter((c) => c.url === "/api/review/species-suggestions").map((c) => c.body.common_name),
+        lookups: asked().filter((u) => u.includes("AphiaVernacularsByAphiaID")).length };
+    """,
+        tmp_path,
+    )
+    assert out["waiting"] is True  # Add waits for the English name
+    assert out["searched"] == {"field": "Spotted Goatfish", "ready": True}
+    assert out["typed"] == {"field": "goatie", "ready": True}
+    assert out["failed"] == {"field": "", "ready": True}
+    assert out["names"] == ["Spotted Goatfish", "goatie", "Pseudupeneus maculatus"]
+    assert out["lookups"] == 2  # not for the typed common name, nor on any Add
 
 
 @pytest.mark.parametrize("name", ["checkName", "addSpecies"])

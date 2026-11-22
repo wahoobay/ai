@@ -310,9 +310,12 @@ RV.formCount = 0;   // each form's radio group gets its own name
 // refusal from the server is shown in the form.
 RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
   let busy = false;      // checking with WoRMS, or adding
-  let checked = null;    // the query (JSON) the result shown answers
+  let searched = null;   // the query the result shown answers: {scientific, common}
   let shown = 0;         // bumped by each check and reset, so a stale answer is dropped
   let chosen = null;     // the WoRMS record picked: always the accepted one
+  let picks = 0;         // bumped by each choice and reset, so a stale English name is dropped
+  let naming = false;    // the chosen record's English name is being asked for; Add waits
+  let filled = null;     // the common name the form last filled in itself
   const group = `rv-worms-${++RV.formCount}`;
   const textInput = (name, attrs) => RV.el("input", { type: "text", name, class: "rv-field",
     autocomplete: "off", ...attrs });
@@ -341,16 +344,48 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
 
   function reset() {
     shown += 1;
-    checked = null;
+    picks += 1;
+    searched = null;
     chosen = null;
+    naming = false;
     result.replaceChildren();
     verdict.replaceChildren();
     addButton.disabled = true;
   }
 
-  // A name the check didn't ask about makes its answer stale.
+  // A change to the name the result shown was searched by makes it stale -- not a change to
+  // the common name once that is the name to be listed: beside a scientific-name search, or
+  // once a record is chosen.
   function edited() {
-    if (checked !== null && JSON.stringify(query()) !== checked) reset();
+    if (searched === null) return;
+    if (name(scientific) !== searched.scientific
+        || (!searched.scientific && !chosen && name(common) !== searched.common)) reset();
+  }
+
+  // Choosing a record. Nothing reviews an addition, so a search fragment ("spotted goat")
+  // must not become a species' name on everyone's list: the common name is filled in with
+  // WoRMS's English one, in Title Case, when the field is the form's to fill -- empty, still
+  // the text a common-name search was run with, or what the form put there itself. Add waits
+  // for it. With no English name from WoRMS the field is left as it is; it stays editable.
+  const fillable = () => {
+    const now = name(common);
+    return !now || now === (searched && searched.common) || now === filled;
+  };
+  const titleCase = (s) => s.replace(/(^|\s)(\S)/g, (m, space, first) => space + first.toUpperCase());
+  async function choose(rec) {
+    const pick = ++picks;
+    chosen = rec;
+    naming = fillable();
+    judge();
+    if (!naming) return;
+    const english = await RV.worms.englishName(rec.aphia_id);
+    if (pick !== picks) return;   // another record chosen, or the result cleared, since
+    naming = false;
+    if (english && fillable()) {
+      common.value = titleCase(english);
+      filled = name(common);
+    }
+    judge();
   }
 
   // "Name Authority · Family", the name in italics.
@@ -368,15 +403,16 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     const parts = [];
     if (found.note) parts.push(RV.el("p", { class: "rv-worms-note", text: found.note }));
     if (found.status === "match") {
-      chosen = found.records[0];
-      parts.push(RV.el("p", { class: "rv-worms-match" }, "✓ ", recordText(chosen), " ", wormsLink(chosen)));
+      const rec = found.records[0];
+      parts.push(RV.el("p", { class: "rv-worms-match" }, "✓ ", recordText(rec), " ", wormsLink(rec)));
+      choose(rec);
     } else if (found.status === "choose") {
       parts.push(RV.el("p", { text: "Did you mean?" }),
         RV.el("ul", { class: "rv-worms-choices" }, found.records.map((rec) => RV.el("li", {
           class: "rv-worms-choice" },
         RV.el("label", {},
           RV.el("input", { type: "radio", name: group, value: String(rec.aphia_id),
-            onchange: () => { chosen = rec; judge(); } }),
+            onchange: () => choose(rec) }),
           recordText(rec)),
         " ", wormsLink(rec)))));
     } else {
@@ -387,8 +423,8 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
 
   // What the list rules say to the chosen record at the stage chosen, and "Use …" for the
   // listed choices it names: "already on the list as X" offers "Use X"; "pick a stage" names
-  // each listed stage on its button.
-  function showConflict(message, uses) {
+  // each listed stage on its button. `hint`, if any, says what the reviewer can do instead.
+  function showConflict(message, uses, hint) {
     const label = (e) => {
       const base = e.common || e.name;
       if (message.startsWith("already on the list as ") || !e.life_stage) return base;
@@ -396,7 +432,8 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     };
     verdict.replaceChildren(RV.el("p", { text: message }),
       uses.length ? RV.el("div", { class: "rv-row" }, uses.map((e) => RV.el("button", { type: "button",
-        onclick: () => { if (!busy) onUse(e); } }, `Use ${label(e)}`))) : null);
+        onclick: () => { if (!busy) onUse(e); } }, `Use ${label(e)}`))) : null,
+      hint ? RV.el("p", { class: "rv-muted", text: hint }) : null);
   }
 
   function judge() {
@@ -405,7 +442,7 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     if (!chosen) return;
     const conflict = RV.listConflict(chosen, value(stage));
     if (conflict) { showConflict(conflict.message, conflict.uses); return; }
-    addButton.disabled = busy;
+    addButton.disabled = busy || naming;
   }
 
   async function checkName(ev) {
@@ -422,7 +459,7 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     say(null);
     reset();
     const mark = shown;
-    checked = JSON.stringify(q);
+    searched = q;
     result.replaceChildren(RV.el("p", { class: "rv-muted", text: "Asking WoRMS…" }));
     try {
       const found = await RV.worms.check(q);
@@ -438,7 +475,9 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
   // reviewer added the same species a moment ago), so the list is reloaded and what is listed
   // now offered. Answers whether Add may be tried again: not for a choice the list now holds;
   // yes after a refusal the page can't see coming (a common name another choice already has,
-  // say: the reviewer may change it), or a failure to reach the server.
+  // say: the reviewer may change it), or a failure to reach the server. "Use X" is offered
+  // only when X is the species WoRMS matched: a shared common name says nothing about that,
+  // and one click would label the box as another species.
   async function refused(r, record, lifeStage) {
     if (r.status !== 400 && r.status !== 409) {
       say(r.status === 0 || !r.data.error ? "That species wasn't added. Try again." : r.data.error);
@@ -449,13 +488,18 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     if (conflict) { showConflict(conflict.message, conflict.uses); return false; }
     const listedAs = /^already on the list as (.+)$/.exec(r.data.error || "");
     const named = listedAs ? RV.catalogue.filter((e) => !e.pending && (e.common || e.name) === listedAs[1]) : [];
-    const use = named.find((e) => (e.life_stage || null) === lifeStage) || named[0];
-    showConflict(r.data.error || "That species wasn't added.", use ? [use] : []);
+    const same = named.filter((e) => (e.aphia_id ? e.aphia_id === record.aphia_id : e.name === record.name));
+    const use = same.find((e) => (e.life_stage || null) === lifeStage) || same[0];
+    if (use || !named.length) {
+      showConflict(r.data.error || "That species wasn't added.", use ? [use] : []);
+    } else {
+      showConflict(`${r.data.error} (${named[0].name})`, [], "Give this species another common name to add it.");
+    }
     return true;
   }
 
   async function addSpecies() {
-    if (!chosen || busy) return;
+    if (!chosen || naming || busy) return;
     const record = chosen;
     const lifeStage = value(stage);
     if (RV.listConflict(record, lifeStage)) { judge(); return; }
@@ -465,9 +509,8 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     say(null);
     let again = false;
     try {
-      const commonName = name(common) || (await RV.worms.englishName(record.aphia_id)) || record.name;
       const r = await RV.post("/api/review/species-suggestions", { aphia_id: record.aphia_id,
-        scientific_name: record.name, family: record.family, common_name: commonName,
+        scientific_name: record.name, family: record.family, common_name: name(common) || record.name,
         life_stage: lifeStage, note: value(note) });
       if (!r.ok) { again = await refused(r, record, lifeStage); return; }
       await RV.loadCatalogue();
