@@ -1965,6 +1965,143 @@ def test_a_chosen_record_fills_in_its_english_common_name(tmp_path):
     assert out["lookups"] == 2  # not for the typed common name, nor on any Add
 
 
+# A misspelt name WoRMS offers two species for: the goatfish, which has an English name, and
+# Pseudupeneus prayensis, which (unless a test says otherwise) has none.
+TWO_GOATFISH = """
+      worms[matchNames("Pseudupeneus maculatis")] = { data: [[
+        record(126994, "Pseudupeneus maculatus", { match_type: "phonetic" }),
+        record(126995, "Pseudupeneus prayensis", { match_type: "near_2", authority: "(Cuvier, 1829)",
+          valid_authority: "(Cuvier, 1829)" })]] };
+      worms["/AphiaVernacularsByAphiaID/126994"] = { data: [
+        { vernacular: "spotted goatfish", language_code: "eng", language: "English" }] };
+      const field = (root) => attr(root, "name", "common_name").value || "";
+      const added = () => calls.filter((c) => c.url === "/api/review/species-suggestions")
+        .map((c) => c.body.common_name);
+"""
+PRAYENSIS = {
+    **ADDITION,
+    "aphia_id": 126995,
+    "scientific_name": "Pseudupeneus prayensis",
+    "common_name": "Pseudupeneus prayensis",
+}
+
+
+@needs_node
+@pytest.mark.parametrize("english", ["none", "reject", "hang"])
+def test_choosing_another_record_drops_the_common_name_the_form_filled(english, tmp_path):
+    """Final review I1: the form fills in record A's English name, then the reviewer picks B,
+    for which WoRMS has no English name, or doesn't answer in time. A's name must not be listed
+    for everyone as B's: the name the form filled is cleared, so B is added under its scientific
+    name."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + TWO_GOATFISH
+        + f"""
+      RV.worms.TIMEOUT_MS = 50;
+      const english = {json.dumps(english)};
+      if (english !== "none") worms["/AphiaVernacularsByAphiaID/126995"] = english;
+      await RV.views.single.enter({{ payload: payload(1) }});
+      const root = document.getElementById("rv-single");
+      openForm(root, {{ scientific_name: "Pseudupeneus maculatis", life_stage: "juvenile" }});
+      checkForm(root); await settle();
+      radios(root)[0].on.change({{}}); await settle();
+      const a = field(root);
+      radios(root)[1].on.change({{}});
+      await new Promise((r) => setTimeout(r, 120)); await settle();
+      const b = {{ field: field(root), ready: !addButton(root).disabled }};
+      addButton(root).on.click({{}}); await settle();
+      return {{ a, b, sent: sent() }};
+    """,
+        tmp_path,
+    )
+    assert out["a"] == "Spotted Goatfish"
+    assert out["b"] == {"field": "", "ready": True}
+    assert out["sent"][0] == {"url": "/api/review/species-suggestions", "body": PRAYENSIS}
+
+
+@needs_node
+def test_a_new_check_drops_the_common_name_the_form_filled(tmp_path):
+    """Final review I1, across checks: the form filled in the first species' English name; the
+    reviewer types another scientific name and checks it, and WoRMS has no English name for the
+    match. The first species' name must not be listed as the second's. A filled name the
+    reviewer then searches WoRMS by is their search text, and stays in the field."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + TWO_GOATFISH
+        + """
+      worms[matchNames("Pseudupeneus maculatus")] = { data: [[GOATFISH]] };
+      worms[matchNames("Pseudupeneus prayensis")] = { data: [[record(126995, "Pseudupeneus prayensis",
+        { authority: "(Cuvier, 1829)", valid_authority: "(Cuvier, 1829)" })]] };
+      worms["/AphiaRecordsByVernacular/spotted%20goat?like=true"] = { data: [GOATFISH] };
+      worms["/AphiaRecordsByVernacular/Spotted%20Goatfish?like=false"] = { data: [GOATFISH] };
+      await RV.views.single.enter({ payload: payload(1) });
+      const root = document.getElementById("rv-single");
+      openForm(root, { scientific_name: "Pseudupeneus maculatus", life_stage: "juvenile" });
+      checkForm(root); await settle();
+      const first = field(root);
+      fill(root, { scientific_name: "Pseudupeneus prayensis" });
+      checkForm(root); await settle();
+      const second = { field: field(root), ready: !addButton(root).disabled };
+      addButton(root).on.click({}); await settle();
+      // A common-name search: the name filled in is searched by in turn.
+      await RV.views.single.enter({ payload: payload(1) });
+      openForm(root, { common_name: "spotted goat", life_stage: "juvenile" });
+      checkForm(root); await settle();
+      radios(root)[0].on.change({}); await settle();
+      checkForm(root); await settle();
+      const searched = { field: field(root), choices: choices(root) };
+      return { first, second, searched, sent: sent() };
+    """,
+        tmp_path,
+    )
+    assert out["first"] == "Spotted Goatfish"
+    assert out["second"] == {"field": "", "ready": True}
+    assert out["sent"][0] == {"url": "/api/review/species-suggestions", "body": PRAYENSIS}
+    assert out["searched"] == {
+        "field": "Spotted Goatfish",
+        "choices": ["Pseudupeneus maculatus (Bloch, 1793) · Mullidae WoRMS ↗"],
+    }
+
+
+@needs_node
+def test_a_common_name_the_reviewer_typed_survives_choosing_another_record(tmp_path):
+    """Final review I1: only the form's own fill is cleared. A common name typed beside the
+    scientific search, or typed over the one the form filled, stays through another choice."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + TWO_GOATFISH
+        + """
+      const root = document.getElementById("rv-single");
+      const chooseBoth = async (fields, retype) => {
+        await RV.views.single.enter({ payload: payload(1) });
+        openForm(root, { scientific_name: "Pseudupeneus maculatis", life_stage: "juvenile", ...fields });
+        checkForm(root); await settle();
+        radios(root)[0].on.change({}); await settle();
+        if (retype) fill(root, { common_name: retype });
+        radios(root)[1].on.change({}); await settle();
+        const shown = field(root);
+        addButton(root).on.click({}); await settle();
+        return shown;
+      };
+      const typed = await chooseBoth({ common_name: "goatie" });
+      const retyped = await chooseBoth({}, "Prayensis Goatfish");
+      return { typed, retyped, added: added(),
+        lookups: asked().filter((u) => u.includes("AphiaVernacularsByAphiaID")) };
+    """,
+        tmp_path,
+    )
+    assert out["typed"] == "goatie" and out["retyped"] == "Prayensis Goatfish"
+    assert out["added"] == ["goatie", "Prayensis Goatfish"]
+    # only for the empty field's first choice: never for a name the reviewer typed
+    assert out["lookups"] == ["WoRMS /AphiaVernacularsByAphiaID/126994"]
+
+
 @pytest.mark.parametrize("name", ["checkName", "addSpecies"])
 def test_the_add_species_form_is_busy_guarded(name):
     _assert_busy_guarded(_function_body(_read("review-core.js"), name), name)

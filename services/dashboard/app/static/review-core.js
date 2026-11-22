@@ -342,12 +342,22 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     : { scientific: null, common: name(common) });
   const say = (message) => { error.textContent = message || ""; error.hidden = !message; };
 
+  // The common name the form filled in named the record chosen before; once another is chosen,
+  // or a new check starts, it is cleared, so without an English name for the next one its
+  // scientific name is listed, not the last one's common name (final review I1). A common name
+  // the reviewer typed is never cleared.
+  function unfill() {
+    if (filled !== null && name(common) === filled) common.value = "";
+    filled = null;
+  }
+
   function reset() {
     shown += 1;
     picks += 1;
     searched = null;
     chosen = null;
     naming = false;
+    unfill();
     result.replaceChildren();
     verdict.replaceChildren();
     addButton.disabled = true;
@@ -365,8 +375,9 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
   // Choosing a record. Nothing reviews an addition, so a search fragment ("spotted goat")
   // must not become a species' name on everyone's list: the common name is filled in with
   // WoRMS's English one, in Title Case, when the field is the form's to fill -- empty, still
-  // the text a common-name search was run with, or what the form put there itself. Add waits
-  // for it. With no English name from WoRMS the field is left as it is; it stays editable.
+  // the text a common-name search was run with, or what the form put there itself (cleared
+  // first: it named the record chosen before). Add waits for it. With no English name from
+  // WoRMS the field is left as it is; it stays editable.
   const fillable = () => {
     const now = name(common);
     return !now || now === (searched && searched.common) || now === filled;
@@ -375,6 +386,7 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
   async function choose(rec) {
     const pick = ++picks;
     chosen = rec;
+    unfill();
     naming = fillable();
     judge();
     if (!naming) return;
@@ -459,6 +471,7 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated, onUse) {
     busy = true;
     checkButton.disabled = true;
     say(null);
+    if (q.common) filled = null;   // a filled name searched by is the reviewer's search text now
     reset();
     const mark = shown;
     searched = q;
