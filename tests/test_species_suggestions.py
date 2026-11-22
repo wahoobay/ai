@@ -558,6 +558,44 @@ async def test_merged_catalogue_leaves_the_callers_transaction_alone(rdb, cat):
     assert (await _row(rdb, sid))["note"] == "kept"
 
 
+async def test_the_merged_list_follows_its_rows_not_only_their_count_and_time(rdb, cat):
+    """Final review M4: an addition whose transaction began before a removal's but committed
+    after it can leave the approved rows' count and latest decided_at as they were. The stamp
+    must change all the same, or an instance that saw no request in between keeps the old
+    list."""
+    roy = await make_user(rdb, "roy")
+    moray, parrot, chain = [
+        await insert_pending(rdb, user_id=roy, common_name=c)
+        for c in ("Spotted Moray", "Striped Parrotfish", "Chain Moray")
+    ]
+
+    async def decide(conn, sid, status, name, at):
+        await conn.execute(
+            """UPDATE species_suggestions
+                  SET status = %s, approved_name = %s, approved_stage = NULL,
+                      approved_common = common_name, decided_at = %s
+                WHERE id = %s""",
+            (status, name, at, sid),
+        )
+
+    async with rdb.connection() as conn:
+        await decide(conn, moray, "approved", "Gymnothorax moringa", T0)
+        await decide(conn, parrot, "approved", "Scarus iseri", T0 + timedelta(minutes=5))
+    before = await _merged(rdb, cat)
+    assert before.entry("Gymnothorax moringa", None) is not None
+    # In one go the moray is removed and the chain moray added, decided as early: still two
+    # approved rows, the latest decided at the same moment.
+    async with rdb.connection() as conn, conn.transaction():
+        await conn.execute(
+            "UPDATE species_suggestions SET status = 'rejected' WHERE id = %s", (moray,)
+        )
+        await decide(conn, chain, "approved", "Echidna catenata", T0)
+    after = await _merged(rdb, cat)
+    assert after is not before
+    assert after.entry("Gymnothorax moringa", None) is None
+    assert after.entry("Echidna catenata", None).common_name == "Chain Moray"
+
+
 async def test_species_photos_read_the_file_catalogue(rdb, rclient, monkeypatch):
     """Ruling P1a: approved suggestions carry no photos, so a thumbnail costs no database
     round trip for the merge."""

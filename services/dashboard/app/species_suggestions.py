@@ -768,7 +768,9 @@ _merged: tuple | None = None
 
 async def merged_catalogue(conn, base: Catalogue) -> Catalogue:
     """`base` plus one entry per approved suggestion, rebuilt only when the approved set's
-    stamp (count, latest decided_at) or `base` changes.
+    stamp (count, latest decided_at, sum of ids) or `base` changes. The ids' sum is there
+    because the other two can repeat for another set (final review M4): an addition whose
+    transaction began before a removal's but committed after it.
 
     The reads run on `conn`, the connection the caller already holds (Ruling P1). If it was
     idle, they are rolled back afterwards: an implicit transaction left open would turn the
@@ -778,12 +780,12 @@ async def merged_catalogue(conn, base: Catalogue) -> Catalogue:
     try:
         stamp = await fetch_one(
             conn,
-            """SELECT count(*) AS n, max(decided_at) AS latest
+            """SELECT count(*) AS n, max(decided_at) AS latest, sum(id) AS ids
                  FROM species_suggestions WHERE status = 'approved'""",
         )
         if not stamp["n"]:
             return base
-        key = (id(base), stamp["n"], stamp["latest"])
+        key = (id(base), stamp["n"], stamp["latest"], stamp["ids"])
         if _merged is not None and _merged[0] == key:
             return _merged[2]
         rows = await fetch_all(
