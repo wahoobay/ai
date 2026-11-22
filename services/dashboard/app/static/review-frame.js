@@ -33,6 +33,9 @@ RV.views.frame = (() => {
   // another frame; and whether M has asked "Mark N boxes as ...?" yet.
   let lastAnswer = null;
   let confirmingMark = false;
+  // The species last given here was a new one, waiting for approval (spec 2026-11-21):
+  // M has nothing to mark, and the panel says why instead of the generic hint.
+  let newSpeciesLast = false;
 
   const kbd = (key) => RV.el("kbd", { text: key });
   const inside = (bb, x, y) => x >= bb[0] && x <= bb[2] && y >= bb[1] && y <= bb[3];
@@ -85,7 +88,10 @@ RV.views.frame = (() => {
         RV.show("single", arg.payload ? { payload: arg.payload } : { result: r });
         return;
       }
-      if (!state || state.saved_frame_id !== id) lastAnswer = null;   // a new frame needs an answer first
+      if (!state || state.saved_frame_id !== id) {   // a new frame needs an answer first
+        lastAnswer = null;
+        newSpeciesLast = false;
+      }
       confirmingMark = false;
       state = r.data;
       RV.held = null;            // the frame's claims now include it
@@ -505,6 +511,9 @@ RV.views.frame = (() => {
     }
     if (canMark()) {
       out.push(markRestBlock());
+    } else if (newSpeciesLast && !state.complete && waiting() > 0) {
+      out.push(RV.el("p", { class: "rv-muted rv-mark-hint",
+        text: "A new species can't be marked on the rest until it's approved." }));
     } else if (!lastAnswer && !state.complete && waiting() > 1) {
       // Until a species is given here, say how marking the rest works: "No
       // animal" and "Can't identify" don't set what M would mark (Dan, 2026-11-21).
@@ -588,9 +597,13 @@ RV.views.frame = (() => {
         if (r.status === 409 || r.status === 403) await reload(false);
         return;
       }
-      // A species waiting for approval can't mark the rest (spec 2026-11-21), so an
-      // answer with one leaves what M offers as it was.
-      if ((outcome === "accept" || outcome === "species") && !extra.species_suggestion_id) {
+      if (extra.species_suggestion_id) {
+        // A species waiting for approval can't mark the rest (spec 2026-11-21), and M
+        // must not offer the earlier species after it (Task 7 review, Important 1).
+        lastAnswer = null;
+        newSpeciesLast = true;
+      } else if (outcome === "accept" || outcome === "species") {
+        newSpeciesLast = false;
         // What "mark the rest" offers next in this frame.
         const label = outcome === "accept" ? b.model.name : extra.label;
         const lifeStage = extra.life_stage || null;

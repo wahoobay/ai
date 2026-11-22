@@ -1490,3 +1490,36 @@ def test_the_form_offers_the_servers_stages():
     m = re.search(r"RV\.STAGES = \[([^\]]*)\];", _read("review-core.js"))
     assert m and re.findall(r'"([^"]+)"', m.group(1)) == [s for s in STAGES if s]
     assert None in STAGES  # the form's "none"
+
+
+NEW_SPECIES_HINT = "A new species can't be marked on the rest until it's approved."
+
+
+@needs_node
+def test_m_marks_nothing_right_after_a_new_species(tmp_path):
+    """Task 7 review, Important 1: box 1 answered with a listed species, then a box with a
+    new one. M must not offer the earlier species, and the panel says why; answering a
+    listed species again brings M back."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-frame.js")],
+        FRAME_STUB
+        + SUGGEST_STUB
+        + f"""
+      const shown = () => textOf(document.getElementById("rv-frame"));
+      await RV.views.frame.enter({{ savedFrameId: 7 }});
+      key("a"); await settle();                     // a listed species: M would mark with it
+      const root = document.getElementById("rv-frame");
+      openForm(root, {FILLED});
+      submitForm(root); await settle();             // then a new one
+      const afterNew = {{ m: key("m"), text: shown() }};
+      key("a"); await settle();                     // a listed species again
+      return {{ afterNew, again: key("m"), againText: shown(), marks: posted().filter((c) =>
+        c.url.endsWith("/mark-rest")).length }};
+    """,
+        tmp_path,
+    )
+    assert out["afterNew"]["m"] is False
+    assert NEW_SPECIES_HINT in out["afterNew"]["text"]
+    assert HINT not in out["afterNew"]["text"] and "Mark the" not in out["afterNew"]["text"]
+    assert out["again"] is True and NEW_SPECIES_HINT not in out["againText"]
+    assert out["marks"] == 0  # M only asked
