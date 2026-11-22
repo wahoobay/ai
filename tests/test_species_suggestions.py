@@ -726,6 +726,53 @@ async def test_a_suggested_answer_without_a_queue_item(rdb, tmp_path, cat):
     assert len(await _verdicts(rdb)) == 1
 
 
+async def _spot_checks_on(rdb, event_id):
+    async with rdb.connection() as conn:
+        return await fetch_all(
+            conn,
+            "SELECT id, status, retired_reason FROM review_items WHERE event_id = %s AND pass = 2",
+            (event_id,),
+        )
+
+
+async def test_changing_to_a_new_species_retires_the_boxs_spot_check(rdb, tmp_path, cat):
+    """Final review I3: the first answer, from the list, was sampled for a second opinion; the
+    reviewer then changes the box to their new species. The second reviewer could not pick
+    it, so the check would be a dispute by construction; the admin's approval is its check."""
+    roy, two = await make_user(rdb, "roy"), await make_user(rdb, "two")
+    sid = (await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH))["suggestion_id"]
+    listed = {"outcome": "species", "label": "Seriola zonata", "label_source": "search"}
+    events = []
+    for n in (0, 1):
+        _f, eid, item = await _box(rdb, tmp_path, n, claimed_by=roy)
+        first = await _answer(rdb, cat, roy, spot=1.0, event_id=eid, review_item_id=item, **listed)
+        assert first["spot_check_scheduled"] is True
+        events.append(eid)
+    changed, control = events
+
+    out = await _answer(rdb, cat, roy, spot=1.0, **_suggested(sid, event_id=changed))
+    assert out["first_pass"] is True and out["spot_check_scheduled"] is False
+    [spot] = await _spot_checks_on(rdb, changed)  # retired, and no new one
+    assert (spot["status"], spot["retired_reason"]) == ("retired", "new_species")
+    with pytest.raises(Conflict) as retired:
+        await _answer(rdb, cat, two, event_id=changed, review_item_id=spot["id"], **listed)
+    assert retired.value.message == "this box was retired: an admin checks its answer instead"
+
+    # Changed to another listed species: the second opinion still stands, as before.
+    await _answer(
+        rdb,
+        cat,
+        roy,
+        spot=1.0,
+        event_id=control,
+        outcome="species",
+        label="Acanthurus coeruleus",
+        label_source="search",
+    )
+    [kept] = await _spot_checks_on(rdb, control)
+    assert (kept["status"], kept["retired_reason"]) == ("open", None)
+
+
 async def test_suggested_answer_over_http(rdb, rclient, tmp_path):
     await make_user(rdb, "roy")
     login(rclient, "roy")

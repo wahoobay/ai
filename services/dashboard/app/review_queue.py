@@ -51,6 +51,7 @@ EVENT_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended('review-event:' 
 RETIRED_MESSAGES = {
     "frame_missing": "this box was retired: its frame is missing on disk",
     "outside_window": "this box was retired: it is outside the review window",
+    "new_species": "this box was retired: an admin checks its answer instead",
 }
 
 
@@ -943,6 +944,18 @@ async def submit_verdict(
                      WHERE {where} AND status IN ('open', 'claimed')""",
                 params,
             )
+        if v["species_suggestion_id"] is not None:
+            # An answer with a new species gets no spot-check (below), and one already waiting
+            # on the box, sampled from an earlier answer from the list, is retired: its reviewer
+            # could not pick the new species, so it would be a dispute by construction. The
+            # admin's approval is these answers' check (final review I3).
+            for spot_item in await fetch_all(
+                conn,
+                """SELECT id FROM review_items
+                    WHERE event_id = %s AND pass = 2 AND status IN ('open', 'claimed')""",
+                (body.event_id,),
+            ):
+                await retire_item(conn, spot_item["id"], "new_species")
 
         first_pass = not adjudication and (item is None or item["pass"] == 1)
         spot = None
