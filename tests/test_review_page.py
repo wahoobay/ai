@@ -1468,6 +1468,55 @@ def test_a_new_species_decided_meanwhile_reloads_the_list_and_keeps_the_box(view
     assert "/api/review/next" not in out
 
 
+HINTED_ENTER = {
+    "single": """
+      await RV.views.single.enter({ payload: { item: { id: 11, event_id: 101, pass: 1 },
+        box: { bbox: [10, 10, 50, 50], model_bbox: [10, 10, 50, 50], saved_frame_id: 7 },
+        frame: { url: "/f.jpg", width: 1280, height: 720 }, zoom: { url: "/z.jpg", region: [0, 0, 200, 200] },
+        other_boxes: [], model: null, hints: HINTS, counts_toward: null, editable: true } });""",
+    "frame": """
+      const frameFetch = globalThis.fetch;
+      globalThis.fetch = async (url, opts) => {
+        const r = await frameFetch(url, opts);
+        if (!url.endsWith("/open")) return r;
+        const data = await r.json();
+        data.boxes[0].hints = HINTS;
+        return { status: 200, ok: true, json: async () => data };
+      };
+      await RV.views.frame.enter({ savedFrameId: 7 });    // box 1 is selected""",
+}
+
+
+@needs_node
+@pytest.mark.parametrize("view", ["single", "frame"])
+def test_a_hint_chip_answers_in_one_click_beside_a_waiting_stage(view, tmp_path):
+    """Final review (promoted minor): a new stage of the hinted species waits for approval (an
+    admin sees every one). The chip still answers with the listed species in one click,
+    rather than sending the volunteer to the picker."""
+    out = run_node(
+        [_read("review-core.js"), _read(f"review-{view}.js")],
+        FRAME_STUB
+        + ELEMENT_STUB
+        + f"""
+      RV.catalogue = [{{ key: "Haemulon chrysargyreum|", name: "Haemulon chrysargyreum",
+          common: "Smallmouth grunt", life_stage: null }},
+        {{ key: "suggestion:5", name: "Haemulon chrysargyreum", life_stage: "juvenile", suggestion_id: 5,
+          pending: true, common: "Juvenile Smallmouth grunt (waiting for approval)" }}];
+      RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+      const HINTS = [{{ name: "Haemulon chrysargyreum", common: "Smallmouth grunt", p: 0.3 }}];
+      {HINTED_ENTER[view]}
+      find(document.getElementById("rv-{view}"), (n) => n.className === "rv-chip").on.click({{}});
+      await settle();
+      return calls.filter((c) => c.url === "/api/review/verdicts").map((c) => c.body);
+    """,
+        tmp_path,
+    )
+    [verdict] = out
+    assert verdict["event_id"] == 101 and verdict["outcome"] == "species"
+    assert verdict["label"] == "Haemulon chrysargyreum" and verdict["life_stage"] is None
+    assert verdict["label_source"] == "hint" and "species_suggestion_id" not in verdict
+
+
 @needs_node
 def test_looks_right_never_offers_a_stage_waiting_for_approval(tmp_path):
     """A new stage of a listed species (a striped parrotfish juvenile) waits for approval;

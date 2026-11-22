@@ -336,7 +336,7 @@ RV.views.frame = (() => {
     if (hints && hints.length) {
       out.push(RV.el("div", { class: "rv-chips" }, hints.map((h) => RV.el("button", {
         type: "button", class: "rv-chip", onclick: () => {
-          const entries = RV.catalogue.filter((e) => e.name === h.name);
+          const entries = RV.catalogue.filter((e) => e.name === h.name && !e.pending);
           if (entries.length === 1) { onSpecies(entries[0], "hint"); return; }
           hintName = h.name;
           picker.input.value = h.name;

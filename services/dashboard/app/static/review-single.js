@@ -141,7 +141,7 @@ RV.views.single = (() => {
   }
 
   function chooseHint(h) {
-    const entries = RV.catalogue.filter((e) => e.name === h.name);
+    const entries = RV.catalogue.filter((e) => e.name === h.name && !e.pending);
     if (!entries.length) { RV.toast("That species isn't in the list any more."); return; }
     if (entries.length === 1) { pickSpecies(entries[0], "hint"); return; }
     // Several life stages: let the volunteer pick one, and remember the
