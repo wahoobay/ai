@@ -1403,6 +1403,29 @@ async def test_browse_names_a_pending_species(rdb, tmp_path, cat):
     assert (await commons(await _merged(rdb, cat)))[w["pending"]] == "Banded Rudderfish"
 
 
+async def test_browse_names_a_pending_species_that_is_not_listed_yet(rdb, tmp_path, cat):
+    """Browser walk 2026-11-21: a species new to the list has no listed common name, so
+    the cell showed its bare provisional name, "Pseudupeneus maculatus", unmarked."""
+    roy = await make_user(rdb, "roy")
+    sid = (
+        await _suggest(
+            rdb,
+            roy,
+            cat,
+            common_name="Spotted Goatfish",
+            scientific_name="Pseudupeneus maculatus",
+        )
+    )["suggestion_id"]
+    eid = await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
+    async with rdb.connection() as conn:
+        result = await browse(
+            conn, catalogue=cat, user=as_user(roy), filters=BrowseFilters(status="any"), page=0
+        )
+    [cell] = result["cells"]
+    assert cell["event_id"] == eid
+    assert cell["common"] == "Spotted Goatfish" + WAITING
+
+
 async def test_a_box_changed_away_from_its_pending_species_shows_the_new_answer(rdb, tmp_path, cat):
     w = await _pending_and_control(rdb, tmp_path, cat)
     await _answer(

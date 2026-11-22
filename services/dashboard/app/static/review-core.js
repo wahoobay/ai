@@ -253,6 +253,13 @@ RV.STAGES = ["juvenile", "intermediate", "adult", "initial phase", "terminal pha
 RV.STALE_SPECIES = new Set(["pick a species from the list",
   "that species suggestion was already decided; pick from the list"]);
 
+// A listed species by its common name, as review-single.js's mineText() names one: what a
+// rejected suggestion's answers now say, for its suggester and in the admin's history.
+RV.listedName = function listedName(name, lifeStage) {
+  const e = RV.entry(name, lifeStage);
+  return (e && e.common) || (lifeStage ? `${name} (${lifeStage})` : name);
+};
+
 // The answer's species fields for a picked entry. `source` ("hint" or "search") says
 // where a listed species came from; one waiting for approval names its suggestion.
 RV.answerExtra = function answerExtra(entry, source) {
@@ -307,18 +314,13 @@ RV.suggestSpecies = function suggestSpecies(container, onCreated) {
     }
   }
 
-  // A listed species by its common name, as review-single.js's mineText() names one.
-  const listedName = (name, lifeStage) => {
-    const e = RV.entry(name, lifeStage);
-    return (e && e.common) || (lifeStage ? `${name} (${lifeStage})` : name);
-  };
   function mineItem(s) {
     let what = s.status_text;
     if (s.status_text === "added" && s.approved_common && s.approved_common !== s.common_name) {
       what += ` as ${s.approved_common}`;
     } else if (s.status_text === "not added") {
       what += `; your answers now say ${s.rejected_to_name
-        ? listedName(s.rejected_to_name, s.rejected_to_stage) : "can't identify"}`;
+        ? RV.listedName(s.rejected_to_name, s.rejected_to_stage) : "can't identify"}`;
     }
     const suggested = s.life_stage ? `${s.common_name} (${s.life_stage})` : s.common_name;
     return RV.el("li", {},
@@ -364,6 +366,25 @@ RV.addSpeciesBlock = function addSpeciesBlock(onCreated) {
       }
     } }, "Not on the list? Add a species");
   return RV.el("div", { class: "rv-add" }, link, form);
+};
+
+// For admins, the Browse button counts the new species waiting for a decision ("Badge"):
+// read when the page loads, and set again whenever Browse's admin panel reloads.
+RV.setSpeciesBadge = function setSpeciesBadge(n) {
+  const button = document.querySelector('#rv-nav button[data-view="browse"]');
+  if (!button) return;
+  if (!RV.speciesBadge) {
+    RV.speciesBadge = RV.el("span", { class: "rv-badge" });
+    button.append(RV.speciesBadge);
+  }
+  RV.speciesBadge.textContent = String(n);
+  RV.speciesBadge.title = `${n} new species waiting for approval`;
+  RV.speciesBadge.hidden = !(n > 0);
+};
+
+RV.refreshSpeciesBadge = async function refreshSpeciesBadge() {
+  const r = await RV.get("/api/review/species-suggestions?status=pending");
+  if (r.ok) RV.setSpeciesBadge(r.data.pending);
 };
 
 // ---- accepting a model's guess -----------------------------------------------
@@ -793,6 +814,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     RV.banner("Couldn't load the species list. Reload the page to try again.");
     return;
   }
-  await RV.refreshMine();
+  await Promise.all([RV.refreshMine(), RV.role === "admin" ? RV.refreshSpeciesBadge() : null]);
   await RV.next(landing);
 });

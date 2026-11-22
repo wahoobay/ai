@@ -111,8 +111,9 @@ def test_frame_mutating_handlers_share_the_busy_guard(name):
 # no setting.) Loading the grid, the progress KPIs and the admin panels are
 # plain re-reads (same class as review-single.js's loadNext() and
 # review-frame.js's reload(), neither of which is in the lists above), so
-# only this one gets the guard.
-BROWSE_MUTATING_HANDLERS = ("adjudicate",)
+# only this one gets the guard. Since 2026-11-21 the new-species panel's
+# approve, reject and per-box "Not this species" share it too.
+BROWSE_MUTATING_HANDLERS = ("adjudicate", "approveSuggestion", "rejectSuggestion", "detachBox")
 
 
 @pytest.mark.parametrize("name", BROWSE_MUTATING_HANDLERS)
@@ -1090,9 +1091,10 @@ def test_the_frame_says_how_to_mark_the_rest_until_a_species_is_given(tmp_path):
 # ---- 2026-11-21: reviewers add a species from the picker and answer with it ----------
 # Spec 2026-11-21 (reviewer species suggestions), "Answering with a suggestion": POST the
 # suggestion, then the verdict. SUGGEST_STUB goes after FRAME_STUB: elements keep their
-# listeners and attributes, so a test can click the link, fill the form and submit it.
+# listeners and attributes (ELEMENT_STUB, shared with the Browse admin tests below), so a
+# test can click the link, fill the form and submit it.
 
-SUGGEST_STUB = r"""
+ELEMENT_STUB = r"""
   const plainEl = document.createElement;
   document.createElement = (tag) => Object.assign(plainEl(tag), {
     on: {}, attrs: {}, focus() {}, select() {}, blur() {},
@@ -1108,6 +1110,18 @@ SUGGEST_STUB = r"""
     return null;
   };
   const attr = (root, k, v) => find(root, (n) => n.attrs && n.attrs[k] === v);
+  // What the picker in `root` offers for `query`.
+  const offered = (root, query) => {
+    const input = attr(root, "type", "search");
+    input.value = query;
+    input.on.input();
+    return textOf(attr(root, "role", "listbox"));
+  };
+"""
+
+SUGGEST_STUB = (
+    ELEMENT_STUB
+    + r"""
   const ADD = "Not on the list? Add a species";
   const addLink = (root) => find(root, (n) => n.tag === "button" && textOf(n) === ADD);
   const submitForm = (root) => find(root, (n) => n.tag === "form").on.submit({ preventDefault() {} });
@@ -1115,13 +1129,6 @@ SUGGEST_STUB = r"""
   const openForm = (root, fields) => {
     addLink(root).on.click({});
     for (const [name, value] of Object.entries(fields || {})) attr(root, "name", name).value = value;
-  };
-  // What the picker in `root` offers for `query`.
-  const offered = (root, query) => {
-    const input = attr(root, "type", "search");
-    input.value = query;
-    input.on.input();
-    return textOf(attr(root, "role", "listbox"));
   };
   const ENTRY = { key: "suggestion:9", name: "Pseudupeneus maculatus", life_stage: "juvenile",
     common: "Spotted Goatfish (waiting for approval)", suggestion_id: 9, pending: true,
@@ -1159,6 +1166,7 @@ SUGGEST_STUB = r"""
     frame: { url: "/f.jpg", width: 1280, height: 720 }, zoom: { url: "/z.jpg", region: [0, 0, 200, 200] },
     other_boxes: [], model: null, hints: [], counts_toward: null, editable: true });
 """
+)
 
 SUGGESTION = {
     "common_name": "Spotted Goatfish",
@@ -1523,3 +1531,293 @@ def test_m_marks_nothing_right_after_a_new_species(tmp_path):
     assert HINT not in out["afterNew"]["text"] and "Mark the" not in out["afterNew"]["text"]
     assert out["again"] is True and NEW_SPECIES_HINT not in out["againText"]
     assert out["marks"] == 0  # M only asked
+
+
+# ---- 2026-11-21: an admin decides new species from Browse ---------------------------
+# Spec 2026-11-21, "Admin panel": every waiting suggestion with the boxes answered with it,
+# a per-box "Not this species", Approve under the admin's names and stage, Reject as the
+# listed species it really is or as can't-identify; decided ones fold away, and the Browse
+# button counts the waiting ones for admins.
+
+ADMIN_STUB = (
+    ELEMENT_STUB
+    + r"""
+  globalThis.Node = Object;
+  document.createTextNode = (t) => ({ text: t });
+  const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const all = (n, pred, out = []) => {
+    if (!n || typeof n !== "object") return out;
+    if (pred(n)) out.push(n);
+    for (const c of kids(n)) all(c, pred, out);
+    return out;
+  };
+  RV.role = "admin";
+  RV.catalogue = [{ key: "Haemulon chrysargyreum|", name: "Haemulon chrysargyreum",
+      common: "Smallmouth grunt", life_stage: null },
+    { key: "suggestion:3", name: "Pseudupeneus maculatus", life_stage: "juvenile", suggestion_id: 3,
+      pending: true, common: "Spotted Goatfish (waiting for approval)" }];
+  RV.byKey = new Map(RV.catalogue.map((e) => [e.key, e]));
+  const none = { decided_at: null, decision_note: null, approved_name: null, approved_common: null,
+    approved_stage: null, rejected_to_name: null, rejected_to_stage: null };
+  globalThis.waiting = [{ ...none, id: 3, common_name: "Spotted Goatfish",
+    scientific_name: "Pseudupeneus maculatus", life_stage: "juvenile", note: "Two barbels under the chin",
+    suggested_by_name: "Roy", answers: 2, created_at: "2026-11-21T15:00:00+00:00", status: "pending" }];
+  const DECIDED = [{ ...none, id: 2, common_name: "Banded goby", scientific_name: null, life_stage: null,
+    note: null, suggested_by_name: "Roy", answers: 1, created_at: "2026-11-20T15:00:00+00:00",
+    status: "rejected", decided_at: "2026-11-20T16:00:00+00:00", rejected_to_name: "Haemulon chrysargyreum",
+    decision_note: "A grunt, seen side on." }];
+  globalThis.boxes = [101, 102];
+  const PROGRESS = { kpis: { verified_boxes: 0, species_with_verified: 0, complete_frames: 0,
+    session_verified: 0, open: { check: 0, identify: 0 } }, species: [], target: 100, stale: false };
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    calls.push({ url, body });
+    const reply = (status, data) => ({ status, ok: status < 400, json: async () => data });
+    const m = url.match(/^\/api\/review\/species-suggestions\/3\/boxes\?page=(\d+)$/);
+    if (m) {
+      const at = 24 * Number(m[1]);
+      return reply(200, { total: globalThis.boxes.length, boxes: globalThis.boxes.slice(at, at + 24)
+        .map((id) => ({ event_id: id, zoom_url: `/api/review/boxes/${id}/zoom.jpg`, by: "Roy" })) });
+    }
+    if (url === "/api/review/species-suggestions?status=pending") {
+      return reply(200, { suggestions: globalThis.waiting, pending: globalThis.waiting.length });
+    }
+    if (url === "/api/review/species-suggestions?status=decided") {
+      return reply(200, { suggestions: DECIDED, pending: globalThis.waiting.length });
+    }
+    if (url.endsWith("/3/approve") || url.endsWith("/3/reject")) {
+      globalThis.waiting = [];
+      return reply(200, { answers: 2 });
+    }
+    if (url.endsWith("/3/detach")) {
+      globalThis.boxes = globalThis.boxes.filter((id) => id !== body.event_id);
+      return reply(200, { answers: 1 });
+    }
+    if (url === "/api/review/progress") return reply(200, PROGRESS);
+    if (url.startsWith("/api/review/browse?")) return reply(200, { cells: [], has_more: false });
+    if (url === "/api/review/disputes") return reply(200, { disputes: [] });
+    if (url === "/api/review/species") return reply(200, { species: RV.catalogue });
+    return reply(404, { error: "not stubbed" });
+  };
+  const browseButton = document.createElement("button");
+  document.querySelector = (sel) => (sel === '#rv-nav button[data-view="browse"]' ? browseButton : null);
+  const badge = () => browseButton.children.map((b) => (b.hidden ? "" : textOf(b))).join("");
+  const admin = () => document.getElementById("rv-admin");
+  const button = (text) => find(admin(), (n) => n.tag === "button" && textOf(n) === text);
+  const field = (name) => attr(admin(), "name", name);
+  const radio = (value) => find(admin(), (n) => n.attrs && n.attrs.type === "radio" && n.attrs.value === value);
+  const alertOf = () => attr(admin(), "role", "alert");
+  const notThis = () => all(admin(), (n) => n.tag === "button" && textOf(n) === "Not this species");
+  const card = () => textOf(find(admin(), (n) => n.className === "rv-sg"));
+  const heading = () => textOf(find(admin(), (n) => n.tag === "h4"));
+  const posted = () => calls.filter((c) => c.body);
+  // Whether a request matching `wanted` went out after the first request for `url`.
+  const askedAfter = (url, wanted) => {
+    const at = calls.findIndex((c) => c.url === url);
+    return at >= 0 && calls.slice(at + 1).some((c) => wanted(c.url));
+  };
+  const catalogueReload = (u) => u === "/api/review/species";
+  const gridReload = (u) => u.startsWith("/api/review/browse?");
+"""
+)
+
+
+@needs_node
+def test_the_panel_lists_pending_species_and_approves(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      await RV.views.browse.enter(); await settle();
+      const history = find(admin(), (n) => n.tag === "details");
+      const shown = { heading: heading(), badge: badge(), card: card(), thumbs: notThis().length,
+        prefilled: ["scientific_name", "common_name", "life_stage"].map((k) => field(k).value),
+        filter: find(document.getElementById("rv-browse"), (n) => n.tag === "datalist").children
+          .map((o) => o.attrs.value),
+        history: { open: "open" in history.attrs, text: textOf(history) } };
+      field("common_name").value = " Spotted goatfish ";
+      field("life_stage").value = "adult";
+      field("note").value = "Checked the barbels";
+      button("Approve").on.click({}); button("Approve").on.click({});   // a double click sends it once
+      await settle();
+      const approved = "/api/review/species-suggestions/3/approve";
+      return { shown, posted: posted(), heading: heading(), badge: badge(),
+        reloaded: [askedAfter(approved, catalogueReload), askedAfter(approved, gridReload)] };
+    """,
+        tmp_path,
+    )
+    shown = out["shown"]
+    assert shown["heading"] == "New species (1 waiting)"
+    assert shown["badge"] == "1"
+    for text in (
+        "Spotted Goatfish",
+        "Pseudupeneus maculatus · juvenile",
+        "Two barbels under the chin",
+        "Suggested by Roy",
+        "2 answers",
+    ):
+        assert text in shown["card"], text
+    assert shown["thumbs"] == 2
+    assert shown["prefilled"] == ["Pseudupeneus maculatus", "Spotted Goatfish", "juvenile"]
+    assert shown["filter"] == ["Haemulon chrysargyreum"]  # no species waiting for approval
+    assert shown["history"]["open"] is False
+    for text in ("Banded goby", "not added", "Smallmouth grunt", "A grunt, seen side on."):
+        assert text in shown["history"]["text"], text
+    assert out["posted"] == [
+        {
+            "url": "/api/review/species-suggestions/3/approve",
+            "body": {
+                "scientific_name": "Pseudupeneus maculatus",
+                "common_name": "Spotted goatfish",
+                "life_stage": "adult",
+                "note": "Checked the barbels",
+            },
+        }
+    ]
+    assert out["heading"] == "New species (0 waiting)"
+    assert out["badge"] == ""
+    assert out["reloaded"] == [True, True]  # the pickers' list and the grid's names
+
+
+@needs_node
+def test_not_this_species_posts_detach(tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + """
+      globalThis.boxes = Array.from({ length: 26 }, (_, i) => 101 + i);
+      globalThis.waiting[0].answers = 26;
+      await RV.views.browse.enter(); await settle();
+      const first = notThis().length;
+      button("Next →").on.click({}); await settle();
+      const second = notThis().length;
+      notThis()[0].on.click({}); notThis()[0].on.click({});   // a double click sends it once
+      await settle();
+      const after = { thumbs: notThis().length, card: card() };
+      notThis()[0].on.click({}); await settle();             // the page's last box: back a page
+      return { first, second, after, back: notThis().length, posted: posted(),
+        pages: calls.filter((c) => c.url.includes("/boxes?")).map((c) => c.url.split("?")[1]),
+        grid: askedAfter("/api/review/species-suggestions/3/detach", gridReload) };
+    """,
+        tmp_path,
+    )
+    assert (out["first"], out["second"]) == (24, 2)
+    assert out["posted"] == [
+        {"url": "/api/review/species-suggestions/3/detach", "body": {"event_id": 125}},
+        {"url": "/api/review/species-suggestions/3/detach", "body": {"event_id": 126}},
+    ]
+    assert out["after"]["thumbs"] == 1
+    assert "25 answers" in out["after"]["card"] and "26 answers" not in out["after"]["card"]
+    assert out["back"] == 24
+    assert out["pages"] == ["page=0", "page=1", "page=1", "page=1", "page=0"]
+    assert out["grid"]  # the box's cell now says can't identify
+
+
+REJECT_NEITHER = "choose “It's actually…” or “Can't identify”"
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "choice, body",
+    [
+        (
+            "species",
+            {
+                "as_label": "Haemulon chrysargyreum",
+                "as_life_stage": None,
+                "unidentifiable": False,
+                "note": None,
+            },
+        ),
+        ("cant", {"as_label": None, "as_life_stage": None, "unidentifiable": True, "note": None}),
+    ],
+)
+def test_reject_needs_a_choice(choice, body, tmp_path):
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + f"""
+      await RV.views.browse.enter(); await settle();
+      const labels = ["It's actually…", "Can't identify"].map((t) =>
+        Boolean(find(admin(), (n) => n.tag === "label" && textOf(n).startsWith(t))));
+      button("Reject").on.click({{}}); await settle();       // neither chosen: nothing is sent
+      const neither = {{ said: alertOf().textContent, shown: !alertOf().hidden, sent: posted().length }};
+      radio("as").checked = true; radio("as").on.change({{}});
+      const cleared = alertOf().hidden;                      // a choice clears the message
+      button("Reject").on.click({{}}); await settle();       // "It's actually…" with no species
+      const noSpecies = {{ said: alertOf().textContent, sent: posted().length }};
+      const waitingOffered = offered(admin(), "spotted");    // never a species waiting for approval
+      offered(admin(), "grunt");
+      find(admin(), (n) => n.tag === "li" && textOf(n).startsWith("Smallmouth grunt")).on.mousedown(
+        {{ preventDefault() {{}} }});
+      const picked = {{ as: radio("as").checked, card: card(), cleared: alertOf().hidden }};
+      if ("{choice}" === "cant") {{ radio("as").checked = false; radio("cant").checked = true; }}
+      button("Reject").on.click({{}}); button("Reject").on.click({{}});
+      await settle();
+      return {{ labels, neither, cleared, noSpecies, waitingOffered, picked, posted: posted(),
+        heading: heading(), reloaded: [askedAfter("/api/review/species-suggestions/3/reject", catalogueReload),
+          askedAfter("/api/review/species-suggestions/3/reject", gridReload)] }};
+    """,
+        tmp_path,
+    )
+    assert out["labels"] == [True, True]
+    assert out["neither"] == {"said": REJECT_NEITHER, "shown": True, "sent": 0}
+    assert out["cleared"] is True
+    assert out["noSpecies"] == {"said": "pick the species it actually is", "sent": 0}
+    assert out["waitingOffered"] == ""
+    assert out["picked"]["as"] is True and "Smallmouth grunt" in out["picked"]["card"]
+    assert out["picked"]["cleared"] is True
+    assert out["posted"] == [{"url": "/api/review/species-suggestions/3/reject", "body": body}]
+    assert out["heading"] == "New species (0 waiting)"
+    assert out["reloaded"] == [True, True]
+
+
+@needs_node
+def test_admins_see_the_waiting_count_on_the_browse_button(tmp_path):
+    core = _read("review-core.js")
+    at = core.index('document.addEventListener("DOMContentLoaded"')
+    handler = _braces_from(core, core.index("{", core.index("=>", at)))
+    assert re.search(r'RV\.role === "admin" \? RV\.refreshSpeciesBadge\(\)', handler)
+    assert handler.index("RV.refreshSpeciesBadge()") < handler.index("await RV.next(landing);")
+    out = run_node(
+        [core],
+        ADMIN_STUB
+        + """
+      await RV.refreshSpeciesBadge();
+      const one = badge();
+      RV.setSpeciesBadge(0);
+      const zero = badge();
+      RV.setSpeciesBadge(3);
+      return { one, zero, three: badge(), spans: browseButton.children.map((b) => b.className),
+        asked: calls.map((c) => c.url) };
+    """,
+        tmp_path,
+    )
+    assert out == {
+        "one": "1",
+        "zero": "",
+        "three": "3",
+        "spans": ["rv-badge"],
+        "asked": ["/api/review/species-suggestions?status=pending"],
+    }
+
+
+@needs_node
+@pytest.mark.parametrize("role", ["reviewer", "admin"])
+def test_browse_never_shows_the_word_null(role, tmp_path):
+    """Browser walk 2026-11-21: Browse put the word "null" under its counts (DOM
+    replaceChildren() turns a null argument into that text) when the numbers were fresh,
+    and again at the bottom for a reviewer, who has no admin section."""
+    out = run_node(
+        [_read("review-core.js"), _read("review-browse.js")],
+        ADMIN_STUB
+        + f"""
+      RV.role = "{role}";
+      await RV.views.browse.enter(); await settle();
+      return document.getElementById("rv-browse").children.map((c) => (c === null ? "null" : c.tag));
+    """,
+        tmp_path,
+    )
+    assert "null" not in out
+    assert out[-1] == ("section" if role == "admin" else "div")

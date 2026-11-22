@@ -414,8 +414,10 @@ async def browse(
         # than one round trip per cell (fix round 1, finding 1).
         box_ids = [c["event_id"] for c in page_cells if c["kind"] == "box"]
         waiting = await pending_shown_answers(conn, {eid: resolved[eid][0] for eid in box_ids})
+        # A hidden cell (its blind second opinion still open) has no label and stays
+        # nameless; a species new to the list has a label but no listed common name.
         for c in page_cells:
-            if c["kind"] == "box" and c["common"] is not None and c["event_id"] in waiting:
+            if c["kind"] == "box" and c["label"] is not None and c["event_id"] in waiting:
                 c["common"] = f"{waiting[c['event_id']]}{PENDING_SUFFIX}"
         if box_ids:
             rows = await fetch_all(
