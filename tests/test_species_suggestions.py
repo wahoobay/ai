@@ -202,10 +202,12 @@ async def test_a_listed_choice_is_refused(rdb, cat):
 
 
 async def test_a_common_name_is_judged_with_its_stage(rdb, cat):
-    """Ruling X1, narrowed by Ruling W1 (Dan's option a): a stage for a species listed only
-    without one is refused now (Roy types "Bluefish", juvenile); a listed species' plain common
-    name at a stage it lacks is a new choice only when it is listed with stages. With a stage
-    it has, the name is that choice."""
+    """Ruling X1, as final review I2 states it: a listed species' common name is that species'
+    at every stage, so another species is refused it, stage words aside, and the refusal names
+    the entry that has the name, or else that species' entry at the stage asked for. The species
+    itself is judged by the staging rules (Ruling W1, Dan's option a): a stage for a species
+    listed only without one is refused (Roy types "Bluefish", juvenile), and its plain common
+    name at a stage it lacks is a new choice when it is listed with stages."""
     roy = await make_user(rdb, "roy")
     assert cat.stages("Pomatomus saltatrix") == [None]  # Bluefish, stage-less only
     with pytest.raises(Conflict, match="^already on the list as Bluefish$"):
@@ -252,6 +254,51 @@ async def test_a_common_name_is_judged_with_its_stage(rdb, cat):
     )
     assert e["key"] == "Pomacanthus paru|intermediate"
     assert await _count(rdb) == 1
+
+
+async def test_another_species_is_refused_a_listed_common_name_at_any_stage(rdb, cat):
+    """Final review I2: the picker would otherwise show one common name for two species, the
+    split option (a) prevents, reached by common name. Refused at a stage the listed species
+    lacks too: a moray called Bluefish (listed without a stage) as a juvenile, or French
+    Angelfish (listed only with stages) with none. Each refusal names a listed entry, so the
+    page can add its Latin name; an addition's common name is held the same way."""
+    roy = await make_user(rdb, "roy")
+    with pytest.raises(Conflict, match="^already on the list as Bluefish$"):
+        await _suggest(rdb, roy, cat, **MORAY, common_name="Bluefish", life_stage="juvenile")
+    with pytest.raises(Conflict, match="^already on the list as Adult French Angelfish$"):
+        await _suggest(rdb, roy, cat, **MORAY, common_name="French Angelfish")
+    with pytest.raises(Conflict, match="^already on the list as Juvenile French Angelfish$"):
+        await _suggest(
+            rdb, roy, cat, **MORAY, common_name="juvenile french angelfish", life_stage="adult"
+        )
+    with pytest.raises(Conflict, match="^already on the list as Blue Tang$"):
+        await _suggest(rdb, roy, cat, **MORAY, common_name="Adult Blue Tang", life_stage="adult")
+    assert await _count(rdb) == 0
+
+    # the same species by its own plain common name, at a stage it lacks: a new choice
+    e = await _suggest(
+        rdb,
+        roy,
+        cat,
+        aphia_id=900003,
+        common_name="French Angelfish",
+        scientific_name="Pomacanthus paru",
+        life_stage="initial phase",
+    )
+    assert e["key"] == "Pomacanthus paru|initial phase"
+    # another species under a name of its own
+    e = await _suggest(rdb, roy, cat, **MORAY, common_name="Spotted Moray", life_stage="juvenile")
+    assert e["key"] == "Gymnothorax moringa|juvenile"
+    with pytest.raises(Conflict, match="^already on the list as Spotted Moray$"):
+        await _suggest(
+            rdb,
+            roy,
+            await _merged(rdb, cat),
+            **GOATFISH,
+            common_name="Spotted Moray",
+            life_stage="adult",
+        )
+    assert await _count(rdb) == 2
 
 
 async def test_staging_refusals(rdb, cat):

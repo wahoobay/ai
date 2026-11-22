@@ -205,24 +205,30 @@ def _refuse_by_stage(listed: dict[str | None, CatalogueEntry], stage: str | None
         raise _listed_as(listed[None])
 
 
-def _listed_by_common_name(catalogue, common: str, stage: str | None) -> CatalogueEntry | None:
-    """The listed choice a common name and stage already are (Ruling X1), judged on species
-    and stage together: an entry with exactly this common name at this stage, or a species
-    whose own common name is this one, stage words taken out, listed at this stage. A
-    stage a listed species lacks is not found here, even typed as its plain common name:
-    create_suggestion's staging refusals judge that by the scientific name."""
+def _listed_by_common_name(
+    catalogue, common: str, name: str, stage: str | None
+) -> CatalogueEntry | None:
+    """The listed choice of another species than `name` that already goes by this common name
+    (Ruling X1, final review I2): a listed species' common name is its own at every stage, or
+    the picker would show one name for two species. Found when the name is exactly one of
+    that species' entries' common names, or, stage words taken out, its own common name; the
+    entry named is then the one with that name, or else the species' entry at `stage`, its
+    stage-less one, or its first. The species `name` itself is left to create_suggestion's
+    staging rules: a new stage of it may carry its common name."""
     folded = common.casefold()
     for e in catalogue.entries:
-        if e.life_stage == stage and (_squash(e.common_name) or "").casefold() == folded:
+        if e.name != name and (_squash(e.common_name) or "").casefold() == folded:
             return e
     plain = without_stage_words(common).casefold()
     if not plain:
         return None
-    for name in catalogue.names():
-        if (catalogue.common_name(name) or "").casefold() == plain:
-            listed = catalogue.entry(name, stage)
-            if listed is not None:
-                return listed
+    for other in catalogue.names():
+        if other != name and (catalogue.common_name(other) or "").casefold() == plain:
+            return (
+                catalogue.entry(other, stage)
+                or catalogue.entry(other, None)
+                or catalogue.entry(other, catalogue.stages(other)[0])
+            )
     return None
 
 
@@ -242,7 +248,7 @@ async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dic
     listed = {s: catalogue.entry(name, s) for s in catalogue.stages(name)}
     _refuse_by_stage(listed, stage)
     common = _squash(body.common_name) or scientific
-    by_common = _listed_by_common_name(catalogue, common, stage)
+    by_common = _listed_by_common_name(catalogue, common, name, stage)
     if by_common is not None:
         raise _listed_as(by_common)
     async with conn.transaction():
