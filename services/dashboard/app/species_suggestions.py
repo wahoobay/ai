@@ -301,7 +301,9 @@ async def _lock_pending(conn, suggestion_id: int) -> dict:
 
 async def _name_answers(conn, suggestion_id: int, name: str, stage: str | None, catalogue) -> int:
     """Give every answer linked to the suggestion `name` at `stage`; is_endorsement is
-    recomputed against each box's model guess. Returns how many answers changed."""
+    recomputed against each box's model guess. A named individual stays only if it is recorded
+    for `name` (final review I4: the public gallery would list the box under them). Returns how
+    many answers changed."""
     rows = await fetch_all(
         conn,
         """SELECT c.id, de.best_species_id FROM detection_corrections c
@@ -313,9 +315,17 @@ async def _name_answers(conn, suggestion_id: int, name: str, stage: str | None, 
     cur = await conn.execute(
         """UPDATE detection_corrections
               SET corrected_name = %(name)s, corrected_species_id = %(name)s,
-                  life_stage = %(stage)s, is_endorsement = (id = ANY(%(endorsed)s::bigint[]))
+                  life_stage = %(stage)s, is_endorsement = (id = ANY(%(endorsed)s::bigint[])),
+                  celebrity_id = CASE WHEN celebrity_id = ANY(%(celebrities)s::text[])
+                                      THEN celebrity_id END
             WHERE species_suggestion_id = %(sid)s""",
-        {"name": name, "stage": stage, "endorsed": endorsed, "sid": suggestion_id},
+        {
+            "name": name,
+            "stage": stage,
+            "endorsed": endorsed,
+            "celebrities": sorted(catalogue.celebrity_ids(name)),
+            "sid": suggestion_id,
+        },
     )
     return cur.rowcount
 

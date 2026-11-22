@@ -1264,6 +1264,43 @@ async def test_cant_identify_clears_not_sure(rdb, tmp_path, cat):
     assert rows[rejected]["celebrity_id"] is None
 
 
+async def test_a_decision_keeps_a_named_individual_only_under_its_species(rdb, tmp_path, cat):
+    """Final review I4: a new stage of Blue Tang may name Bobby, a Blue Tang. Moved to another
+    species, the answer must not keep him, or the public gallery lists that box under him."""
+    roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
+    tang = {"scientific_name": "Acanthurus coeruleus"}
+    kept = await _suggest(
+        rdb, roy, cat, common_name="Juvenile Blue Tang", life_stage="juvenile", **tang
+    )
+    moved = await _suggest(
+        rdb, roy, cat, common_name="Intermediate Blue Tang", life_stage="intermediate", **tang
+    )
+    boxes = {
+        kept["suggestion_id"]: await _answered_with(
+            rdb, tmp_path, cat, roy, kept["suggestion_id"], 0, celebrity_id="bobby"
+        ),
+        moved["suggestion_id"]: await _answered_with(
+            rdb, tmp_path, cat, roy, moved["suggestion_id"], 1, celebrity_id="bobby"
+        ),
+    }
+    rows = {r["event_id"]: r for r in await _verdicts(rdb)}
+    assert {r["celebrity_id"] for r in rows.values()} == {"bobby"}
+
+    as_rudderfish = RejectIn(as_label="Seriola zonata")
+    await _decide(rdb, reject, boss, moved["suggestion_id"], body=as_rudderfish, catalogue=cat)
+    same = ApproveIn(
+        scientific_name="Acanthurus coeruleus",
+        common_name="Juvenile Blue Tang",
+        life_stage="juvenile",
+    )
+    await _decide(rdb, approve, boss, kept["suggestion_id"], body=same, catalogue=cat)
+    rows = {r["event_id"]: r for r in await _verdicts(rdb)}
+    assert rows[boxes[moved["suggestion_id"]]]["corrected_name"] == "Seriola zonata"
+    assert rows[boxes[moved["suggestion_id"]]]["celebrity_id"] is None
+    assert rows[boxes[kept["suggestion_id"]]]["corrected_name"] == "Acanthurus coeruleus"
+    assert rows[boxes[kept["suggestion_id"]]]["celebrity_id"] == "bobby"
+
+
 async def test_not_this_species_unlinks_one_box(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
     sid = (await _suggest(rdb, roy, cat, common_name="Spotted Moray"))["suggestion_id"]
