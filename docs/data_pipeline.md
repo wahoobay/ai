@@ -562,6 +562,49 @@ to retention policy:
 This is a stakeholder decision (Wahoo Bay + FAU). Documented as an
 outstanding decision in `PLAN.md`.
 
+## Label archive
+
+The `archive_labels` job (`app/label_archive.py`) keeps the work of the review
+accounts in `LABEL_ARCHIVE_ACCOUNTS` outside the database. That is everything
+those accounts did: verdicts, added boxes and skips. It exists because staging's
+database is a demo copy, and Roy's verdicts there are the only reviewer work worth
+keeping (infra spec `2026-11-18-staging-label-archive-design.md`). The list of
+accounts lives in `infra`, at `ai.label_archive_accounts` in the location file.
+
+Each run reads inside a read-only transaction. It writes under
+`LABEL_ARCHIVE_URL/<account slug>/`; on AWS that is
+`s3://platform-wahoobay-models/labels/<env>/`.
+
+- `snapshots/<UTC stamp>/` is written only when something changed:
+  - `verdicts.jsonl.gz`: each verdict with its detection and saved frame
+  - `tables/<table>.jsonl.gz`: the account's rows in the other tables
+  - `tables/species_suggestions.jsonl.gz`: the species reviewers added that the account's work names (ones it added, ones its answers link to, and ones another reviewer added that it picked or drew), with their WoRMS `aphia_id`
+  - `labeled_corrections.csv`: the training-set builder's input, without boxes whose answer still waits on a species suggestion
+  - `account.json`: the account, with no email
+  - `frames.txt` and `manifest.json`
+- `latest.json` names the newest snapshot. It is written last.
+- `frames/<frame path>` holds each frame and COCO sidecar behind that work.
+
+Earlier snapshots are never overwritten and nothing is deleted.
+
+- **Missing frames:** a frame missing from storage is listed in the manifest
+  (`frames_missing`) and does not fail the run.
+- **Other failures:** an account or frame that fails another way does not stop
+  the rest. Its verdicts are still archived, and failed frames are listed in
+  `frames_failed`. The run then fails at the end, which fails the Lambda
+  invocation, so the jobs function's Errors alarm emails.
+- **A recreated account:** `latest.json` records the account's id and creation
+  time. If the account with the listed username is a different one (a staging
+  reset recreated it), the job fails and leaves `latest.json` alone until someone
+  decides what to do. The snapshots are the record, so nothing is lost.
+- **Tables copied:** only the tables in `ARCHIVED_TABLES` are copied, besides the
+  verdicts. A new table with a `user_id` column fails
+  `tests/test_label_archive.py` until it is listed as archived or as not
+  archived. The archive can't be deleted, so a stray email or credential copied
+  into it would stay there for good.
+
+The job runs at the environment's job cadence: every 30 minutes on staging.
+
 ---
 
 ## What we DON'T collect from the public/visitor side
