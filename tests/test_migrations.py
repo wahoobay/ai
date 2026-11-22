@@ -19,7 +19,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 ALEMBIC = [sys.executable, "-m", "alembic", "-c", str(REPO / "db" / "alembic.ini")]
 BASELINE_SQL = REPO / "db" / "migrations" / "versions" / "0001_baseline.sql"
-HEAD = "0006"
+HEAD = "0007"
 DATA_TABLES = {
     "detection_events",
     "frame_stats",
@@ -197,3 +197,21 @@ def test_species_suggestions_at_head(pg_url):
             "VALUES ('Blue tang', %s, 'other')",
             (uid,),
         )
+
+
+def test_suggestion_worms_columns_at_head(pg_url):
+    """0007: a reviewer's addition records the WoRMS record chosen; the downgrade drops it."""
+    alembic("upgrade", "head", url=pg_url)
+    with psycopg.connect(pg_url) as conn:
+        (uid,) = conn.execute(
+            "INSERT INTO users (username, display_name, email, password_hash) "
+            "VALUES ('r', 'R', 'r@example.org', 'x') RETURNING id"
+        ).fetchone()
+        row = conn.execute(
+            "INSERT INTO species_suggestions (common_name, suggested_by, aphia_id, family) "
+            "VALUES ('Spotted Goatfish', %s, 159855, 'Mullidae') RETURNING aphia_id, family",
+            (uid,),
+        ).fetchone()
+    assert row == (159855, "Mullidae")
+    alembic("downgrade", "0006", url=pg_url)
+    assert not {"aphia_id", "family"} & columns(pg_url, "species_suggestions")

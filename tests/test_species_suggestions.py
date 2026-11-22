@@ -1,5 +1,7 @@
-"""Reviewers suggest species the list lacks; an admin decides (spec 2026-11-21,
-"The species list")."""
+"""Reviewers add species the list lacks, checked against WoRMS and listed for everyone at once
+(spec 2026-11-21-species-worms-check). Pending suggestions left over from ai #49 are still
+answered with, hidden and decided by an admin as that spec ("The species list") says; the tests
+of those paths make their pending rows with insert_pending."""
 
 from __future__ import annotations
 
@@ -67,6 +69,26 @@ async def _suggest(rdb, uid, cat, *, role="reviewer", **fields):
         )
 
 
+async def insert_pending(
+    db,
+    *,
+    user_id: int,
+    common_name: str,
+    scientific_name: str | None = None,
+    life_stage: str | None = None,
+) -> int:
+    """A pending suggestion, as ai #49 left them (an addition is approved at once); its id."""
+    async with db.connection() as conn:
+        row = await fetch_one(
+            conn,
+            """INSERT INTO species_suggestions (common_name, scientific_name, life_stage,
+                                                suggested_by)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (common_name, scientific_name, life_stage, user_id),
+        )
+    return row["id"]
+
+
 async def _row(rdb, suggestion_id):
     async with rdb.connection() as conn:
         return await fetch_one(
@@ -95,93 +117,181 @@ async def _merged(rdb, cat):
         return await merged_catalogue(conn, cat)
 
 
-async def test_a_suggestion_is_created_pending_with_its_provisional_name(rdb, cat):
-    roy = await make_user(rdb, "roy")
-    e = await _suggest(
-        rdb,
-        roy,
-        cat,
-        common_name="Juvenile Bluefish",
-        scientific_name="Pomatomus  saltarix",
-        life_stage="juvenile",
-        note="small, near the pier",
-    )
-    # the accepted name, not the misspelling the suggester typed
-    assert e["name"] == "Pomatomus saltatrix" and e["life_stage"] == "juvenile"
-    assert e["pending"] is True and e["common"] == "Juvenile Bluefish (waiting for approval)"
-    assert e["key"] == f"suggestion:{e['suggestion_id']}"
-    assert e["in_species_log"] is False and e["in_classifier"] is False
-    row = await _row(rdb, e["suggestion_id"])
-    assert row["status"] == "pending" and row["suggested_by"] == roy
-    assert row["scientific_name"] == "Pomatomus saltarix"  # what was suggested is kept
-    assert row["note"] == "small, near the pier" and row["location_id"] == "wahoobay"
+# The WoRMS records the tests add. 159855 is Pseudupeneus maculatus' AphiaID; the 9001xx ones,
+# like the fixture taxonomy's 9000xx, are made up.
+GOATFISH = {"aphia_id": 159855, "scientific_name": "Pseudupeneus maculatus", "family": "Mullidae"}
+MORAY = {"aphia_id": 900101, "scientific_name": "Gymnothorax moringa", "family": "Muraenidae"}
 
-    plain = await _suggest(rdb, roy, cat, common_name="  Spotted   Moray ")
-    assert plain["name"] == "Spotted Moray" and plain["life_stage"] is None
-    assert plain["common"] == "Spotted Moray (waiting for approval)"
+
+async def test_an_addition_is_listed_for_everyone_at_once(rdb, rclient, cat):
+    roy = await make_user(rdb, "roy")
+    await make_user(rdb, "ann")
+    e = await _suggest(rdb, roy, cat, **GOATFISH, common_name=None, note=" under the pier ")
+    # no common name given: the scientific name stands in
+    assert e == {
+        "key": "Pseudupeneus maculatus|",
+        "name": "Pseudupeneus maculatus",
+        "life_stage": None,
+        "common": "Pseudupeneus maculatus",
+        "suggestion_id": e["suggestion_id"],
+    }
+    row = await _row(rdb, e["suggestion_id"])
+    assert row["status"] == "approved" and row["suggested_by"] == roy
+    assert row["common_name"] == row["approved_common"] == "Pseudupeneus maculatus"
+    assert row["scientific_name"] == row["approved_name"] == "Pseudupeneus maculatus"
+    assert row["life_stage"] is None and row["approved_stage"] is None
+    assert (row["aphia_id"], row["family"]) == (159855, "Mullidae")
+    assert row["decision_note"] == "WoRMS AphiaID 159855"
+    assert row["decided_at"] is not None and row["decided_by"] is None
+    assert row["note"] == "under the pier" and row["location_id"] == "wahoobay"
+
+    added = (await _merged(rdb, cat)).entry("Pseudupeneus maculatus", None)
+    assert added is not None and added.common_name == "Pseudupeneus maculatus"
+    assert (added.aphia_id, added.family, added.rank, added.resolved) == (
+        159855,
+        "Mullidae",
+        "Species",
+        True,
+    )
+
+    login(rclient, "ann")  # another reviewer has it in her picker, as an ordinary choice
+    species = rclient.get("/api/review/species").json()["species"]
+    [listed] = [s for s in species if s["name"] == "Pseudupeneus maculatus"]
+    assert listed["key"] == e["key"] and not listed.get("pending")
+    assert (listed["aphia_id"], listed["family"], listed["resolved"]) == (159855, "Mullidae", True)
 
 
 async def test_a_listed_choice_is_refused(rdb, cat):
     roy = await make_user(rdb, "roy")
     with pytest.raises(Conflict, match="^already on the list as Banded Rudderfish$"):
-        await _suggest(rdb, roy, cat, common_name="Rudderfish", scientific_name="Seriola zonata")
+        await _suggest(
+            rdb,
+            roy,
+            cat,
+            aphia_id=900005,
+            common_name="Rudderfish",
+            scientific_name="Seriola zonata",
+        )
     with pytest.raises(Conflict, match="^already on the list as Adult French Angelfish$"):
         await _suggest(
             rdb,
             roy,
             cat,
+            aphia_id=900003,
             common_name="Big Angel",
             scientific_name="Pomacanthus paru",
             life_stage="adult",
         )
     # the same common name at the same stage, in any case
     with pytest.raises(Conflict, match="^already on the list as Blue Tang$"):
-        await _suggest(rdb, roy, cat, common_name="bLUE tANG")
+        await _suggest(rdb, roy, cat, **MORAY, common_name="bLUE tANG")
     assert await _count(rdb) == 0
 
 
 async def test_a_common_name_is_judged_with_its_stage(rdb, cat):
-    """Ruling X1: a listed species' plain common name with a stage it lacks is a new
-    choice (Roy types "Bluefish", juvenile); with a stage it has, it is that choice."""
+    """Ruling X1, narrowed by Ruling W1 (Dan's option a): a stage for a species listed only
+    without one is refused now (Roy types "Bluefish", juvenile); a listed species' plain common
+    name at a stage it lacks is a new choice only when it is listed with stages. With a stage
+    it has, the name is that choice."""
     roy = await make_user(rdb, "roy")
-    assert cat.entry("Pomatomus saltatrix", None) is not None  # Bluefish, stage-less only
-    assert cat.entry("Pomatomus saltatrix", "juvenile") is None
-    e = await _suggest(
-        rdb,
-        roy,
-        cat,
-        common_name="Bluefish",
-        scientific_name="Pomatomus saltatrix",
-        life_stage="juvenile",
-    )
-    assert e["name"] == "Pomatomus saltatrix" and e["life_stage"] == "juvenile"
-    e = await _suggest(rdb, roy, cat, common_name="Blue Tang", life_stage="juvenile")
-    assert e["name"] == "Blue Tang" and e["life_stage"] == "juvenile"
-
+    assert cat.stages("Pomatomus saltatrix") == [None]  # Bluefish, stage-less only
     with pytest.raises(Conflict, match="^already on the list as Bluefish$"):
-        await _suggest(rdb, roy, cat, common_name="bluefish")
+        await _suggest(
+            rdb,
+            roy,
+            cat,
+            aphia_id=900004,
+            common_name="Bluefish",
+            scientific_name="Pomatomus saltatrix",
+            life_stage="juvenile",
+        )
+    with pytest.raises(Conflict, match="^already on the list as Blue Tang$"):
+        await _suggest(
+            rdb,
+            roy,
+            cat,
+            aphia_id=900001,
+            common_name="Blue Tang",
+            scientific_name="Acanthurus coeruleus",
+            life_stage="juvenile",
+        )
+
+    # Judged by the common name alone (the moray's scientific name is not listed):
+    with pytest.raises(Conflict, match="^already on the list as Bluefish$"):
+        await _suggest(rdb, roy, cat, **MORAY, common_name="bluefish")
     # French Angelfish is listed as adult and juvenile: the plain name at a listed stage
     with pytest.raises(Conflict, match="^already on the list as Adult French Angelfish$"):
-        await _suggest(rdb, roy, cat, common_name="French Angelfish", life_stage="adult")
+        await _suggest(rdb, roy, cat, **MORAY, common_name="French Angelfish", life_stage="adult")
     # the name written with a stage word, at that same listed stage
     for typed in ("Juvenile French Angelfish", "french angelfish juvi"):
         with pytest.raises(Conflict, match="^already on the list as Juvenile French Angelfish$"):
-            await _suggest(rdb, roy, cat, common_name=typed, life_stage="juvenile")
-    assert await _count(rdb) == 2
+            await _suggest(rdb, roy, cat, **MORAY, common_name=typed, life_stage="juvenile")
+    assert await _count(rdb) == 0
 
-
-async def test_a_new_stage_of_a_listed_species_is_accepted(rdb, cat):
-    roy = await make_user(rdb, "roy")
-    assert cat.entry("Pomacanthus paru", "initial phase") is None
     e = await _suggest(
         rdb,
         roy,
         cat,
-        common_name="Initial Phase French Angelfish",
+        aphia_id=900003,
+        common_name="French Angelfish",
         scientific_name="Pomacanthus paru",
+        life_stage="intermediate",
+    )
+    assert e["key"] == "Pomacanthus paru|intermediate"
+    assert await _count(rdb) == 1
+
+
+async def test_staging_refusals(rdb, cat):
+    """Dan's option (a): one reviewer can't change how a listed species is staged."""
+    roy = await make_user(rdb, "roy")
+    angel = {"aphia_id": 900003, "scientific_name": "Pomacanthus paru"}
+    assert cat.stages("Pomacanthus paru") == ["adult", "juvenile"]  # only with stages
+    with pytest.raises(Conflict) as plain:
+        await _suggest(rdb, roy, cat, **angel, common_name="French Angelfish")
+    assert plain.value.message == "pick a stage: adult, juvenile, or add a new one"
+    assert cat.stages("Seriola zonata") == [None]  # only without one
+    with pytest.raises(Conflict, match="^already on the list as Banded Rudderfish$"):
+        await _suggest(
+            rdb, roy, cat, aphia_id=900005, scientific_name="Seriola zonata", life_stage="adult"
+        )
+    assert await _count(rdb) == 0
+
+    # still allowed: a new stage of a species listed with stages
+    e = await _suggest(
+        rdb,
+        roy,
+        cat,
+        **angel,
+        common_name="Initial Phase French Angelfish",
         life_stage="initial phase",
     )
-    assert e["name"] == "Pomacanthus paru" and e["life_stage"] == "initial phase"
+    assert e == {
+        "key": "Pomacanthus paru|initial phase",
+        "name": "Pomacanthus paru",
+        "life_stage": "initial phase",
+        "common": "Initial Phase French Angelfish",
+        "suggestion_id": e["suggestion_id"],
+    }
+    assert await _count(rdb) == 1
+
+
+async def test_an_aphia_id_of_a_listed_species_is_a_duplicate(rdb, cat):
+    """An addition carrying a listed entry's AphiaID is judged against that entry, whatever
+    the name says (900005 is the listed Seriola zonata's, 900003 Pomacanthus paru's)."""
+    roy = await make_user(rdb, "roy")
+    assert cat.accepted("Seriola zonatus") == "Seriola zonatus"  # the name alone is not listed
+    with pytest.raises(Conflict, match="^already on the list as Banded Rudderfish$"):
+        await _suggest(rdb, roy, cat, aphia_id=900005, scientific_name="Seriola zonatus")
+    with pytest.raises(Conflict, match="^already on the list as Juvenile French Angelfish$"):
+        await _suggest(
+            rdb,
+            roy,
+            cat,
+            aphia_id=900003,
+            scientific_name="Pomacanthus parus",
+            life_stage="juvenile",
+        )
+    assert await _count(rdb) == 0
 
 
 async def test_a_synonym_of_a_listed_choice_is_refused(rdb, cat):
@@ -190,82 +300,97 @@ async def test_a_synonym_of_a_listed_choice_is_refused(rdb, cat):
     roy = await make_user(rdb, "roy")
     assert cat.accepted("Pomatomus saltarix") == "Pomatomus saltatrix"
     with pytest.raises(Conflict, match="^already on the list as Bluefish$"):
-        await _suggest(rdb, roy, cat, common_name="Tailor", scientific_name="Pomatomus saltarix")
+        await _suggest(
+            rdb,
+            roy,
+            cat,
+            aphia_id=900102,  # not a listed entry's: the name finds it
+            common_name="Tailor",
+            scientific_name="Pomatomus saltarix",
+        )
     assert await _count(rdb) == 0
 
 
-async def test_the_same_reviewer_cannot_suggest_it_twice_while_waiting(rdb, cat):
-    roy, ann = await make_user(rdb, "roy"), await make_user(rdb, "ann")
-    first = await _suggest(
-        rdb, roy, cat, common_name="Spotted Moray", scientific_name="Gymnothorax moringa"
-    )
-    with pytest.raises(Conflict) as refused:
-        await _suggest(rdb, roy, cat, common_name="spotted moray")
-    assert refused.value.message == "you already suggested this; it is waiting for approval"
-    # another stage is another choice; another reviewer may suggest the same fish
-    await _suggest(rdb, roy, cat, common_name="Spotted Moray", life_stage="juvenile")
-    await _suggest(
-        rdb, ann, cat, common_name="Spotted Moray", scientific_name="Gymnothorax moringa"
-    )
-    # once decided, it is no longer waiting
-    async with rdb.connection() as conn:
-        await conn.execute(
-            "UPDATE species_suggestions SET status = 'rejected', decided_at = now() WHERE id = %s",
-            (first["suggestion_id"],),
-        )
-    await _suggest(rdb, roy, cat, common_name="Spotted Moray")
-    assert await _count(rdb) == 4
+async def test_a_second_addition_of_the_same_choice_is_refused_even_with_a_stale_catalogue(
+    rdb, cat
+):
+    """Review Focus 1: two reviewers add the same species at nearly the same moment. The
+    second read its catalogue before the first committed, so only the check made under the
+    lock sees the first; without it, removing one of the two would leave the species listed."""
+    ann, bob = await make_user(rdb, "ann"), await make_user(rdb, "bob")
+    await _suggest(rdb, ann, cat, **GOATFISH, common_name="Spotted Goatfish")
+    assert cat.entry("Pseudupeneus maculatus", None) is None  # the file catalogue lacks it
+    with pytest.raises(Conflict, match="^already on the list as Spotted Goatfish$"):
+        await _suggest(rdb, bob, cat, **GOATFISH, common_name="Goatfish")
+    assert await _count(rdb) == 1
 
 
 async def test_stage_and_scientific_name_are_checked(rdb, cat):
     roy = await make_user(rdb, "roy")
     with pytest.raises(Invalid) as bad_stage:
-        await _suggest(rdb, roy, cat, common_name="Spotted Moray", life_stage="larva")
+        await _suggest(rdb, roy, cat, **MORAY, life_stage="larva")
     assert bad_stage.value.message == "pick a stage from the list"
-    with pytest.raises(Invalid) as bad_name:
-        await _suggest(rdb, roy, cat, common_name="Spotted Moray", scientific_name="seriola")
-    assert bad_name.value.message == "write the scientific name as Genus species"
+    for typed in ("seriola", "   "):
+        with pytest.raises(Invalid) as bad_name:
+            await _suggest(rdb, roy, cat, aphia_id=900101, scientific_name=typed)
+        assert bad_name.value.message == "write the scientific name as Genus species", typed
     # the stage is checked first
     with pytest.raises(Invalid, match="^pick a stage from the list$"):
         await _suggest(
-            rdb,
-            roy,
-            cat,
-            common_name="Spotted Moray",
-            scientific_name="seriola",
-            life_stage="larva",
+            rdb, roy, cat, aphia_id=900101, scientific_name="seriola", life_stage="larva"
         )
     assert await _count(rdb) == 0
 
     assert clean_scientific(None) is None and clean_scientific("   ") is None
     assert clean_scientific("  Gymnothorax   moringa ") == "Gymnothorax moringa"
-    assert clean_scientific("Scarus") == "Scarus"
     assert clean_scientific("Diplectrum formosum formosum") == "Diplectrum formosum formosum"
     assert clean_scientific("Scorpaena plumieri-like") == "Scorpaena plumieri-like"
-    for bad in ("Gymnothorax sp.", "gymnothorax moringa", "Gymnothorax Moringa", "A b c d"):
-        with pytest.raises(Invalid):
+    for bad in (
+        "Gymnothorax sp.",
+        "gymnothorax moringa",
+        "Gymnothorax Moringa",
+        "A b c d",
+        "seriola",
+        "Charybdis (charybdis) hellerii",
+        "Charybdis (Charybdis)",
+    ):
+        with pytest.raises(Invalid, match="^write the scientific name as Genus species$"):
             clean_scientific(bad)
 
 
-async def test_a_blank_common_name_is_refused(rdb, cat):
+async def test_a_genus_and_a_subgenus_name(rdb, cat):
     roy = await make_user(rdb, "roy")
-    with pytest.raises(Invalid, match="^write the fish's common name$"):
-        await _suggest(rdb, roy, cat, common_name="   ", scientific_name="Gymnothorax moringa")
+    with pytest.raises(Invalid, match="^pick a species, not a genus$"):
+        clean_scientific(" Scarus ")
+    with pytest.raises(Invalid, match="^pick a species, not a genus$"):
+        await _suggest(rdb, roy, cat, aphia_id=900103, scientific_name="Scarus")
     assert await _count(rdb) == 0
+
+    # WoRMS writes a subgenus in parentheses; the catalogue already uses such names
+    crab = "Charybdis (Charybdis) hellerii"
+    assert clean_scientific(" Charybdis  (Charybdis) hellerii") == crab
+    e = await _suggest(rdb, roy, cat, aphia_id=900104, scientific_name=crab)
+    assert e["key"] == f"{crab}|" and e["name"] == e["common"] == crab
+    assert (await _row(rdb, e["suggestion_id"]))["approved_name"] == crab
+
+
+async def test_a_blank_common_name_is_the_scientific_name(rdb, cat):
+    roy = await make_user(rdb, "roy")
+    e = await _suggest(rdb, roy, cat, **MORAY, common_name="   ")
+    assert e["common"] == "Gymnothorax moringa"
+    row = await _row(rdb, e["suggestion_id"])
+    assert row["common_name"] == row["approved_common"] == "Gymnothorax moringa"
+    assert row["family"] == "Muraenidae"
 
 
 async def test_pending_entries_belong_to_their_suggester(rdb, rclient):
-    await make_user(rdb, "ann")
-    await make_user(rdb, "bob")
+    ann = await make_user(rdb, "ann")
+    bob = await make_user(rdb, "bob")
     await make_user(rdb, "boss", role="admin")
-    keys = {}
-    for who, common in (("ann", "Spotted Moray"), ("bob", "Goldentail Moray")):
-        login(rclient, who)
-        r = rclient.post(
-            "/api/review/species-suggestions", json={"common_name": common}, headers=CSRF
-        )
-        assert r.status_code == 200, r.text
-        keys[who] = r.json()["key"]
+    keys = {
+        "ann": f"suggestion:{await insert_pending(rdb, user_id=ann, common_name='Spotted Moray')}",
+        "bob": f"suggestion:{await insert_pending(rdb, user_id=bob, common_name='Chain Moray')}",
+    }
 
     def pending_keys(who):
         login(rclient, who)
@@ -279,28 +404,25 @@ async def test_pending_entries_belong_to_their_suggester(rdb, rclient):
 
 
 async def test_an_approved_suggestion_joins_everyones_list(rdb, cat):
+    """A pending suggestion left over from ai #49, approved by an admin; it has no AphiaID."""
     roy = await make_user(rdb, "roy")
-    parrot = await _suggest(
+    parrot = await insert_pending(
         rdb,
-        roy,
-        cat,
+        user_id=roy,
         common_name="Juvenile Striped Parrotfish",
         scientific_name="Scarus iseri",
         life_stage="juvenile",
     )
-    angel = await _suggest(
+    angel = await insert_pending(
         rdb,
-        roy,
-        cat,
+        user_id=roy,
         common_name="Initial Phase French Angelfish",
         scientific_name="Pomacanthus paru",
         life_stage="initial phase",
     )
     assert (await _merged(rdb, cat)).entry("Scarus iseri", "juvenile") is None  # still waiting
 
-    await _approve(
-        rdb, parrot["suggestion_id"], "Scarus iseri", "juvenile", "Juvenile Striped Parrotfish"
-    )
+    await _approve(rdb, parrot, "Scarus iseri", "juvenile", "Juvenile Striped Parrotfish")
     merged = await _merged(rdb, cat)
     added = merged.entry("Scarus iseri", "juvenile")
     assert added is not None and added.common_name == "Juvenile Striped Parrotfish"
@@ -313,11 +435,7 @@ async def test_an_approved_suggestion_joins_everyones_list(rdb, cat):
     assert await _merged(rdb, cat) is merged
 
     await _approve(
-        rdb,
-        angel["suggestion_id"],
-        "Pomacanthus paru",
-        "initial phase",
-        "Initial Phase French Angelfish",
+        rdb, angel, "Pomacanthus paru", "initial phase", "Initial Phase French Angelfish"
     )
     rebuilt = await _merged(rdb, cat)
     assert rebuilt is not merged
@@ -327,7 +445,8 @@ async def test_an_approved_suggestion_joins_everyones_list(rdb, cat):
     # a new stage of a listed species joins it, with its taxonomy
     assert sorted(rebuilt.stages("Pomacanthus paru")) == ["adult", "initial phase", "juvenile"]
     assert (stage.aphia_id, stage.family, stage.resolved) == (900003, "Pomacanthidae", True)
-    assert added.aphia_id is None and added.resolved is False  # Scarus iseri is not listed
+    # Scarus iseri is not listed, and the leftover row has no WoRMS record
+    assert added.aphia_id is None and added.resolved is False
 
 
 async def test_merged_catalogue_leaves_the_callers_transaction_alone(rdb, cat):
@@ -335,12 +454,12 @@ async def test_merged_catalogue_leaves_the_callers_transaction_alone(rdb, cat):
     read must not leave a transaction open (a later conn.transaction() would become a
     savepoint and its commit would move); inside one it must not end it."""
     roy = await make_user(rdb, "roy")
-    e = await _suggest(rdb, roy, cat, common_name="Spotted Moray")
+    sid = await insert_pending(rdb, user_id=roy, common_name="Spotted Moray")
     async with rdb.connection() as conn:
         assert conn.info.transaction_status == TransactionStatus.IDLE
         await merged_catalogue(conn, cat)  # nothing approved
         assert conn.info.transaction_status == TransactionStatus.IDLE
-        await _approve(rdb, e["suggestion_id"], "Gymnothorax moringa", None, "Spotted Moray")
+        await _approve(rdb, sid, "Gymnothorax moringa", None, "Spotted Moray")
         await merged_catalogue(conn, cat)  # rebuilt
         assert conn.info.transaction_status == TransactionStatus.IDLE
         await merged_catalogue(conn, cat)  # cached
@@ -349,11 +468,11 @@ async def test_merged_catalogue_leaves_the_callers_transaction_alone(rdb, cat):
         async with conn.transaction():
             await conn.execute(
                 "UPDATE species_suggestions SET note = 'kept' WHERE id = %s",
-                (e["suggestion_id"],),
+                (sid,),
             )
             await merged_catalogue(conn, cat)
             assert conn.info.transaction_status == TransactionStatus.INTRANS
-    assert (await _row(rdb, e["suggestion_id"]))["note"] == "kept"
+    assert (await _row(rdb, sid))["note"] == "kept"
 
 
 async def test_species_photos_read_the_file_catalogue(rdb, rclient, monkeypatch):
@@ -373,25 +492,32 @@ async def test_species_photos_read_the_file_catalogue(rdb, rclient, monkeypatch)
 
 async def test_my_list_says_what_happened(rdb, cat):
     roy, ann = await make_user(rdb, "roy"), await make_user(rdb, "ann")
-    a = await _suggest(rdb, roy, cat, common_name="Spotted Moray")
-    b = await _suggest(rdb, roy, cat, common_name="Goldentail Moray")
-    c = await _suggest(rdb, roy, cat, common_name="Purplemouth Moray")
-    await _suggest(rdb, ann, cat, common_name="Chain Moray")
-    await _approve(rdb, a["suggestion_id"], "Gymnothorax moringa", None, "Spotted Moray")
+    a = await insert_pending(rdb, user_id=roy, common_name="Spotted Moray")
+    b = await insert_pending(rdb, user_id=roy, common_name="Goldentail Moray")
+    c = await insert_pending(rdb, user_id=roy, common_name="Purplemouth Moray")
+    await insert_pending(rdb, user_id=ann, common_name="Chain Moray")
+    await _approve(rdb, a, "Gymnothorax moringa", None, "Spotted Moray")
+    d = (await _suggest(rdb, roy, cat, **GOATFISH, common_name="Spotted Goatfish"))["suggestion_id"]
     async with rdb.connection() as conn:
         await conn.execute(
             """UPDATE species_suggestions
                   SET status = 'rejected', decided_at = now(), decision_note = 'a lizardfish',
                       rejected_to_name = 'Synodus intermedius', rejected_to_stage = NULL
                 WHERE id = %s""",
-            (b["suggestion_id"],),
+            (b,),
         )
         mine = await list_mine(conn, user=as_user(roy))
-    assert [m["id"] for m in mine] == [c["suggestion_id"], b["suggestion_id"], a["suggestion_id"]]
-    assert [m["status_text"] for m in mine] == ["waiting for approval", "not added", "added"]
-    assert mine[1]["decision_note"] == "a lizardfish"
-    assert mine[1]["rejected_to_name"] == "Synodus intermedius"
-    assert mine[2]["approved_common"] == "Spotted Moray"
+    assert [m["id"] for m in mine] == [d, c, b, a]
+    assert [m["status_text"] for m in mine] == [
+        "added",
+        "waiting for approval",  # a leftover from ai #49
+        "removed",
+        "added",
+    ]
+    assert (mine[0]["approved_common"], mine[0]["aphia_id"]) == ("Spotted Goatfish", 159855)
+    assert mine[2]["decision_note"] == "a lizardfish"
+    assert mine[2]["rejected_to_name"] == "Synodus intermedius"
+    assert mine[3]["approved_common"] == "Spotted Moray" and mine[3]["aphia_id"] is None
     assert set(mine[0]) == {
         "id",
         "common_name",
@@ -402,16 +528,13 @@ async def test_my_list_says_what_happened(rdb, cat):
         "rejected_to_name",
         "rejected_to_stage",
         "approved_common",
+        "aphia_id",
     }
 
 
 async def test_suggestion_routes_over_http(rdb, rclient):
     url = "/api/review/species-suggestions"
-    body = {
-        "common_name": "Spotted Moray",
-        "scientific_name": "Gymnothorax moringa",
-        "note": "under the pier ladder",
-    }
+    body = {**MORAY, "common_name": "Spotted Moray", "note": "under the pier ladder"}
     assert rclient.post(url, json=body, headers=CSRF).status_code == 401
     await make_user(rdb, "watcher", role="viewer")
     login(rclient, "watcher")
@@ -421,27 +544,41 @@ async def test_suggestion_routes_over_http(rdb, rclient):
     await make_user(rdb, "roy")
     login(rclient, "roy")
     assert rclient.post(url, json=body).status_code == 403  # no CSRF header
+    for refused in (  # no WoRMS record: nothing is added
+        {k: v for k, v in body.items() if k != "aphia_id"},
+        {k: v for k, v in body.items() if k != "scientific_name"},
+        {**body, "aphia_id": 0},
+        {**body, "scientific_name": ""},
+    ):
+        assert rclient.post(url, json=refused, headers=CSRF).status_code == 422, refused
     r = rclient.post(url, json=body, headers=CSRF)
     assert r.status_code == 200, r.text
     entry = r.json()
-    assert entry["name"] == "Gymnothorax moringa" and entry["pending"] is True
-    assert entry["common"] == "Spotted Moray (waiting for approval)"
+    assert entry == {
+        "key": "Gymnothorax moringa|",
+        "name": "Gymnothorax moringa",
+        "life_stage": None,
+        "common": "Spotted Moray",
+        "suggestion_id": entry["suggestion_id"],
+    }
 
-    again = rclient.post(url, json=body, headers=CSRF)
+    again = rclient.post(url, json=body, headers=CSRF)  # listed now
     assert again.status_code == 409
-    assert again.json()["error"] == "you already suggested this; it is waiting for approval"
-    listed = rclient.post(url, json={"common_name": "Blue Tang"}, headers=CSRF)
+    assert again.json()["error"] == "already on the list as Spotted Moray"
+    tang = {"aphia_id": 900001, "scientific_name": "Acanthurus coeruleus"}
+    listed = rclient.post(url, json=tang, headers=CSRF)
     assert (
         listed.status_code == 409 and listed.json()["error"] == "already on the list as Blue Tang"
     )
-    bad = rclient.post(url, json={"common_name": "Eel", "life_stage": "larva"}, headers=CSRF)
+    bad = rclient.post(url, json={**body, "life_stage": "larva"}, headers=CSRF)
     assert bad.status_code == 400 and bad.json()["error"] == "pick a stage from the list"
+    genus = rclient.post(url, json={**body, "scientific_name": "Gymnothorax"}, headers=CSRF)
+    assert genus.status_code == 400 and genus.json()["error"] == "pick a species, not a genus"
 
-    mine = rclient.get(f"{url}/mine").json()["suggestions"]
-    assert len(mine) == 1
-    assert mine[0]["id"] == entry["suggestion_id"]
-    assert mine[0]["common_name"] == "Spotted Moray"
-    assert mine[0]["status_text"] == "waiting for approval"
+    [mine] = rclient.get(f"{url}/mine").json()["suggestions"]
+    assert mine["id"] == entry["suggestion_id"]
+    assert mine["common_name"] == "Spotted Moray" and mine["aphia_id"] == 900101
+    assert mine["status_text"] == "added"
 
 
 # ---- answering a box with a pending suggestion ----------------------------------------------
@@ -518,7 +655,7 @@ async def _spot_check_events(rdb):
 
 async def test_answering_with_my_suggestion_stores_the_provisional_name(rdb, tmp_path, cat):
     roy = await make_user(rdb, "roy")
-    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     _f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
     out = await _answer(
         rdb,
@@ -526,7 +663,7 @@ async def test_answering_with_my_suggestion_stores_the_provisional_name(rdb, tmp
         roy,
         # the suggestion names the fish; a label and stage sent with it are ignored
         **_suggested(
-            s["suggestion_id"],
+            sid,
             event_id=eid,
             review_item_id=item,
             label="Seriola zonata",
@@ -537,7 +674,7 @@ async def test_answering_with_my_suggestion_stores_the_provisional_name(rdb, tmp
     [row] = await _verdicts(rdb)
     assert row["id"] == out["id"] and row["review_item_id"] == item
     assert row["label_source"] == "suggested"
-    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["species_suggestion_id"] == sid
     assert row["corrected_name"] == row["corrected_species_id"] == "Pomatomus saltatrix"
     assert row["life_stage"] == "juvenile"
     assert await _item_status(rdb, item) == "done"
@@ -545,7 +682,7 @@ async def test_answering_with_my_suggestion_stores_the_provisional_name(rdb, tmp
 
 async def test_a_suggested_answer_gets_no_spot_check(rdb, tmp_path, cat):
     roy = await make_user(rdb, "roy")
-    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     _f, eid, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
     _g, control_eid, control_item = await _box(rdb, tmp_path, 1, claimed_by=roy)
     out = await _answer(
@@ -553,7 +690,7 @@ async def test_a_suggested_answer_gets_no_spot_check(rdb, tmp_path, cat):
         cat,
         roy,
         spot=1.0,
-        **_suggested(s["suggestion_id"], event_id=eid, review_item_id=item),
+        **_suggested(sid, event_id=eid, review_item_id=item),
     )
     assert out["spot_check_scheduled"] is False
     control = await _answer(
@@ -574,12 +711,10 @@ async def test_a_suggested_answer_gets_no_spot_check(rdb, tmp_path, cat):
 async def test_someone_elses_suggestion_is_refused_but_an_admin_may_use_it(rdb, tmp_path, cat):
     ann, roy = await make_user(rdb, "ann"), await make_user(rdb, "roy")
     boss = await make_user(rdb, "boss", role="admin")
-    s = await _suggest(rdb, ann, cat, **JUVENILE_BLUEFISH)
+    sid = await insert_pending(rdb, user_id=ann, **JUVENILE_BLUEFISH)
     _f, eid, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
     with pytest.raises(Forbidden) as refused:
-        await _answer(
-            rdb, cat, roy, **_suggested(s["suggestion_id"], event_id=eid, review_item_id=item)
-        )
+        await _answer(rdb, cat, roy, **_suggested(sid, event_id=eid, review_item_id=item))
     assert refused.value.message == "that suggestion isn't yours"
     assert await _verdicts(rdb) == [] and await _item_status(rdb, item) == "claimed"
 
@@ -589,38 +724,38 @@ async def test_someone_elses_suggestion_is_refused_but_an_admin_may_use_it(rdb, 
         cat,
         boss,
         role="admin",
-        **_suggested(s["suggestion_id"], event_id=boss_eid, review_item_id=boss_item),
+        **_suggested(sid, event_id=boss_eid, review_item_id=boss_item),
     )
     [row] = await _verdicts(rdb)
     assert row["id"] == out["id"] and row["user_id"] == boss
-    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["species_suggestion_id"] == sid
     assert row["label_source"] == "suggested"
 
 
 async def test_a_decided_suggestion_cannot_be_used(rdb, tmp_path, cat):
     roy = await make_user(rdb, "roy")
-    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     _f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
     with pytest.raises(NotFound) as missing:
         await _answer(
             rdb,
             cat,
             roy,
-            **_suggested(s["suggestion_id"] + 1000, event_id=eid, review_item_id=item),
+            **_suggested(sid + 1000, event_id=eid, review_item_id=item),
         )
     assert missing.value.message == "no such species suggestion"
     for status in ("approved", "rejected"):
         async with rdb.connection() as conn:
             await conn.execute(
                 "UPDATE species_suggestions SET status = %s, decided_at = now() WHERE id = %s",
-                (status, s["suggestion_id"]),
+                (status, sid),
             )
         with pytest.raises(Conflict) as decided:
             await _answer(
                 rdb,
                 cat,
                 roy,
-                **_suggested(s["suggestion_id"], event_id=eid, review_item_id=item),
+                **_suggested(sid, event_id=eid, review_item_id=item),
             )
         assert (
             decided.value.message
@@ -631,7 +766,7 @@ async def test_a_decided_suggestion_cannot_be_used(rdb, tmp_path, cat):
 
 async def test_suggested_needs_its_suggestion_and_no_bulk(rdb, tmp_path, cat):
     roy = await make_user(rdb, "roy")
-    sid = (await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     f, eid, item = await _box(rdb, tmp_path, claimed_by=roy)
     box = {"event_id": eid, "review_item_id": item}
     for body in (
@@ -695,11 +830,9 @@ async def test_a_second_opinion_cannot_use_a_suggestion(rdb, tmp_path, cat):
         claimed_by=roy,
         claimed_until=datetime.now(UTC) + timedelta(minutes=10),
     )
-    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     with pytest.raises(Invalid) as refused:
-        await _answer(
-            rdb, cat, roy, **_suggested(s["suggestion_id"], event_id=eid, review_item_id=spot)
-        )
+        await _answer(rdb, cat, roy, **_suggested(sid, event_id=eid, review_item_id=spot))
     assert refused.value.message == "a second opinion can't use a new species"
     assert [v["id"] for v in await _verdicts(rdb)] == [first]
     assert await _item_status(rdb, spot) == "claimed"
@@ -708,14 +841,14 @@ async def test_a_second_opinion_cannot_use_a_suggestion(rdb, tmp_path, cat):
 async def test_a_suggested_answer_without_a_queue_item(rdb, tmp_path, cat):
     """The whole-frame view answers a box that was not served to the reviewer."""
     roy = await make_user(rdb, "roy")
-    s = await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH)
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     _f, eid, item = await _box(rdb, tmp_path)  # an open pass-1 item, nobody's claim
-    body = _suggested(s["suggestion_id"], event_id=eid)
+    body = _suggested(sid, event_id=eid)
     out = await _answer(rdb, cat, roy, spot=1.0, **body)
     assert out["label"] == "Pomatomus saltatrix" and out["spot_check_scheduled"] is False
     [row] = await _verdicts(rdb)
     assert row["review_item_id"] is None and row["label_source"] == "suggested"
-    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["species_suggestion_id"] == sid
     assert row["corrected_name"] == "Pomatomus saltatrix" and row["life_stage"] == "juvenile"
     assert await _item_status(rdb, item) == "done"
     assert await _spot_check_events(rdb) == []
@@ -740,7 +873,7 @@ async def test_changing_to_a_new_species_retires_the_boxs_spot_check(rdb, tmp_pa
     reviewer then changes the box to their new species. The second reviewer could not pick
     it, so the check would be a dispute by construction; the admin's approval is its check."""
     roy, two = await make_user(rdb, "roy"), await make_user(rdb, "two")
-    sid = (await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     listed = {"outcome": "species", "label": "Seriola zonata", "label_source": "search"}
     events = []
     for n in (0, 1):
@@ -774,21 +907,19 @@ async def test_changing_to_a_new_species_retires_the_boxs_spot_check(rdb, tmp_pa
 
 
 async def test_suggested_answer_over_http(rdb, rclient, tmp_path):
-    await make_user(rdb, "roy")
+    roy = await make_user(rdb, "roy")
     login(rclient, "roy")
-    s = rclient.post("/api/review/species-suggestions", json=JUVENILE_BLUEFISH, headers=CSRF).json()
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     _f, eid, _item = await _box(rdb, tmp_path)
     url = "/api/review/verdicts"
-    missing = rclient.post(
-        url, json=_suggested(s["suggestion_id"] + 1000, event_id=eid), headers=CSRF
-    )
+    missing = rclient.post(url, json=_suggested(sid + 1000, event_id=eid), headers=CSRF)
     assert missing.status_code == 404
     assert missing.json()["error"] == "no such species suggestion"
-    r = rclient.post(url, json=_suggested(s["suggestion_id"], event_id=eid), headers=CSRF)
+    r = rclient.post(url, json=_suggested(sid, event_id=eid), headers=CSRF)
     assert r.status_code == 200, r.text
     assert r.json()["label"] == "Pomatomus saltatrix"
     [row] = await _verdicts(rdb)
-    assert row["species_suggestion_id"] == s["suggestion_id"]
+    assert row["species_suggestion_id"] == sid
 
 
 # ---- keeping pending answers out ------------------------------------------------------------
@@ -806,7 +937,7 @@ async def _pending_and_control(rdb, tmp_path, cat):
     """Two boxes roy answered 'Seriola zonata': `pending` with his pending suggestion,
     `control` from the list."""
     roy = await make_user(rdb, "roy")
-    sid = (await _suggest(rdb, roy, cat, **JUVENILE_RUDDERFISH))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_RUDDERFISH)
     f, pending, item = await _box(rdb, tmp_path, 0, claimed_by=roy)
     out = await _answer(rdb, cat, roy, **_suggested(sid, event_id=pending, review_item_id=item))
     g, control, control_item = await _box(rdb, tmp_path, 1, claimed_by=roy)
@@ -903,15 +1034,13 @@ async def test_pending_answers_are_left_out_of_the_live_pool_count(
     monkeypatch.setattr(
         "app.review_pool.ReviewPool.note_verified", lambda self, name: calls.append(name)
     )
-    await make_user(rdb, "roy")
+    roy = await make_user(rdb, "roy")
     login(rclient, "roy")
-    s = rclient.post(
-        "/api/review/species-suggestions", json=JUVENILE_RUDDERFISH, headers=CSRF
-    ).json()
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_RUDDERFISH)
     _f, pending, _i = await _box(rdb, tmp_path, 0)
     _g, control, _j = await _box(rdb, tmp_path, 1)
     url = "/api/review/verdicts"
-    body = _suggested(s["suggestion_id"], event_id=pending)
+    body = _suggested(sid, event_id=pending)
     r = rclient.post(url, json=body, headers=CSRF)
     assert r.status_code == 200, r.text
     assert r.json()["label"] == "Seriola zonata" and r.json()["counts"] is False
@@ -1012,7 +1141,7 @@ async def _training_rows(rdb, event_id):
 
 async def test_approve_settles_every_linked_answer(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, common_name="Almaco Jack"))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Almaco Jack")
     events = [await _answered_with(rdb, tmp_path, cat, roy, sid, n) for n in (0, 1)]
     before = await _linked(rdb, sid)
     assert [r["corrected_name"] for r in before] == ["Almaco Jack", "Almaco Jack"]
@@ -1052,7 +1181,7 @@ async def test_approve_settles_every_linked_answer(rdb, tmp_path, cat):
 
 async def test_approve_checks_the_names_and_stage(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, common_name="Almaco Jack"))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Almaco Jack")
     await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     before = await _verdicts(rdb)
     for body, message in (
@@ -1076,34 +1205,34 @@ async def test_approving_into_a_listed_choice_is_refused(rdb, tmp_path, cat):
     """Review Focus 1: two reviewers suggest the same species, and the admin approves both."""
     ann, bob = await make_user(rdb, "ann"), await make_user(rdb, "bob")
     boss = await make_user(rdb, "boss", role="admin")
-    first = await _suggest(
-        rdb, ann, cat, common_name="Spotted Moray", scientific_name="Gymnothorax moringa"
+    first = await insert_pending(
+        rdb, user_id=ann, common_name="Spotted Moray", scientific_name="Gymnothorax moringa"
     )
-    second = await _suggest(rdb, bob, cat, common_name="Spotted Moray")
-    await _answered_with(rdb, tmp_path, cat, ann, first["suggestion_id"], 0)
-    eid = await _answered_with(rdb, tmp_path, cat, bob, second["suggestion_id"], 1)
+    second = await insert_pending(rdb, user_id=bob, common_name="Spotted Moray")
+    await _answered_with(rdb, tmp_path, cat, ann, first, 0)
+    eid = await _answered_with(rdb, tmp_path, cat, bob, second, 1)
     body = ApproveIn(scientific_name="Gymnothorax moringa", common_name="Spotted Moray")
-    out = await _decide(rdb, approve, boss, first["suggestion_id"], body=body, catalogue=cat)
+    out = await _decide(rdb, approve, boss, first, body=body, catalogue=cat)
     assert out == {"answers": 1}
 
     merged = await _merged(rdb, cat)
     with pytest.raises(Conflict) as refused:
-        await _decide(rdb, approve, boss, second["suggestion_id"], body=body, catalogue=merged)
+        await _decide(rdb, approve, boss, second, body=body, catalogue=merged)
     assert refused.value.message == (
         "already listed as Spotted Moray; reject it as 'it's actually Spotted Moray' instead"
     )
-    assert (await _row(rdb, second["suggestion_id"]))["status"] == "pending"
+    assert (await _row(rdb, second))["status"] == "pending"
 
     as_first = RejectIn(as_label="Gymnothorax moringa", note="the same fish as Ann's")
     # Ruling P3: the approved species is a choice only in the merged list
     with pytest.raises(Invalid, match="^pick a species from the list$"):
-        await _decide(rdb, reject, boss, second["suggestion_id"], body=as_first, catalogue=cat)
-    out = await _decide(rdb, reject, boss, second["suggestion_id"], body=as_first, catalogue=merged)
+        await _decide(rdb, reject, boss, second, body=as_first, catalogue=cat)
+    out = await _decide(rdb, reject, boss, second, body=as_first, catalogue=merged)
     assert out == {"answers": 1}
-    [moved] = await _linked(rdb, second["suggestion_id"])
+    [moved] = await _linked(rdb, second)
     assert moved["event_id"] == eid and moved["user_id"] == bob
     assert moved["corrected_name"] == moved["corrected_species_id"] == "Gymnothorax moringa"
-    row = await _row(rdb, second["suggestion_id"])
+    row = await _row(rdb, second)
     assert row["status"] == "rejected" and row["rejected_to_name"] == "Gymnothorax moringa"
     [back] = await _training_rows(rdb, eid)
     assert back["corrected_name"] == "Gymnothorax moringa"
@@ -1112,7 +1241,7 @@ async def test_approving_into_a_listed_choice_is_refused(rdb, tmp_path, cat):
 async def test_approval_leaves_a_newer_answer_alone(rdb, tmp_path, cat):
     """Review Focus 2: the suggester changed the box to a listed species while it waited."""
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, common_name="Almaco Jack"))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Almaco Jack")
     eid = await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     newer = await _answer(
         rdb,
@@ -1138,7 +1267,7 @@ async def test_approval_leaves_a_newer_answer_alone(rdb, tmp_path, cat):
 
 async def test_reject_as_a_listed_species_moves_the_answers(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, **JUVENILE_BLUEFISH))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_BLUEFISH)
     eid = await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     assert await _training_rows(rdb, eid) == []  # waiting
 
@@ -1166,12 +1295,12 @@ async def test_reject_as_a_listed_species_moves_the_answers(rdb, tmp_path, cat):
     async with rdb.connection() as conn:
         assert await pending_species_events(conn) == {}
         [mine] = await list_mine(conn, user=as_user(roy))
-    assert mine["status_text"] == "not added" and mine["rejected_to_name"] == "Seriola zonata"
+    assert mine["status_text"] == "removed" and mine["rejected_to_name"] == "Seriola zonata"
 
 
 async def test_reject_as_cant_identify(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, **JUVENILE_RUDDERFISH))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, **JUVENILE_RUDDERFISH)
     eid = await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     assert (await _linked(rdb, sid))[0]["is_endorsement"] is True  # Seriola zonata, as guessed
 
@@ -1197,7 +1326,7 @@ async def test_reject_as_cant_identify(rdb, tmp_path, cat):
 async def test_reject_as_a_staged_species_needs_its_stage(rdb, tmp_path, cat):
     """Review Focus 4: French Angelfish is listed only as adult and juvenile."""
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, common_name="Angel"))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Angel")
     await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     before = await _verdicts(rdb)
     merged = await _merged(rdb, cat)
@@ -1218,7 +1347,7 @@ async def test_reject_as_a_staged_species_needs_its_stage(rdb, tmp_path, cat):
 
 async def test_reject_says_what_it_is_or_that_it_cant_be_identified(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, common_name="Angel"))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Angel")
     await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     before = await _verdicts(rdb)
     for body in (
@@ -1236,28 +1365,25 @@ async def test_reject_says_what_it_is_or_that_it_cant_be_identified(rdb, tmp_pat
 async def test_cant_identify_clears_not_sure(rdb, tmp_path, cat):
     """Review Focus 5: a can't-identify answer is 'certain', and names no individual."""
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    tang = await _suggest(
+    tang = await insert_pending(
         rdb,
-        roy,
-        cat,
+        user_id=roy,
         common_name="Juvenile Blue Tang",
         scientific_name="Acanthurus coeruleus",
         life_stage="juvenile",
     )
-    moray = await _suggest(rdb, roy, cat, common_name="Spotted Moray")
+    moray = await insert_pending(rdb, user_id=roy, common_name="Spotted Moray")
     rejected = await _answered_with(
-        rdb, tmp_path, cat, roy, tang["suggestion_id"], 0, not_sure=True, celebrity_id="bobby"
+        rdb, tmp_path, cat, roy, tang, 0, not_sure=True, celebrity_id="bobby"
     )
-    detached = await _answered_with(
-        rdb, tmp_path, cat, roy, moray["suggestion_id"], 1, not_sure=True
-    )
+    detached = await _answered_with(rdb, tmp_path, cat, roy, moray, 1, not_sure=True)
     rows = {r["event_id"]: r for r in await _verdicts(rdb)}
     assert {r["confidence"] for r in rows.values()} == {"uncertain"}
     assert rows[rejected]["celebrity_id"] == "bobby"
 
     unknown = RejectIn(unidentifiable=True)
-    await _decide(rdb, reject, boss, tang["suggestion_id"], body=unknown, catalogue=cat)
-    await _decide(rdb, detach, boss, moray["suggestion_id"], event_id=detached)
+    await _decide(rdb, reject, boss, tang, body=unknown, catalogue=cat)
+    await _decide(rdb, detach, boss, moray, event_id=detached)
     rows = {r["event_id"]: r for r in await _verdicts(rdb)}
     for eid in (rejected, detached):
         assert rows[eid]["unidentifiable"] is True and rows[eid]["confidence"] == "certain"
@@ -1269,41 +1395,37 @@ async def test_a_decision_keeps_a_named_individual_only_under_its_species(rdb, t
     species, the answer must not keep him, or the public gallery lists that box under him."""
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
     tang = {"scientific_name": "Acanthurus coeruleus"}
-    kept = await _suggest(
-        rdb, roy, cat, common_name="Juvenile Blue Tang", life_stage="juvenile", **tang
+    kept = await insert_pending(
+        rdb, user_id=roy, common_name="Juvenile Blue Tang", life_stage="juvenile", **tang
     )
-    moved = await _suggest(
-        rdb, roy, cat, common_name="Intermediate Blue Tang", life_stage="intermediate", **tang
+    moved = await insert_pending(
+        rdb, user_id=roy, common_name="Intermediate Blue Tang", life_stage="intermediate", **tang
     )
     boxes = {
-        kept["suggestion_id"]: await _answered_with(
-            rdb, tmp_path, cat, roy, kept["suggestion_id"], 0, celebrity_id="bobby"
-        ),
-        moved["suggestion_id"]: await _answered_with(
-            rdb, tmp_path, cat, roy, moved["suggestion_id"], 1, celebrity_id="bobby"
-        ),
+        kept: await _answered_with(rdb, tmp_path, cat, roy, kept, 0, celebrity_id="bobby"),
+        moved: await _answered_with(rdb, tmp_path, cat, roy, moved, 1, celebrity_id="bobby"),
     }
     rows = {r["event_id"]: r for r in await _verdicts(rdb)}
     assert {r["celebrity_id"] for r in rows.values()} == {"bobby"}
 
     as_rudderfish = RejectIn(as_label="Seriola zonata")
-    await _decide(rdb, reject, boss, moved["suggestion_id"], body=as_rudderfish, catalogue=cat)
+    await _decide(rdb, reject, boss, moved, body=as_rudderfish, catalogue=cat)
     same = ApproveIn(
         scientific_name="Acanthurus coeruleus",
         common_name="Juvenile Blue Tang",
         life_stage="juvenile",
     )
-    await _decide(rdb, approve, boss, kept["suggestion_id"], body=same, catalogue=cat)
+    await _decide(rdb, approve, boss, kept, body=same, catalogue=cat)
     rows = {r["event_id"]: r for r in await _verdicts(rdb)}
-    assert rows[boxes[moved["suggestion_id"]]]["corrected_name"] == "Seriola zonata"
-    assert rows[boxes[moved["suggestion_id"]]]["celebrity_id"] is None
-    assert rows[boxes[kept["suggestion_id"]]]["corrected_name"] == "Acanthurus coeruleus"
-    assert rows[boxes[kept["suggestion_id"]]]["celebrity_id"] == "bobby"
+    assert rows[boxes[moved]]["corrected_name"] == "Seriola zonata"
+    assert rows[boxes[moved]]["celebrity_id"] is None
+    assert rows[boxes[kept]]["corrected_name"] == "Acanthurus coeruleus"
+    assert rows[boxes[kept]]["celebrity_id"] == "bobby"
 
 
 async def test_not_this_species_unlinks_one_box(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    sid = (await _suggest(rdb, roy, cat, common_name="Spotted Moray"))["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Spotted Moray")
     kept, wrong = [await _answered_with(rdb, tmp_path, cat, roy, sid, n) for n in (0, 1)]
     assert await _decide(rdb, detach, boss, sid, event_id=wrong) == {"answers": 1}
     rows = {r["event_id"]: r for r in await _verdicts(rdb)}
@@ -1329,8 +1451,8 @@ async def test_not_this_species_unlinks_one_box(rdb, tmp_path, cat):
 
 async def test_a_decided_suggestion_cannot_be_decided_again(rdb, tmp_path, cat):
     roy, boss = await make_user(rdb, "roy"), await make_user(rdb, "boss", role="admin")
-    added = (await _suggest(rdb, roy, cat, common_name="Spotted Moray"))["suggestion_id"]
-    dropped = (await _suggest(rdb, roy, cat, common_name="Goldentail Moray"))["suggestion_id"]
+    added = await insert_pending(rdb, user_id=roy, common_name="Spotted Moray")
+    dropped = await insert_pending(rdb, user_id=roy, common_name="Goldentail Moray")
     boxes = {added: await _answered_with(rdb, tmp_path, cat, roy, added, 0)}
     boxes[dropped] = await _answered_with(rdb, tmp_path, cat, roy, dropped, 1)
     moray = ApproveIn(scientific_name="Gymnothorax moringa", common_name="Spotted Moray")
@@ -1356,14 +1478,15 @@ async def test_a_decided_suggestion_cannot_be_decided_again(rdb, tmp_path, cat):
 
 
 async def test_admin_routes_over_http(rdb, rclient, tmp_path):
-    await make_user(rdb, "roy")
+    roy = await make_user(rdb, "roy")
     await make_user(rdb, "boss", role="admin")
     url = "/api/review/species-suggestions"
     login(rclient, "roy")
-    s = rclient.post(
-        url, json={"common_name": "Spotted Moray", "note": "under the ladder"}, headers=CSRF
-    ).json()
-    sid = s["suggestion_id"]
+    sid = await insert_pending(rdb, user_id=roy, common_name="Spotted Moray")
+    async with rdb.connection() as conn:
+        await conn.execute(
+            "UPDATE species_suggestions SET note = 'under the ladder' WHERE id = %s", (sid,)
+        )
     _f, eid, _item = await _box(rdb, tmp_path)
     r = rclient.post("/api/review/verdicts", json=_suggested(sid, event_id=eid), headers=CSRF)
     assert r.status_code == 200, r.text
@@ -1522,15 +1645,12 @@ async def test_browse_names_a_pending_species_that_is_not_listed_yet(rdb, tmp_pa
     """Browser walk 2026-11-21: a species new to the list has no listed common name, so
     the cell showed its bare provisional name, "Pseudupeneus maculatus", unmarked."""
     roy = await make_user(rdb, "roy")
-    sid = (
-        await _suggest(
-            rdb,
-            roy,
-            cat,
-            common_name="Spotted Goatfish",
-            scientific_name="Pseudupeneus maculatus",
-        )
-    )["suggestion_id"]
+    sid = await insert_pending(
+        rdb,
+        user_id=roy,
+        common_name="Spotted Goatfish",
+        scientific_name="Pseudupeneus maculatus",
+    )
     eid = await _answered_with(rdb, tmp_path, cat, roy, sid, 0)
     async with rdb.connection() as conn:
         result = await browse(

@@ -1,19 +1,24 @@
-"""Species a reviewer adds because the list lacks them (spec 2026-11-21, "The species list").
+"""Species a reviewer adds because the list lacks them (spec 2026-11-21-species-worms-check).
 
-A suggestion waits ('pending') until an admin approves or rejects it. While it waits only its
-suggester, and admins, can pick it (pending_entries). Once approved it joins everyone's list:
-merged_catalogue() is the file-built catalogue plus every approved suggestion. The dashboard
-keeps no state between requests and may run as several instances, so each request reads a
-cheap stamp of the approved set and the merge is rebuilt only when the stamp changes.
+The reviewer's browser checks the name against WoRMS; create_suggestion applies the list rules
+and inserts the row already 'approved', with the WoRMS record chosen (aphia_id, family), so it
+joins everyone's list at once: merged_catalogue() is the file-built catalogue plus every approved
+row. The dashboard keeps no state between requests and may run as several instances, so each
+request reads a cheap stamp of the approved set and the merge is rebuilt only when it changes.
 
 Duplicates are judged on name and stage together, the scientific name mapped through the
-taxonomy first; a new stage of a listed species is a new choice.
+taxonomy first, and an AphiaID a listed entry carries names that entry. How a listed species is
+staged is not one reviewer's to change (Dan's option a): no plain entry for a species listed
+only with stages, no stage for one listed without. A new stage of a species listed with stages
+is a new choice.
 
-An admin's decision settles the answers linked to a suggestion in place ("Approving and
-rejecting"): approval gives them the approved name and stage, rejection the listed species it
-really is or can't-identify. They keep label_source 'suggested' and their link, and the row keeps
-what was suggested, so the trail survives. "Not this species" (detach) turns one box's answers
-into can't-identify and unlinks them before the rest are decided.
+Suggestions made under ai #49 waited ('pending') for an admin, and only their suggester, and
+admins, could pick them (pending_entries). Any left over are still decided that way ("Approving
+and rejecting", spec 2026-11-21-reviewer-species-suggestions): approval gives the answers linked
+to one the approved name and stage, rejection the listed species it really is or can't-identify.
+They keep label_source 'suggested' and their link, and the row keeps what was suggested, so the
+trail survives. "Not this species" (detach) turns one box's answers into can't-identify and
+unlinks them before the rest are decided.
 """
 
 from __future__ import annotations
@@ -38,16 +43,18 @@ STAGES: tuple[str | None, ...] = (
     "terminal phase",
 )
 
-STATUS_TEXT = {"pending": "waiting for approval", "approved": "added", "rejected": "not added"}
+STATUS_TEXT = {"pending": "waiting for approval", "approved": "added", "rejected": "removed"}
 
-_SCIENTIFIC = re.compile(r"^[A-Z][a-z]+(?: [a-z]+(?:-[a-z]+)?){0,2}$")
-
-# One reviewer's suggestions are made one at a time, so a double submit cannot slip two
-# identical pending rows past the duplicate check (namespaced, transaction-scoped, as
-# review_queue.EVENT_LOCK_SQL).
-_SUGGESTER_LOCK_SQL = (
-    "SELECT pg_advisory_xact_lock(hashtextextended('species-suggestion:' || %s::text, 0))"
+# Genus, an optional subgenus in parentheses as WoRMS writes it, species, optional subspecies.
+_SCIENTIFIC = re.compile(
+    r"^[A-Z][a-z]+(?: \([A-Z][a-z]+\))? [a-z]+(?:-[a-z]+)?(?: [a-z]+(?:-[a-z]+)?)?$"
 )
+_GENUS = re.compile(r"^[A-Z][a-z]+$")
+
+# Additions of one species are made one at a time, so two reviewers adding the same choice at
+# nearly the same moment cannot both pass the duplicate check (namespaced, transaction-scoped,
+# as review_queue.EVENT_LOCK_SQL).
+_ADD_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('species-add:' || %s::text))"
 
 _ENTRY_COLUMNS = "id, common_name, scientific_name, life_stage"
 
@@ -60,6 +67,7 @@ _MINE_KEYS = (
     "rejected_to_name",
     "rejected_to_stage",
     "approved_common",
+    "aphia_id",
 )
 
 
@@ -73,8 +81,12 @@ _CANT_IDENTIFY = """unidentifiable = true, corrected_name = NULL, corrected_spec
 
 
 class SuggestionIn(BaseModel):
-    common_name: str = Field(..., min_length=1, max_length=120)
-    scientific_name: str | None = Field(None, max_length=120)
+    """The WoRMS record the reviewer chose, and the common name, stage and note they gave."""
+
+    aphia_id: int = Field(..., gt=0)
+    scientific_name: str = Field(..., min_length=1, max_length=160)  # WoRMS's accepted name
+    family: str | None = Field(None, max_length=120)
+    common_name: str | None = Field(None, max_length=120)
     life_stage: str | None = Field(None, max_length=40)
     note: str | None = Field(None, max_length=500)
 
@@ -123,11 +135,14 @@ def _note(raw: str | None) -> str | None:
 
 
 def clean_scientific(raw: str | None) -> str | None:
-    """'  Gymnothorax   moringa ' -> 'Gymnothorax moringa'; None for nothing given."""
+    """'  Gymnothorax   moringa ' -> 'Gymnothorax moringa'; None for nothing given. A genus
+    alone is refused: only a species can be a choice."""
     name = _squash(raw)
-    if name is not None and not _SCIENTIFIC.fullmatch(name):
-        raise Invalid("write the scientific name as Genus species")
-    return name
+    if name is None or _SCIENTIFIC.fullmatch(name):
+        return name
+    if _GENUS.fullmatch(name):
+        raise Invalid("pick a species, not a genus")
+    raise Invalid("write the scientific name as Genus species")
 
 
 def provisional_name(row: dict, catalogue) -> str:
@@ -164,7 +179,8 @@ def _listed_by_common_name(catalogue, common: str, stage: str | None) -> Catalog
     """The listed choice a common name and stage already are (Ruling X1), judged on species
     and stage together: an entry with exactly this common name at this stage, or a species
     whose own common name is this one, stage words taken out, listed at this stage. A
-    stage a listed species lacks is a new choice, even typed as its plain common name."""
+    stage a listed species lacks is not found here, even typed as its plain common name:
+    create_suggestion's staging refusals judge that by the scientific name."""
     folded = common.casefold()
     for e in catalogue.entries:
         if e.life_stage == stage and (_squash(e.common_name) or "").casefold() == folded:
@@ -181,37 +197,73 @@ def _listed_by_common_name(catalogue, common: str, stage: str | None) -> Catalog
 
 
 async def create_suggestion(conn, *, user, body: SuggestionIn, catalogue) -> dict:
-    """Record `user`'s suggestion, pending, and return its picker entry."""
+    """Add the species `user` chose from WoRMS to everyone's list at once, already approved,
+    unless the list rules refuse it, and return the new choice. `catalogue` is the merged one,
+    read before the lock: the check made under it catches an addition committed since."""
     stage = _stage(body.life_stage)
-    common = _common(body.common_name)
     scientific = clean_scientific(body.scientific_name)
-    if scientific is not None:
-        listed = catalogue.entry(catalogue.accepted(scientific), stage)
-        if listed is not None:
-            raise _listed_as(listed)
+    if scientific is None:
+        raise Invalid("write the scientific name as Genus species")
+    name = next(
+        (e.name for e in catalogue.entries if e.aphia_id == body.aphia_id),
+        catalogue.accepted(scientific),
+    )
+    listed = catalogue.entry(name, stage)
+    if listed is not None:
+        raise _listed_as(listed)
+    stages = catalogue.stages(name)
+    if stages and None not in stages and stage is None:
+        raise Conflict(f"pick a stage: {', '.join(s for s in stages if s)}, or add a new one")
+    if None in stages and stage is not None:
+        raise _listed_as(catalogue.entry(name, None))
+    common = _squash(body.common_name) or scientific
     listed = _listed_by_common_name(catalogue, common, stage)
     if listed is not None:
         raise _listed_as(listed)
-    folded = common.casefold()
     async with conn.transaction():
-        await conn.execute(_SUGGESTER_LOCK_SQL, (user.id,))
-        waiting = await fetch_all(
+        await conn.execute(_ADD_LOCK_SQL, (name,))
+        added = await fetch_one(
             conn,
-            """SELECT common_name, life_stage FROM species_suggestions
-                WHERE suggested_by = %s AND status = 'pending'""",
-            (user.id,),
+            """SELECT approved_common FROM species_suggestions
+                WHERE status = 'approved' AND approved_name = %s
+                  AND approved_stage IS NOT DISTINCT FROM %s
+                LIMIT 1""",
+            (name, stage),
         )
-        if any(r["common_name"].casefold() == folded and r["life_stage"] == stage for r in waiting):
-            raise Conflict("you already suggested this; it is waiting for approval")
+        if added is not None:
+            raise _listed_as(
+                CatalogueEntry(name=name, life_stage=stage, common_name=added["approved_common"])
+            )
         row = await fetch_one(
             conn,
-            f"""INSERT INTO species_suggestions (common_name, scientific_name, life_stage, note,
-                                                 suggested_by, location_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING {_ENTRY_COLUMNS}""",
-            (common, scientific, stage, _note(body.note), user.id, location_id()),
+            """INSERT INTO species_suggestions
+                       (common_name, scientific_name, life_stage, note, suggested_by,
+                        location_id, aphia_id, family, status, approved_name, approved_common,
+                        approved_stage, decided_at, decided_by, decision_note)
+                VALUES (%(common)s, %(scientific)s, %(stage)s, %(note)s, %(uid)s,
+                        %(location)s, %(aphia_id)s, %(family)s, 'approved', %(name)s, %(common)s,
+                        %(stage)s, now(), NULL, %(decision_note)s)
+                RETURNING id""",
+            {
+                "common": common,
+                "scientific": scientific,
+                "stage": stage,
+                "note": _note(body.note),
+                "uid": user.id,
+                "location": location_id(),
+                "aphia_id": body.aphia_id,
+                "family": _squash(body.family),
+                "name": name,
+                "decision_note": f"WoRMS AphiaID {body.aphia_id}",
+            },
         )
-    return entry_json(row, catalogue)
+    return {
+        "key": f"{name}|{stage or ''}",
+        "name": name,
+        "life_stage": stage,
+        "common": common,
+        "suggestion_id": row["id"],
+    }
 
 
 async def pending_entries(conn, *, user, catalogue) -> list[dict]:
@@ -513,7 +565,8 @@ async def merged_catalogue(conn, base: Catalogue) -> Catalogue:
             return _merged[2]
         rows = await fetch_all(
             conn,
-            """SELECT approved_name, approved_stage, approved_common FROM species_suggestions
+            """SELECT approved_name, approved_stage, approved_common, aphia_id, family
+                 FROM species_suggestions
                 WHERE status = 'approved' AND approved_name IS NOT NULL
                 ORDER BY decided_at, id""",
         )
@@ -538,5 +591,7 @@ def _approved_entries(base: Catalogue, rows: list[dict]) -> list[CatalogueEntry]
             e.aphia_id, e.rank, e.resolved = taxon.aphia_id, taxon.rank, taxon.resolved
             e.family, e.order = taxon.family, taxon.order
             e.class_, e.phylum = taxon.class_, taxon.phylum
+        elif r["aphia_id"] is not None:  # a species new to the list: the WoRMS record chosen
+            e.aphia_id, e.family, e.rank, e.resolved = r["aphia_id"], r["family"], "Species", True
         added[(name, stage)] = e
     return list(added.values())
