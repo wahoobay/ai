@@ -423,3 +423,83 @@ def test_an_account_is_the_same_whatever_the_sessions_time_zone():
     utc = label_archive._identity(snap("2026-10-29 22:00:00.5+00:00"))
     eastern = label_archive._identity(snap("2026-10-29 18:00:00.5-04:00"))
     assert utc == eastern
+
+
+# ----- species reviewers added (ai #49/#50) -------------------------------------------
+
+
+async def _add_species(
+    rdb, by: int, name: str, *, status="approved", stage=None, aphia=None
+) -> int:
+    async with rdb.connection() as conn:
+        cur = await conn.execute(
+            """INSERT INTO species_suggestions
+                   (common_name, scientific_name, life_stage, suggested_by, status,
+                    approved_name, approved_common, approved_stage, aphia_id, decided_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       CASE WHEN %s = 'pending' THEN NULL ELSE now() END)
+               RETURNING id""",
+            (
+                name,
+                name,
+                stage,
+                by,
+                status,
+                None if status == "pending" else name,
+                name,
+                stage,
+                aphia,
+                status,
+            ),
+        )
+        return (await cur.fetchone())[0]
+
+
+async def test_collect_archives_the_species_the_account_added_or_used(rdb, tmp_path):
+    """A restored archive must be able to name every species the account's answers use: the
+    ones it added, and ones another reviewer added that it picked from the list."""
+    frame = await seed_frame(rdb, tmp_path, boxes=TWO_BOXES)
+    alice = await make_user(rdb, "alice")
+    bob = await make_user(rdb, "bob")
+    own = await _add_species(rdb, alice, "Pseudupeneus maculatus", aphia=159421)
+    used = await _add_species(rdb, bob, "Acanthurus chirurgus", aphia=159578)
+    unused = await _add_species(rdb, bob, "Lutjanus apodus", aphia=159782)
+    await add_verdict(rdb, frame["event_ids"][0], alice, name="Acanthurus chirurgus")
+
+    snap = await collect(rdb, "alice")
+
+    rows = _lines(snap.files["tables/species_suggestions.jsonl.gz"])
+    assert {r["id"] for r in rows} == {own, used}
+    assert unused not in {r["id"] for r in rows}
+    assert {r["aphia_id"] for r in rows} == {159421, 159578}
+    assert snap.counts["species_suggestions"] == 2
+
+
+async def test_the_training_csv_leaves_out_a_box_waiting_on_a_new_species(rdb, tmp_path):
+    """The raw verdicts keep everything; the CSV the training-set builder reads does not
+    carry a box whose answer still waits on a #49 suggestion (guards the merge of main's
+    hide_pending_species with this branch's user_ids filter)."""
+    frame = await seed_frame(rdb, tmp_path, boxes=TWO_BOXES)
+    alice = await make_user(rdb, "alice")
+    waiting = await _add_species(rdb, alice, "Pseudupeneus maculatus", status="pending")
+    pending_answer = await add_verdict(
+        rdb, frame["event_ids"][0], alice, name="Pseudupeneus maculatus"
+    )
+    async with rdb.connection() as conn:
+        await conn.execute(
+            """UPDATE detection_corrections SET label_source = 'suggested',
+                      species_suggestion_id = %s WHERE id = %s""",
+            (waiting, pending_answer),
+        )
+    listed = await add_verdict(rdb, frame["event_ids"][1], alice, name="Seriola zonata")
+
+    snap = await collect(rdb, "alice")
+
+    verdict_ids = {line["verdict"]["id"] for line in _lines(snap.files["verdicts.jsonl.gz"])}
+    csv_ids = {
+        int(r["correction_id"])
+        for r in csv.DictReader(io.StringIO(snap.files["labeled_corrections.csv"].decode()))
+    }
+    assert verdict_ids == {pending_answer, listed}
+    assert csv_ids == {listed}
+    assert waiting in {r["id"] for r in _lines(snap.files["tables/species_suggestions.jsonl.gz"])}

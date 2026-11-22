@@ -59,6 +59,26 @@ NOT_ARCHIVED = (
     "user_tokens",  # credentials (token_hash)
 )
 
+# The species reviewers added (species_suggestions, ai #49/#50) that the account's work
+# names: the ones it added, the ones its answers link to, and the ones another reviewer
+# added that it picked from the list or drew a box as. Without them a restored archive
+# would hold answers naming species no list knows. The table has no user_id column, so the
+# allow-list test above does not cover it; this query is its own allow-list.
+SPECIES_SQL = """
+    SELECT row_to_json(s)::text AS j FROM species_suggestions s
+     WHERE s.suggested_by = %(uid)s
+        OR s.id IN (SELECT c.species_suggestion_id FROM detection_corrections c
+                     WHERE c.user_id = %(uid)s AND c.species_suggestion_id IS NOT NULL)
+        OR (s.approved_name IS NOT NULL AND (
+                EXISTS (SELECT 1 FROM detection_corrections c
+                         WHERE c.user_id = %(uid)s AND c.corrected_name = s.approved_name
+                           AND c.life_stage IS NOT DISTINCT FROM s.approved_stage)
+             OR EXISTS (SELECT 1 FROM review_added_boxes b
+                         WHERE b.user_id = %(uid)s AND b.label = s.approved_name
+                           AND b.life_stage IS NOT DISTINCT FROM s.approved_stage)))
+     ORDER BY j
+"""
+
 # The frames behind the boxes the account drew, which a verdict may not cover.
 ADDED_BOX_FRAMES_SQL = """
     SELECT s.image_path, s.coco_path FROM saved_frames s
@@ -156,6 +176,12 @@ async def collect(pool: AsyncConnectionPool, username: str) -> AccountSnapshot:
             if rows:
                 files[f"tables/{table}.jsonl.gz"] = _jsonl_gz(rows)
                 counts[table] = len(rows)
+
+        cur = await conn.execute(SPECIES_SQL, {"uid": uid})
+        rows = [row[0] for row in await cur.fetchall()]
+        if rows:
+            files["tables/species_suggestions.jsonl.gz"] = _jsonl_gz(rows)
+            counts["species_suggestions"] = len(rows)
 
         cur = await conn.execute(ADDED_BOX_FRAMES_SQL, (uid,))
         for image_path, coco_path in await cur.fetchall():

@@ -578,7 +578,8 @@ Each run reads inside a read-only transaction. It writes under
 - `snapshots/<UTC stamp>/` is written only when something changed:
   - `verdicts.jsonl.gz`: each verdict with its detection and saved frame
   - `tables/<table>.jsonl.gz`: the account's rows in the other tables
-  - `labeled_corrections.csv`: the training-set builder's input
+  - `tables/species_suggestions.jsonl.gz`: the species reviewers added that the account's work names (ones it added, ones its answers link to, and ones another reviewer added that it picked or drew), with their WoRMS `aphia_id`
+  - `labeled_corrections.csv`: the training-set builder's input, without boxes whose answer still waits on a species suggestion
   - `account.json`: the account, with no email
   - `frames.txt` and `manifest.json`
 - `latest.json` names the newest snapshot. It is written last.
