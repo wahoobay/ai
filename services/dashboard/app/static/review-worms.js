@@ -11,7 +11,8 @@
 //             synonym's note says "WoRMS lists this as <valid name>");
 //   choose -- candidates for "Did you mean?" (species only, each accepted species once,
 //             accepted names first, at most 5);
-//   none   -- nothing found; genus -- the name is a genus or another rank, not a species;
+//   none   -- nothing found, or only a name WoRMS doesn't accept (a nomen dubium, say);
+//   genus  -- the name is a genus or another rank, not a species;
 //   down   -- WoRMS couldn't be reached, answered an error, or took more than TIMEOUT_MS.
 // Each record is the accepted one: {aphia_id, name, authority, family, rank, url}. Its text is
 // WoRMS's and goes into the page as text only.
@@ -44,6 +45,15 @@ RV.worms = (() => {
   const list = (data) => (Array.isArray(data) ? data.filter((r) => r && typeof r === "object") : []);
   const positive = (id) => (Number.isInteger(id) && id > 0 ? id : null);
 
+  // Whether `r` names a species WoRMS accepts (final review M1): a record that stands for
+  // itself (no valid record, or itself) only when its status is "accepted" -- not a nomen
+  // dubium, a taxon inquirendum, or a record TAXAMATCH finds quarantined or deleted; one
+  // pointing to another valid record (a synonym) for the accepted record it points to.
+  function usable(r) {
+    const valid = positive(r.valid_AphiaID);
+    return (valid !== null && valid !== positive(r.AphiaID)) || r.status === "accepted";
+  }
+
   // The accepted record `r` stands for: itself, or the valid record a synonym points to. The link
   // is built from the AphiaID, never taken from the answer.
   function accepted(r) {
@@ -60,15 +70,15 @@ RV.worms = (() => {
     };
   }
 
-  // Candidates for "Did you mean?": species only, each accepted species once, accepted names
-  // first, at most MAX.
+  // Candidates for "Did you mean?": usable species only, each accepted species once, accepted
+  // names first, at most MAX.
   function candidates(records) {
     const accepted1st = records.slice().sort((a, b) =>
       (a.status === "accepted" ? 0 : 1) - (b.status === "accepted" ? 0 : 1));
     const seen = new Set();
     const out = [];
     for (const r of accepted1st) {
-      if (r.rank !== "Species") continue;
+      if (r.rank !== "Species" || !usable(r)) continue;
       const rec = accepted(r);
       if (!rec.aphia_id || !rec.name || seen.has(rec.aphia_id)) continue;
       seen.add(rec.aphia_id);
@@ -90,9 +100,10 @@ RV.worms = (() => {
     const exact = records.filter((r) => r.match_type === "exact");
     if (exact.length) {
       const found = candidates(exact);
-      if (!found.length) return { status: "genus", records: [], note: null };
+      // Not a species: a genus or another rank WoRMS accepts, or a name it doesn't accept.
+      if (!found.length) return exact.some(usable) ? { status: "genus", records: [], note: null } : NONE;
       if (found.length > 1) return choose(found);   // a name WoRMS holds twice
-      const first = exact.find((r) => accepted(r).aphia_id === found[0].aphia_id);
+      const first = exact.find((r) => usable(r) && accepted(r).aphia_id === found[0].aphia_id);
       const synonym = positive(first.AphiaID) !== found[0].aphia_id;
       return { status: "match", records: found,
         note: synonym ? `WoRMS lists this as ${found[0].name}` : null };

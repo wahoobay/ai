@@ -1594,6 +1594,51 @@ def test_a_genus_is_refused(tmp_path):
 
 
 @needs_node
+def test_a_record_worms_does_not_accept_is_no_species_to_add(tmp_path):
+    """Final review M1: the spec asks for an exact match WoRMS accepts. A record that stands for
+    itself (no valid name, or itself as its valid name) yet isn't accepted -- a nomen dubium, a
+    taxon inquirendum, one TAXAMATCH finds quarantined -- is no species to add: matched exactly,
+    WoRMS doesn't know the name; near, it isn't offered. A synonym still stands for the species
+    it points to."""
+    out = run_node(
+        _page("review-single.js"),
+        FRAME_STUB
+        + SUGGEST_STUB
+        + """
+      worms[matchNames("Pseudupeneus dubius")] = { data: [[record(700, "Pseudupeneus dubius",
+        { status: "nomen dubium", valid_AphiaID: null, valid_name: null, valid_authority: null })]] };
+      worms[matchNames("Pseudupeneus maculatis")] = { data: [[
+        record(701, "Pseudupeneus maculatis", { match_type: "near_1", status: "taxon inquirendum" }),
+        record(702, "Pseudupeneus maculosus", { match_type: "near_2", status: "quarantined",
+          valid_AphiaID: null, valid_name: null }),
+        record(126994, "Pseudupeneus maculatus", { match_type: "phonetic" }),
+        record(500, "Upeneus prayensis", { match_type: "near_3", status: "unaccepted",
+          valid_AphiaID: 126995, valid_name: "Pseudupeneus prayensis" })]] };
+      await RV.views.single.enter({ payload: payload(1) });
+      const root = document.getElementById("rv-single");
+      openForm(root, { scientific_name: "Pseudupeneus dubius" });
+      checkForm(root); await settle();
+      const exact = { text: textOf(root), ready: !addButton(root).disabled, choices: choices(root) };
+      fill(root, { scientific_name: "Pseudupeneus maculatis" });
+      checkForm(root); await settle();
+      return { exact, near: choices(root), asked: asked() };
+    """,
+        tmp_path,
+    )
+    assert UNKNOWN in out["exact"]["text"] and "✓" not in out["exact"]["text"]
+    assert out["exact"]["ready"] is False and out["exact"]["choices"] == []
+    assert out["near"] == [
+        "Pseudupeneus maculatus (Bloch, 1793) · Mullidae WoRMS ↗",
+        "Pseudupeneus prayensis (Bloch, 1793) · Mullidae WoRMS ↗",
+    ]
+    assert out["asked"] == [
+        "/api/review/species-suggestions/mine",
+        "WoRMS /AphiaRecordsByMatchNames?scientificnames[]=Pseudupeneus%20dubius&marine_only=false",
+        MATCH_GOATFISH.replace("maculatus", "maculatis"),
+    ]
+
+
+@needs_node
 def test_a_name_taxamatch_misses_falls_back_to_names_that_start_the_same(tmp_path):
     out = run_node(
         _page("review-single.js"),
