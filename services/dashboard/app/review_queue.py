@@ -54,6 +54,10 @@ RETIRED_MESSAGES = {
     "new_species": "this box was retired: an admin checks its answer instead",
 }
 
+# An answer naming a species a reviewer added that an admin has since removed. The page reloads
+# its species list on this text (RV.STALE_SPECIES).
+REMOVED_SPECIES = "that species was removed from the list; pick from the list"
+
 
 def not_skipped(alias: str) -> str:
     """SQL: volunteer %(uid)s has not skipped item `alias` within the last
@@ -441,6 +445,33 @@ def validate_label(body, *, catalogue, name: str | None) -> dict:
     if celebrity_id and celebrity_id not in catalogue.celebrity_ids(name):
         raise Invalid("that named individual is not recorded for this species")
     return {"confidence": "uncertain" if body.not_sure else "certain", "celebrity_id": celebrity_id}
+
+
+async def hold_addition(conn, *, catalogue, name: str | None, life_stage: str | None) -> None:
+    """Called inside the transaction that saves an answer or a drawn box naming `name` at
+    `life_stage`, after `catalogue` (the merged one the caller validated against) was read
+    (Ruling W2). When that choice is a species a reviewer added, its species_suggestions row is
+    held FOR SHARE until commit: a removal (species_suggestions.remove_addition, which holds it
+    FOR UPDATE) either commits first, and the answer is refused because `catalogue` is stale,
+    or waits for this one, and then moves it with the rest. A choice added again since its
+    removal is listed again.
+
+    A choice the files list (every file-built entry is in the Species Log or the classifier)
+    is theirs, whatever rows a removed addition of it left, and is not looked up."""
+    entry = catalogue.entry(name, life_stage) if name is not None else None
+    if entry is None or entry.in_species_log or entry.in_classifier:
+        return
+    rows = await fetch_all(
+        conn,
+        """SELECT status FROM species_suggestions
+            WHERE status IN ('approved', 'rejected') AND approved_name = %s
+              AND approved_stage IS NOT DISTINCT FROM %s
+            ORDER BY id
+              FOR SHARE""",
+        (name, life_stage),
+    )
+    if rows and all(r["status"] == "rejected" for r in rows):
+        raise Conflict(REMOVED_SPECIES)
 
 
 def _validate(
@@ -885,7 +916,7 @@ async def submit_verdict(
             if suggestion is None:
                 raise NotFound("no such species suggestion")
             if suggestion["status"] == "rejected":
-                raise Conflict("that species was removed from the list; pick from the list")
+                raise Conflict(REMOVED_SPECIES)
             if suggestion["suggested_by"] != user.id and role != "admin":
                 raise Forbidden("that suggestion isn't yours")
         # A suggestion left over from ai #49, still waiting for an admin: the #49 rules below
@@ -903,6 +934,12 @@ async def submit_verdict(
             bulk=bulk,
             suggestion=suggestion,
         )
+        if suggestion is None:
+            # A plain answer naming a reviewer's addition: held like a linked one, after the
+            # event and item locks (Ruling W2). A linked answer's suggestion is held above.
+            await hold_addition(
+                conn, catalogue=catalogue, name=v["name"], life_stage=v["life_stage"]
+            )
 
         if body.review_item_id is None and not adjudication:
             dup = await _duplicate_verdict(
