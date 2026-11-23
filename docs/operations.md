@@ -96,7 +96,7 @@ compiler), so there is no warmup.
 | The camera's address or password | The secret `/ai/wahoobay/<env>/cameras` (key `seahivecam`), then re-run `boot.sh` |
 | A recording in the camera's place | `deploy/gpu-host/replay.conf` and a merge |
 | New model weights | Publish them to the models bucket (infra `scripts/publish_models.py`); `scripts/fetch_models.py` says how a worker chooses a version and when it replaces the copy it keeps under `/opt/wahoobay-data/models` |
-| No-fish-zone polygons | Not wired on AWS yet (see "Polygon mask for false-positive geometry") |
+| No-fish-zone polygons | `/admin/regions.html`, Save; the worker applies it within a minute (see "Polygon mask for false-positive geometry") |
 
 ---
 
@@ -210,7 +210,7 @@ change needs" above). Major blocks:
 | Features | `FEATURE_REVIEW_TOOL`, `LIVE_VIDEO_EMBED_URL`, `ROBOTS`, `ORIGIN_VERIFY_SECRET` |
 | Mail | `MAIL_BACKEND` (`console` default), `MAIL_SMTP_HOST/PORT/USER/PASSWORD/STARTTLS`, `MAIL_FROM` (the `DASHBOARD_MAIL_*` / `DASHBOARD_SMTP_*` spellings still count) |
 | Image saves (3 modes) | `SAVE_TIMELAPSE_SECONDS`, `SAVE_PER_DETECTION`, `SAVE_INTERESTING_ONLY`, `SAVE_INTERESTING_QUIET_SECONDS`, `SAVE_INTERESTING_MIN_CONF`, `SAVE_MIN_TRACK_GAP_SECONDS` |
-| Negative regions | `NEGATIVE_REGIONS_PATH` |
+| Negative regions | `NEGATIVE_REGIONS_URL` (s3:// on AWS; wins when set), else `NEGATIVE_REGIONS_PATH` |
 | HTTP / dashboard | `WORKER_HTTP_PORT`, `WORKER_HTTP_PORT_PIER`, `WORKER_URL_PIER`, `DASHBOARD_PORT`, `DASHBOARD_HOST`, `JPEG_QUALITY`, `LIVE_STREAM_MAX_FPS` |
 | Accounts / auth (see "Accounts and roles" below) | `DASHBOARD_COOKIE_SECURE`, `DASHBOARD_SESSION_TTL_H`, `DASHBOARD_SESSION_ABS_TTL_D`, `DASHBOARD_LOGIN_MAX_FAILS`, `DASHBOARD_LOGIN_LOCKOUT_MIN`, `DASHBOARD_REGISTRATION_OPEN`, `DASHBOARD_REGISTER_MAX_PER_IP_H`, `DASHBOARD_RESET_TTL_MIN`, `DASHBOARD_VERIFY_TTL_H`, `DASHBOARD_MAIL_BACKEND`, `DASHBOARD_SMTP_*`, `DASHBOARD_PUBLIC_BASE_URL` |
 | Drift / model-ops / jobs | `FRAME_STATS_EVERY_N_FRAMES`, `JOBS_INTERVAL_S` (`run_jobs.sh`: matview refresh + alert rules) |
@@ -286,20 +286,25 @@ A few mutation endpoints exist beyond the reviewer-corrections flow:
 `/admin/regions.html` — interactive UI for drawing per-camera
 no-fish-zone polygons (the SEAHIVE holes, dock pilings, etc.). Pick a
 camera, click on a frozen snapshot to add vertices, double-click to
-commit, Save to write the JSON file. **Restart the workers after
-saving** — they load the file once at subprocess start.
+commit, Save. The page writes the regions to `NEGATIVE_REGIONS_URL`: on
+AWS `s3://ai-wahoobay-<env>-frames/config/camera_negative_regions.json`
+(the infra stack gives App Runner the URL, `boot.sh` gives it to the
+worker); on a laptop, the file at `NEGATIVE_REGIONS_PATH`. The worker
+reads the same URL at start and again every minute, so a save applies
+within a minute with no restart; it logs each change once
+(`negative-regions filter loaded: …`).
 
 The companion API endpoints (read + write) are documented in
 [`docs/architecture.md`](architecture.md). Saving requires an admin
 session (see "Accounts and roles" below).
 
-**Not wired on AWS.** The worker image does not carry
-`data/camera_negative_regions.json`, so the worker on the GPU host logs
-`negative-regions filter: config /data/camera_negative_regions.json not
-found, disabled` and drops nothing (seen 2026-11-23). The page saves into
-the dashboard's own App Runner container, which the worker never reads and
-the next deploy replaces. Until the worker gets the file (in its image or
-on the host), the filter is off on AWS.
+Until the first Save on AWS there is nothing at that URL: the worker logs
+`negative-regions filter: config s3://…/config/camera_negative_regions.json
+not found, disabled` and drops nothing. That is the same as the committed
+`data/camera_negative_regions.json`, which has no polygons for either
+camera (the DGX's copy had none either, checked 2026-11-22). A read that
+fails (S3 unreachable, a malformed object) leaves the regions in force as
+they were and logs a warning once.
 
 ### Force-refresh the Google Sheet
 
@@ -664,11 +669,12 @@ Worker log on startup should show:
 negative-regions filter loaded: seahivecam=N@1280x720, pier_cam=M@1280x720
 ```
 
-If it says "no polygons; pass-through," then the JSON file's `regions`
+If it says "no polygons; pass-through," then the config's `regions`
 arrays are empty for those cameras. Draw polygons at
-`/admin/regions.html`, Save, restart the workers. On AWS the worker logs
-`config … not found, disabled` instead: see "Polygon mask for
-false-positive geometry".
+`/admin/regions.html` and Save; the worker applies them within a minute.
+`config … not found, disabled` means nothing has been saved at
+`NEGATIVE_REGIONS_URL` yet (on AWS, before the first Save): see "Polygon
+mask for false-positive geometry".
 
 ### "Sheet poller flagged 'sheet_changed' but I didn't edit anything"
 

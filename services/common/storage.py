@@ -31,6 +31,14 @@ def join(base_url: str, key: str) -> str:
     return f"{base_url.rstrip('/')}/{key.lstrip('/')}"
 
 
+def as_url(location: str) -> str:
+    """A storage URL as given; a filesystem path as its file:// URL; empty stays empty (nothing configured)."""
+    location = location.strip()
+    if not location or "://" in location:
+        return location
+    return Path(os.path.abspath(location)).as_uri()
+
+
 def _split(url: str):
     parts = urlsplit(url)
     if parts.scheme not in SCHEMES:

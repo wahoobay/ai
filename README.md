@@ -203,7 +203,7 @@ CloudFront ([`deploy/gpu-host/README.md`](deploy/gpu-host/README.md)).
 │   │   └── classifier_v2/               DINOv2 ViT-S/14 (default)
 │   ├── sample/                          Committed sample dataset: 40 drawn frames, 320 detections, four days of readings (make seed)
 │   ├── camera_metadata.json             lat/lng/depth/heading per camera (committed)
-│   ├── camera_negative_regions.json     per-camera no-fish-zone polygons (committed; edit via /admin/regions.html)
+│   ├── camera_negative_regions.json     per-camera no-fish-zone polygons (committed format, no polygons; /admin/regions.html saves to NEGATIVE_REGIONS_URL)
 │   ├── test_videos/                     fallback playlist (gitignored)
 │   └── baseline_runs/                   train_baseline output dirs
 │
@@ -338,6 +338,7 @@ documents every variable; these are the ones that make a deployment a site.
 | `SENSESTREAM_SYNTHETIC` | `false` | Write synthetic readings when no live source answers (local demos only) |
 | `JOBS_INTERVAL_S` | `60` | `run_jobs.sh`'s cadence (bare metal) |
 | `EXPORT_PREFIX`, `CAMERA_METADATA_PATH`, `NEGATIVE_REGIONS_PATH` | `LOCATION_ID`, `/data/…` | Export file names; the two per-camera JSON files |
+| `NEGATIVE_REGIONS_URL` | empty (= the file at `NEGATIVE_REGIONS_PATH`) | Where the no-fish zones live, the same for the dashboard (the admin page writes them) and the worker (reads them at start and every minute). On AWS `s3://<frames bucket>/config/camera_negative_regions.json`, set by the infra stack and `boot.sh` |
 
 Two shapes run the same code: AWS (App Runner for the dashboard, Lambdas
 for jobs, migrate, fetch and write, a GPU host for the worker; see
@@ -459,7 +460,7 @@ as the system evolves.
 | Live video on a site without a worker | `LIVE_VIDEO_EMBED_URL` (an embed replaces the MJPEG panel when `WORKER_URL` is empty) |
 | Sign-in mail | `MAIL_BACKEND` (`ses` on AWS, `console` logs it, `smtp` sends it) + `MAIL_SMTP_*`, `MAIL_FROM` |
 | The database schema | a new Alembic revision in `db/migrations/versions/`; `python -m app.migrate` / `make migrate` applies it |
-| Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard (or hand-edit `data/camera_negative_regions.json`); restart worker. Not wired on AWS yet (`docs/operations.md`, "Polygon mask") |
+| Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard; the worker applies a save within a minute. Kept at `NEGATIVE_REGIONS_URL` (the frames bucket on AWS); on a laptop hand-editing `data/camera_negative_regions.json` works too (`docs/operations.md`, "Polygon mask") |
 | Curated Latin→common-name overrides | `services/dashboard/app/common_names.py` `COMMON_NAMES` dict (no restart hot-reload yet for the curated layer) |
 | Reviewer flow / correction modal | `services/dashboard/app/static/app.js` (`correctionFormHtml`, `submitCorrection`, `_enterBboxEdit`) |
 | Postgres schema | Alembic revisions in `db/migrations/versions/`: `alembic -c db/alembic.ini upgrade head` (see docs/operations.md, "Applying a schema change to the live database") |

@@ -171,6 +171,9 @@ def test_boot_writes_the_env_the_worker_needs_and_prints_no_secret(tmp_path):
         and env["SOURCE_LABEL_PRIMARY"] == "seahivecam"
     )
     assert env["FRAMES_URL"] == "s3://frames-bucket/" and env["MODELS_URL"] == "s3://models-bucket/"
+    # The no-fish zones: the dashboard's admin page saves them here and the worker re-reads them (the infra stack
+    # gives App Runner the same URL).
+    assert env["NEGATIVE_REGIONS_URL"] == "s3://frames-bucket/config/camera_negative_regions.json"
     assert (
         env["DEVICE"] == "cuda:0"
         and env["WORKER_HTTP_PORT"] == "8081"

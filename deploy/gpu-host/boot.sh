@@ -105,6 +105,9 @@ SOURCE_LABEL_PRIMARY='seahivecam'
 FALLBACK_VIDEO_SOURCE=''
 FRAMES_URL=$(q "s3://${WB_FRAMES_BUCKET}/")
 MODELS_URL=$(q "s3://${WB_MODELS_BUCKET}/")
+# The no-fish zones: the dashboard's admin page saves them here (the infra stack gives App Runner the same URL) and
+# the worker re-reads them every minute.
+NEGATIVE_REGIONS_URL=$(q "s3://${WB_FRAMES_BUCKET}/config/camera_negative_regions.json")
 # boto3 inside the container: the region, and credentials from the instance role (IMDSv2, hop limit 2).
 AWS_REGION=$(q "$WB_REGION")
 AWS_DEFAULT_REGION=$(q "$WB_REGION")

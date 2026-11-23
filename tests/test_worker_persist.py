@@ -24,7 +24,7 @@ def _stub_cv2(monkeypatch):
     monkeypatch.setitem(sys.modules, "cv2", cv2)
 
 
-def _run(monkeypatch, persist_enabled: bool) -> dict:
+def _run(monkeypatch, persist_enabled: bool, regions_url: str | None = None, on_frame=None) -> dict:
     _stub_cv2(monkeypatch)
     from services.worker.app import inference_proc, overlay, persistence, provenance
     from services.worker.app.pipeline_types import FishDetection, Prediction
@@ -70,9 +70,12 @@ def _run(monkeypatch, persist_enabled: bool) -> dict:
 
     class FakePipeline:
         def __init__(self, cfg):
-            pass
+            self.n = 0
 
         def process_frame(self, frame_bgr):
+            self.n += 1
+            if on_frame:
+                on_frame(self.n)
             return [FishDetection((1, 2, 30, 40), 0.9, [Prediction("Sergeant major", "sp1", 0.8)])]
 
     monkeypatch.setattr(persistence, "PgWriter", FakePg)
@@ -98,6 +101,7 @@ def _run(monkeypatch, persist_enabled: bool) -> dict:
         jpeg_quality=80,
         frame_stats_every_n_frames=1,
         persist_enabled=persist_enabled,
+        negative_regions_url=regions_url,
     )
     in_q: queue.Queue = queue.Queue()
     out_q: queue.Queue = queue.Queue()

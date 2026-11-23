@@ -52,6 +52,8 @@ from pathlib import Path
 import httpx
 import psycopg
 import uvicorn
+from common.storage import open_read as read_object
+from common.storage import put as put_object
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -144,7 +146,7 @@ class DashboardCfg:
         self.deployment_uri = site.deployment_uri
         self.tz = site.tz
         self.camera_metadata_path = site.camera_metadata_path
-        self.negative_regions_path = site.negative_regions_path
+        self.negative_regions_url = site.negative_regions_url
         self.export_prefix = site.export_prefix
         self.database_url = site.database_url
         # No default: a site has a camera pipeline only when its launcher says so (the DGX
@@ -168,11 +170,12 @@ class DashboardCfg:
         self.host = _env("DASHBOARD_HOST", "0.0.0.0")
         self.port = int(_env("DASHBOARD_PORT", "8080"))
         self.log_level = _env("LOG_LEVEL", "INFO")
-        # Per-camera no-fish-zones config lives at negative_regions_path (set
-        # above from NEGATIVE_REGIONS_PATH). The admin endpoint serves the
-        # regions-drawing UI from it and its POST companion writes it; the
-        # worker reads the same file at subprocess startup to drop
-        # false-positive detections on stationary reef geometry.
+        # Per-camera no-fish-zones config lives at negative_regions_url (set
+        # above from NEGATIVE_REGIONS_URL, else the file at NEGATIVE_REGIONS_PATH;
+        # s3:// on AWS). The admin endpoint serves the regions-drawing UI from it
+        # and its POST companion writes it; the worker reads the same URL at
+        # start and every minute to drop false-positive detections on
+        # stationary reef geometry.
         # Google Sheet polling — refreshes assets/species.xlsx +
         # downstream JSON catalogues on a schedule. Default URL points
         # at Wahoo Bay's "Species + Fish named by Chatters" sheet
@@ -1700,7 +1703,7 @@ def build_app() -> FastAPI:
     @app.get("/api/admin/negative_regions", dependencies=[Depends(require_role("admin"))])
     async def get_negative_regions() -> Response:
         try:
-            data = json.loads(Path(cfg.negative_regions_path).read_text())
+            data = json.loads(await asyncio.to_thread(read_object, cfg.negative_regions_url))
         except FileNotFoundError:
             data = {"sources": {}}
         except Exception as e:
@@ -1716,8 +1719,8 @@ def build_app() -> FastAPI:
     )
     async def post_negative_regions(body: dict) -> Response:
         """Replace the full negative-regions JSON. Validates shape so a
-        malformed POST can't poison the worker's startup. Worker reads
-        this file at boot — restart workers to apply changes."""
+        malformed POST can't poison the worker. The worker re-reads the
+        same URL every minute and applies the change without a restart."""
         if not isinstance(body, dict) or "sources" not in body:
             return JSONResponse(
                 {"error": "payload must be a JSON object with a 'sources' key"},
@@ -1763,31 +1766,29 @@ def build_app() -> FastAPI:
                             {"error": f"vertices must be [x, y] number pairs ({src}#{i})"},
                             status_code=400,
                         )
-        path = Path(cfg.negative_regions_path)
+        url = cfg.negative_regions_url
         try:
             # Preserve any underscore-prefixed top-level keys (the
-            # _about / _format / _admin_ui docstrings in the on-disk
+            # _about / _format / _admin_ui docstrings in the committed
             # file). The admin UI doesn't know about them and will
             # otherwise wipe them on save.
             existing: dict = {}
             try:
-                existing = json.loads(path.read_text())
+                existing = json.loads(await asyncio.to_thread(read_object, url))
             except FileNotFoundError:
                 pass
             merged = {k: v for k, v in existing.items() if k.startswith("_")}
             merged.update(body)
-            # Write to a temp file, then rename — atomic on the same
-            # filesystem. Worker is reading the file at startup only,
-            # so we don't need to coordinate with a live reader.
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(merged, indent=2))
-            tmp.replace(path)
+            # One whole object (renamed into place for file://): the worker
+            # never reads half a save.
+            data = json.dumps(merged, indent=2).encode()
+            await asyncio.to_thread(put_object, url, data, "application/json")
         except Exception as e:
             return JSONResponse(
                 {"error": f"failed to write regions config: {e}"},
                 status_code=500,
             )
-        return JSONResponse({"ok": True, "saved": str(path)})
+        return JSONResponse({"ok": True, "saved": url})
 
     @app.get("/api/corrections/stats")
     async def correction_stats() -> Response:
