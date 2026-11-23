@@ -26,6 +26,7 @@ Arenicola cristata,129866,Arenicola cristata,"Stimpson, 1856",Species,exact,acce
 Aulostomus maculatus,278080,Aulostomus maculatus,"Valenciennes, 1841",Species,exact,accepted,maculatus,Aulostomus,Aulostomidae,Syngnathiformes,Teleostei,Chordata,Animalia,species
 Aurelia aurita,135306,Aurelia aurita,"(Linnaeus, 1758)",Species,exact,accepted,aurita,Aurelia,Ulmaridae,Semaeostomeae,Scyphozoa,Cnidaria,Animalia,species
 Balistes capriscus,154721,Balistes capriscus,"Gmelin, 1789",Species,exact,accepted,capriscus,Balistes,Balistidae,Tetraodontiformes,Teleostei,Chordata,Animalia,species
+Brachygenys chrysargyrea,1841028,Brachygenys chrysargyrea,"(Günther, 1859)",Species,exact,accepted,chrysargyrea,Brachygenys,Haemulidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
 Branchiomma nigromaculata,209930,Branchiomma nigromaculatum,"(Baird, 1865)",Species,near_2,accepted,nigromaculatum,Branchiomma,Sabellidae,Sabellida,Polychaeta,Annelida,Animalia,species
 Brockius nigricinctus,993097,Brockius nigricinctus,"(Howell Rivero, 1936)",Species,exact,accepted,nigricinctus,Brockius,Labrisomidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 Calamus arctifrons,275966,Calamus arctifrons,"Goode & Bean, 1882",Species,exact,accepted,arctifrons,Calamus,Sparidae,Eupercaria incertae sedis,Teleostei,Chordata,Animalia,species
@@ -119,6 +120,7 @@ Hypleurochilus bermudensis,276312,Hypleurochilus bermudensis,"Beebe & Tee-Van, 1
 Hypleurochilus pseudoaequipinnis,276317,Hypleurochilus pseudoaequipinnis,"Bath, 1994",Species,exact,accepted,pseudoaequipinnis,Hypleurochilus,Blenniidae,Blenniiformes,Teleostei,Chordata,Animalia,species
 Iridopagurus reticulatus,366484,Iridopagurus reticulatus,"García-Gómez, 1983",Species,exact,accepted,reticulatus,Iridopagurus,Paguridae,Decapoda,Malacostraca,Arthropoda,Animalia,species
 Isostichopus badionotus,367868,Isostichopus badionotus,"(Selenka, 1867)",Species,exact,accepted,badionotus,Isostichopus,Stichopodidae,Synallactida,Holothuroidea,Echinodermata,Animalia,species
+Kyphosus,126015,Kyphosus,"Lacepède, 1801",Genus,exact,accepted,Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
 Kyphosus cinerascens,218708,Kyphosus cinerascens,"(Forsskål, 1775)",Species,exact,accepted,cinerascens,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,species
 Kyphosus sectatrix/bigibbus,126015,Kyphosus,"Lacepède, 1801",Genus,exact,accepted,Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus
 Kyphosus sectatrixbigibbus,126015,Kyphosus,"Lacepède, 1801",Genus,exact,accepted,Kyphosus,Kyphosus,Kyphosidae,Centrarchiformes,Teleostei,Chordata,Animalia,genus

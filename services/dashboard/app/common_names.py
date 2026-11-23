@@ -73,6 +73,7 @@ COMMON_NAMES: dict[str, str] = {
     "Haemulon sciurus": "Bluestriped Grunt",
     "Haemulon plumieri": "White Grunt",
     "Haemulon chrysargyreum": "Smallmouth Grunt",
+    "Brachygenys chrysargyrea": "Smallmouth Grunt",  # the class's name since 2026-11-22
     "Calamus bajonado": "Jolthead Porgy",
     "Diplodus holbrookii": "Spottail Pinfish",
     "Diplodus vulgaris": "Common Two-banded Seabream",
@@ -127,6 +128,7 @@ COMMON_NAMES: dict[str, str] = {
     # Chubs & damselfishes (continued)
     "Kyphosus sectatrix": "Bermuda Chub",
     "Kyphosus vaigiensis": "Brassy Chub",
+    "Kyphosus": "Sea Chub",  # the genus class (Bermuda/gray chubs not told apart), 2026-11-22
     # Other
     "Echeneis naucrates": "Live Sharksucker",
     "Aulostomus maculatus": "Trumpetfish",
