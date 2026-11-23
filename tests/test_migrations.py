@@ -8,6 +8,8 @@ in by stamping the baseline and upgrading from there. The `pg_url` fixture
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -19,7 +21,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 ALEMBIC = [sys.executable, "-m", "alembic", "-c", str(REPO / "db" / "alembic.ini")]
 BASELINE_SQL = REPO / "db" / "migrations" / "versions" / "0001_baseline.sql"
-HEAD = "0007"
+HEAD = "0008"
 DATA_TABLES = {
     "detection_events",
     "frame_stats",
@@ -215,3 +217,101 @@ def test_suggestion_worms_columns_at_head(pg_url):
     assert row == (159855, "Mullidae")
     alembic("downgrade", "0006", url=pg_url)
     assert not {"aphia_id", "family"} & columns(pg_url, "species_suggestions")
+
+
+GRUNT, GRUNT_NEW = "Haemulon chrysargyreum", "Brachygenys chrysargyrea"
+CHUB, CHUB_NEW = "Kyphosus sectatrixbigibbus", "Kyphosus"
+
+
+def _guess(name: str, p: float) -> dict:
+    return {"name": name, "species_id": name, "accuracy": p}
+
+
+def _event(url: str, best: str, topk: list[dict], *, track_id=None, ts="now()") -> int:
+    with psycopg.connect(url) as conn:
+        (eid,) = conn.execute(
+            "INSERT INTO detection_events (ts, frame_id, source_name, det_conf, bbox, topk, "
+            f"best_name, best_species_id, best_accuracy, track_id) VALUES ({ts}, 1, 'cam', 0.9, "
+            "ARRAY[1,2,3,4], %s::jsonb, %s, %s, %s, %s) RETURNING id",
+            (json.dumps(topk), best, best, topk[0]["accuracy"], track_id),
+        ).fetchone()
+    return eid
+
+
+def _read(url: str, eid: int) -> tuple:
+    return query(
+        url, "SELECT best_name, best_species_id, topk FROM detection_events WHERE id = %s", eid
+    )[0]
+
+
+def _seed_best_guesses(url: str) -> dict[int, list[dict]]:
+    seeded = {}
+    for old in (GRUNT, CHUB):
+        topk = [_guess(old, 0.8), _guess("Scarus iseri", 0.1)]
+        seeded[_event(url, old, topk)] = topk
+    return seeded
+
+
+def test_0008_renames_best_guess_and_topk(pg_url):
+    """Option 3 (Dan, 2026-11-22): past detections take the reviewers' names for the two classes the
+    model still spelled the Species Log's old way; the other guesses in the list stay as they were."""
+    alembic("upgrade", "0007", url=pg_url)
+    seeded = _seed_best_guesses(url=pg_url)
+    alembic("upgrade", "head", url=pg_url)
+    for (eid, topk), new in zip(seeded.items(), (GRUNT_NEW, CHUB_NEW), strict=True):
+        assert _read(pg_url, eid) == (new, new, [_guess(new, 0.8), topk[1]])
+
+
+def test_0008_renames_topk_entries_below_the_top(pg_url):
+    alembic("upgrade", "0007", url=pg_url)
+    topk = [_guess("Scarus iseri", 0.5), _guess("Haemulon flavolineatum", 0.2), _guess(GRUNT, 0.1)]
+    eid = _event(pg_url, "Scarus iseri", topk)
+    alembic("upgrade", "head", url=pg_url)
+    assert _read(pg_url, eid) == (
+        "Scarus iseri",
+        "Scarus iseri",
+        [*topk[:2], _guess(GRUNT_NEW, 0.1)],
+    )
+
+
+def test_0008_refreshes_the_sightings_views(pg_url):
+    """The species list and trends read the materialized views; after the rename they hold the new
+    id only, so the fish is one row, not two."""
+    alembic("upgrade", "0007", url=pg_url)
+    for i in range(3):
+        _event(
+            pg_url, GRUNT, [_guess(GRUNT, 0.9)], track_id=7, ts=f"now() - interval '{i} minutes'"
+        )
+    with psycopg.connect(pg_url) as conn:
+        conn.execute("REFRESH MATERIALIZED VIEW species_sightings_mat")
+        conn.execute("REFRESH MATERIALIZED VIEW species_sightings_hourly_mat")
+    alembic("upgrade", "head", url=pg_url)
+    assert query(pg_url, "SELECT species_id, name FROM species_sightings_mat") == [
+        (GRUNT_NEW, GRUNT_NEW)
+    ]
+    hourly = query(pg_url, "SELECT DISTINCT species_id, name FROM species_sightings_hourly_mat")
+    assert hourly == [(GRUNT_NEW, GRUNT_NEW)]
+
+
+def test_0008_downgrade_restores_the_old_names(pg_url):
+    alembic("upgrade", "0007", url=pg_url)
+    seeded = _seed_best_guesses(url=pg_url)
+    alembic("upgrade", "head", url=pg_url)
+    assert [_read(pg_url, eid)[0] for eid in seeded] == [GRUNT_NEW, CHUB_NEW]
+    alembic("downgrade", "0007", url=pg_url)
+    for (eid, topk), old in zip(seeded.items(), (GRUNT, CHUB), strict=True):
+        assert _read(pg_url, eid) == (old, old, topk)
+
+
+def test_0008_renames_are_the_live_table():
+    """The migration keeps its own frozen copy (a migration never imports code that may change
+    later); every pair in it is still in the table the rest of the system reads."""
+    sys.path.insert(0, str(REPO / "services"))
+    from common.class_renames import CLASS_RENAMES
+
+    path = REPO / "db" / "migrations" / "versions" / "0008_class_renames.py"
+    spec = importlib.util.spec_from_file_location("migration_0008", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.RENAMES == {GRUNT: GRUNT_NEW, CHUB: CHUB_NEW}
+    assert module.RENAMES.items() <= CLASS_RENAMES.items()
