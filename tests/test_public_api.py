@@ -1676,3 +1676,23 @@ async def test_a_download_cut_off_gives_its_place_back_at_once(
             assert not busy.locked(), ext  # the other still
             busy.release()
     assert list(spool.iterdir()) == []
+
+
+async def test_an_old_species_id_answers_as_the_new_one(rdb, public_client):
+    """wahoobay.org's fish.json still names smallmouth grunt by the classifier's old class name
+    (renamed 2026-11-22); its species page asks for that id and must keep getting the fish."""
+    await seed_track(rdb, "Brachygenys chrysargyrea", 1, datetime.now(UTC) - timedelta(days=1))
+    await refresh_sightings(rdb)
+    with public_client(TZ=NEW_YORK) as client:
+        new = client.get("/api/public/species/Brachygenys%20chrysargyrea")
+        old = client.get("/api/public/species/Haemulon%20chrysargyreum")
+        new_photo = client.get("/api/public/species/Brachygenys%20chrysargyrea/photo.jpg")
+        old_photo = client.get("/api/public/species/Haemulon%20chrysargyreum/photo.jpg")
+        unknown = client.get("/api/public/species/Nonesuch%20fish")
+    assert new.status_code == 200, new.text
+    assert old.status_code == 200, old.text
+    assert old.json() == new.json()
+    assert old.json()["species_id"] == "Brachygenys chrysargyrea"
+    assert old_photo.status_code == new_photo.status_code
+    assert old_photo.content == new_photo.content
+    assert unknown.status_code == 404
