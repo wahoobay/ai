@@ -157,7 +157,12 @@ Not code. Run from the Mac with `AWS_PROFILE=cdk`, region `us-east-1`. `B=s3://p
 
 ### Rollout (after Dan says merge)
 
-1. Merge. CI deploys staging and runs migration `0008`.
-2. SSM on `ai-wahoobay-staging-gpu`: `rm -rf /opt/wahoobay-data/models/classifier_v2` (fetched before `.version` existed), then `docker compose -f /opt/wahoobay/deploy/gpu-host/docker-compose.yml restart worker`. Its log shows `classifier_v2@dgx-2026-10-24-r1`.
-3. Check: new detections carry the new names; `/api/public/species` lists smallmouth grunt once; `/api/public/species/Haemulon%20chrysargyreum` answers; wahoobay.org's smallmouth grunt page shows its live tiles.
-4. Revert, if needed: pin `MODEL_VERSIONS=classifier_v2=dgx-2026-10-24` and `alembic downgrade 0007`.
+Superseded by the spec's "Rollout" section after the final review (the worker now names its classes
+through the table, and the `rename_classes` job closes the gap between the migration and the worker
+restart). In short:
+
+1. Merge. CI runs migration `0008`, then restarts the worker, which stores the new names from then on.
+2. `aws lambda invoke --function-name ai-wahoobay-staging-jobs --payload '{"job":"rename_classes"}'`; check no detection carries an old name.
+3. SSM on `ai-wahoobay-staging-gpu`: `rm -rf /opt/wahoobay-data/models/classifier_v2`, then `docker compose -f /opt/wahoobay/deploy/gpu-host/docker-compose.yml restart worker`; its log shows `classifier_v2@dgx-2026-10-24-r1`.
+4. Check: `/api/public/species` lists smallmouth grunt once; `/api/public/species/Haemulon%20chrysargyreum` answers; wahoobay.org's smallmouth grunt page shows its live tiles.
+5. Revert, if needed: revert the merge (the worker's mapping is code), pin `MODEL_VERSIONS=classifier_v2=dgx-2026-10-24`, and `alembic downgrade 0007`.

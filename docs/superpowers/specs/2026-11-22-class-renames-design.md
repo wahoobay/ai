@@ -90,7 +90,19 @@ Dan chose option 3: the model's own name becomes the reviewers' name, now, and t
 
 ## Rollout
 
-PR, then merge on Dan's word. CI builds the images; the deploy runs migration `0008`. Then, on the GPU
-host (SSM): remove `/data/models/classifier_v2` and restart the worker so it fetches `-r1`. Check that new
-detections carry the new names, that the species list and trends show one row for each fish, and that
-wahoobay.org's smallmouth grunt page still shows its live tiles.
+PR, then merge on Dan's word. CI builds the images; the deploy runs migration `0008`, then restarts
+the GPU host's worker. The worker names its classes through the rename table whatever bundle is on
+its volume (`class_names()`), so from that restart on it stores the new names. Detections written
+between the migration and the restart can still carry old names; the `rename_classes` job renames
+them (idempotent; it refreshes the sightings views only when it changed something). Then:
+
+1. Invoke `rename_classes` once (`aws lambda invoke --function-name ai-wahoobay-staging-jobs
+   --payload '{"job":"rename_classes"}'`), and check that no detection carries an old name.
+2. On the GPU host (SSM): remove `/opt/wahoobay-data/models/classifier_v2` (fetched before `.version`
+   existed) and restart the worker, so the volume holds `-r1` and later pins take effect by themselves.
+3. Check that the species list and trends show one row for each fish, and that wahoobay.org's
+   smallmouth grunt page still shows its live tiles.
+
+The migration's non-concurrent view refresh blocks species and trend reads for its few seconds.
+`ai-wahoobay-prod` is defined but not deployed; when it is, `0008` runs on a database with no
+detections and the steps above do not apply.

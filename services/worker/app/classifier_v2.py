@@ -36,6 +36,7 @@ import numpy as np
 import timm
 import torch
 import torch.nn.functional as F
+from common.class_renames import class_names
 from ultralytics import YOLO
 
 from .pipeline_types import FishDetection, Prediction
@@ -131,9 +132,10 @@ class ClassifierV2Pipeline:
         classes_path = Path(cfg.classifier_v2_classes_json)
         with classes_path.open() as f:
             class_names_raw: list[str] = json.load(f)
-        # Training emits class names with underscores ("Haemulon_chrysargyreum");
-        # the rest of the system speaks binomials with spaces. Convert once.
-        self.class_names: list[str] = [c.replace("_", " ") for c in class_names_raw]
+        # Training emits class names with underscores ("Scarus_iseri"); the rest of the
+        # system speaks binomials with spaces, and classes renamed on 2026-11-22 take their
+        # current names even from an older bundle still on the volume. Convert once.
+        self.class_names: list[str] = class_names(class_names_raw)
         num_classes = len(self.class_names)
         if num_classes < 2:
             raise RuntimeError(f"v2 classes.json has {num_classes} entries; expected >=2")

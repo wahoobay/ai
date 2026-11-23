@@ -26,3 +26,10 @@ def renamed(name: str | None) -> str | None:
 def folder(name: str) -> str:
     """A class name as classes.json and the training folders spell it: spaces become underscores."""
     return name.replace(" ", "_")
+
+
+def class_names(entries: list[str]) -> list[str]:
+    """classes.json's entries as detections store them: underscores become spaces, and a renamed
+    class takes its current name whichever bundle is on disk (the GPU host keeps its model volume
+    across deploys, so the worker may still hold the old list)."""
+    return [renamed(e.replace("_", " ")) for e in entries]
