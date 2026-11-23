@@ -1,0 +1,212 @@
+"""The verified dataset: the listed reviewers' answers as a snapshot for training (phase 3,
+training half; spec docs/superpowers/specs/2026-11-22-verified-dataset-training-design.md).
+
+`select` reads which boxes count: only the listed accounts' answers go into the one resolution
+rule (review_labels.resolve), so another account's test answer can neither replace nor dispute
+theirs. `detector_frames` decides which completed frames the detector may learn from: every fish
+boxed and every box counting, "no animal" boxes left unannotated as background.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from .review_labels import CONFIDENCE_RANK, load_verdicts, resolve
+from .review_queue import fetch_all
+from .species_suggestions import pending_species_events
+
+NO_ANIMAL = "no_animal"  # the review tool's outcome; also the classifier folder for it
+MIN_CONFIDENCE = "probable"
+
+
+@dataclass(frozen=True)
+class Box:
+    box_id: str  # "ev<event_id>" | "add<review_added_boxes.id>"
+    saved_frame_id: int | None
+    camera: str  # source_name
+    ts: datetime  # UTC
+    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2
+    bbox_source: str  # "model" | "corrected" | "drawn"
+    outcome: str  # "species" | "unidentifiable" | "no_animal"
+    accepted_name: str | None
+    life_stage: str | None
+    confidence: str
+    status: str  # single | agreed | adjudicated | disputed
+    label_source: str | None
+    user_ids: tuple[int, ...]
+    model_name: str | None  # detection_events.best_name
+    model_score: float | None  # detection_events.best_accuracy, to 4 places
+    held_back: str | None
+
+
+@dataclass(frozen=True)
+class Frame:
+    saved_frame_id: int
+    camera: str
+    ts: datetime
+    image_path: str
+    completed: bool  # a review_frames row exists
+    model_box_ids: tuple[str, ...]  # every detection event on the frame, "ev<id>", ascending
+
+
+@dataclass(frozen=True)
+class Selection:
+    boxes: tuple[Box, ...]  # by (saved_frame_id or 0, model boxes before drawn, numeric id)
+    frames: dict[int, Frame]  # every frame a box is on
+    sample_answers: int  # the listed accounts' answers on the seed job's synthetic events
+    newest_answer_id: int | None
+    newest_drawn_box_id: int | None
+
+
+_ANSWERED_SQL = """
+    SELECT c.event_id, e.model_version IS NOT DISTINCT FROM 'sample' AS sample
+      FROM detection_corrections c JOIN detection_events e ON e.id = c.event_id
+     WHERE c.user_id = ANY(%s)
+"""
+
+# An event's frame: the lowest-id saved frame with its exact camera, frame_id and ts (frame_id
+# restarts with the worker, so camera + frame_id alone can name another frame), as the label
+# archive and export_labeled_corrections match it.
+_EVENTS_SQL = """
+    SELECT e.id, e.source_name, e.ts, e.bbox, e.best_name, e.best_accuracy, sf.id AS saved_frame_id
+      FROM detection_events e
+      LEFT JOIN LATERAL (
+          SELECT s.id FROM saved_frames s
+           WHERE s.source_name = e.source_name AND s.frame_id = e.frame_id AND s.ts = e.ts
+           ORDER BY s.id LIMIT 1
+      ) sf ON true
+     WHERE e.id = ANY(%s)
+"""
+
+_DRAWN_SQL = """
+    SELECT b.id, b.saved_frame_id, b.bbox, b.outcome, b.label, b.life_stage, b.confidence,
+           b.user_id, s.source_name, s.ts
+      FROM review_added_boxes b JOIN saved_frames s ON s.id = b.saved_frame_id
+     WHERE b.user_id = ANY(%s) AND b.removed_at IS NULL
+       AND s.model_version IS DISTINCT FROM 'sample'
+"""
+
+_FRAMES_SQL = """
+    SELECT s.id, s.source_name, s.ts, s.image_path, rf.saved_frame_id IS NOT NULL AS completed,
+           ARRAY(SELECT e.id FROM detection_events e
+                  WHERE e.source_name = s.source_name AND e.frame_id = s.frame_id AND e.ts = s.ts
+                  ORDER BY e.id) AS event_ids
+      FROM saved_frames s LEFT JOIN review_frames rf ON rf.saved_frame_id = s.id
+     WHERE s.id = ANY(%s)
+"""
+
+
+def _confidence_reason(confidence: str) -> str | None:
+    if CONFIDENCE_RANK.get(confidence, 0) < CONFIDENCE_RANK[MIN_CONFIDENCE]:
+        return f"confidence {confidence}"
+    return None
+
+
+def _first(*reasons: str | None) -> str | None:
+    return next((r for r in reasons if r), None)
+
+
+def _order(box: Box) -> tuple:
+    kind, number = (0, box.box_id[2:]) if box.box_id.startswith("ev") else (1, box.box_id[3:])
+    return (box.saved_frame_id or 0, kind, int(number))
+
+
+async def select(conn, user_ids: list[int]) -> Selection:
+    """The listed accounts' boxes and the frames they are on, read on `conn` (the caller holds
+    the read-only transaction)."""
+    listed = set(user_ids)
+    answered = await fetch_all(conn, _ANSWERED_SQL, (list(user_ids),))
+    event_ids = sorted({r["event_id"] for r in answered if not r["sample"]})
+    sample_answers = sum(1 for r in answered if r["sample"])
+
+    verdicts = await load_verdicts(conn, event_ids) if event_ids else {}
+    pending = await pending_species_events(conn, event_ids) if event_ids else {}
+    events = {r["id"]: r for r in await fetch_all(conn, _EVENTS_SQL, (event_ids,))}
+
+    boxes: list[Box] = []
+    newest_answer_id = None
+    for event_id in event_ids:
+        mine = [v for v in verdicts.get(event_id, []) if v.user_id in listed]
+        r = resolve(mine)
+        if r is None:
+            continue
+        newest_answer_id = max([newest_answer_id or 0, *(v.id for v in mine)])
+        e = events[event_id]
+        deciding = next(v for v in mine if v.id == r.deciding[0])
+        outcome = r.outcome[0]
+        score = e["best_accuracy"]
+        boxes.append(
+            Box(
+                box_id=f"ev{event_id}",
+                saved_frame_id=e["saved_frame_id"],
+                camera=e["source_name"],
+                ts=e["ts"],
+                bbox=tuple(r.bbox or e["bbox"]),
+                bbox_source="corrected" if r.bbox else "model",
+                outcome=outcome,
+                accepted_name=r.species,
+                life_stage=r.life_stage,
+                confidence=r.confidence,
+                status=r.status,
+                label_source=deciding.label_source,
+                user_ids=tuple(r.user_ids),
+                model_name=e["best_name"],
+                model_score=None if score is None else round(float(score), 4),
+                held_back=_first(
+                    "disputed" if r.status == "disputed" else None,
+                    "species waiting for approval" if event_id in pending else None,
+                    _confidence_reason(r.confidence),
+                    "no species named" if outcome == "species" and not r.species else None,
+                    "no saved frame" if e["saved_frame_id"] is None else None,
+                ),
+            )
+        )
+
+    drawn = await fetch_all(conn, _DRAWN_SQL, (list(user_ids),))
+    for b in drawn:
+        species = b["outcome"] == "species"
+        boxes.append(
+            Box(
+                box_id=f"add{b['id']}",
+                saved_frame_id=b["saved_frame_id"],
+                camera=b["source_name"],
+                ts=b["ts"],
+                bbox=tuple(b["bbox"]),
+                bbox_source="drawn",
+                outcome=b["outcome"],
+                accepted_name=b["label"] if species else None,
+                life_stage=b["life_stage"],
+                confidence=b["confidence"],
+                status="single",
+                label_source=None,
+                user_ids=(b["user_id"],),
+                model_name=None,
+                model_score=None,
+                held_back=_first(
+                    _confidence_reason(b["confidence"]),
+                    "no species named" if species and not b["label"] else None,
+                ),
+            )
+        )
+
+    boxes.sort(key=_order)
+    frame_ids = sorted({b.saved_frame_id for b in boxes if b.saved_frame_id is not None})
+    frames = {
+        r["id"]: Frame(
+            saved_frame_id=r["id"],
+            camera=r["source_name"],
+            ts=r["ts"],
+            image_path=r["image_path"],
+            completed=r["completed"],
+            model_box_ids=tuple(f"ev{i}" for i in r["event_ids"]),
+        )
+        for r in await fetch_all(conn, _FRAMES_SQL, (frame_ids,))
+    }
+    return Selection(
+        boxes=tuple(boxes),
+        frames=dict(sorted(frames.items())),
+        sample_answers=sample_answers,
+        newest_answer_id=newest_answer_id,
+        newest_drawn_box_id=max((b["id"] for b in drawn), default=None),
+    )
