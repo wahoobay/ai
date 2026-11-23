@@ -7,9 +7,10 @@ The live classifier spelled two classes the Species Log's old way (Haemulon chry
 lumped Kyphosus sectatrix/bigibbus) while reviewers label them by their WoRMS accepted names. Dan
 chose to rename the model's classes and rewrite the history (2026-11-22,
 docs/superpowers/specs/2026-11-22-class-renames-design.md), so the species list, trends and
-exports show one row per fish. Rewritten: detection_events.best_name, best_species_id, the name
-and species_id of every top-k entry, and review_items.predicted; then both sightings views are
-refreshed.
+exports show one row per fish. Rewritten: detection_events.best_name, best_species_id, and the
+name and species_id of every top-k entry; then both sightings views are refreshed.
+review_items.predicted is left alone: it holds the catalogue's accepted names, never the model's
+class names (staging had 750 rows of 'Brachygenys chrysargyrea' and none of the old name).
 
 RENAMES is this migration's own frozen copy of services/common/class_renames.py (a migration never
 imports code that may change after it ran). The downgrade swaps the names back; it is exact only
@@ -67,9 +68,6 @@ def _rename(pairs: dict[str, str]) -> None:
             names,
         )
         bind.execute(_TOPK, names)
-        bind.execute(
-            sa.text("UPDATE review_items SET predicted = :new WHERE predicted = :old"), names
-        )
     # The hourly view rolls up the per-track one, so it refreshes second.
     op.execute("REFRESH MATERIALIZED VIEW species_sightings_mat")
     op.execute("REFRESH MATERIALIZED VIEW species_sightings_hourly_mat")

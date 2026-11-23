@@ -315,3 +315,24 @@ def test_0008_renames_are_the_live_table():
     spec.loader.exec_module(module)
     assert module.RENAMES == {GRUNT: GRUNT_NEW, CHUB: CHUB_NEW}
     assert module.RENAMES.items() <= CLASS_RENAMES.items()
+
+
+def test_0008_leaves_review_items_alone(pg_url):
+    """review_items.predicted holds catalogue (accepted) names, never the model's raw class names:
+    staging had 750 'Brachygenys chrysargyrea' and no 'Haemulon chrysargyreum' before 0008. Neither
+    direction may touch them, or the downgrade would turn accepted names into old ones."""
+    alembic("upgrade", "0007", url=pg_url)
+    eid = _event(pg_url, GRUNT, [_guess(GRUNT, 0.8)])
+    with psycopg.connect(pg_url) as conn:
+        (sfid,) = conn.execute(
+            "INSERT INTO saved_frames (frame_id, source_name, reason, image_path, coco_path, num_fish) "
+            "VALUES (1, 'cam', 'detection', 'f.jpg', 'f.coco.json', 1) RETURNING id"
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO review_items (event_id, lane, saved_frame_id, source_name, ts, bbox, predicted) "
+            "VALUES (%s, 'check', %s, 'cam', now(), ARRAY[1,2,3,4], %s)",
+            (eid, sfid, GRUNT_NEW),
+        )
+    alembic("upgrade", "head", url=pg_url)
+    alembic("downgrade", "0007", url=pg_url)
+    assert query(pg_url, "SELECT predicted FROM review_items") == [(GRUNT_NEW,)]

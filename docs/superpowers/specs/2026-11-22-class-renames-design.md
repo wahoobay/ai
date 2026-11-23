@@ -64,8 +64,10 @@ Dan chose option 3: the model's own name becomes the reviewers' name, now, and t
    a fetch from before this change) is still left alone, so the GPU host's current directory is removed
    once by hand at deploy.
 4. **Migration `0008`.** For each rename: `detection_events.best_name` and `best_species_id`, and the
-   `name` and `species_id` of every `topk` entry; `review_items.predicted` (none today); then both
-   materialized views are refreshed. Staging holds 3,231 + 12 events with the old name as the model's guess
+   `name` and `species_id` of every `topk` entry; then both materialized views are refreshed.
+   `review_items.predicted` is left alone: it already holds the catalogue's accepted names (750 rows
+   of *Brachygenys chrysargyrea* on staging, none of the old name), so rewriting it would only
+   corrupt the downgrade. Staging holds 3,231 + 12 events with the old name as the model's guess
    and 3,897 + 32 with it anywhere in the top-k (of 571,795). Downgrade reverses it; it is exact because
    neither new name occurs as a model output before the upgrade (the plan checks this).
 5. **Names the catalogue knows.** `assets/taxonomy.csv` gains rows for the raw names
