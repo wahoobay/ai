@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from app import verified_dataset
 from review_fixtures import add_item, add_verdict, make_user, seed_frame
@@ -241,3 +243,82 @@ async def test_the_newest_answer_and_drawn_box_ids(rdb, tmp_path):
     sel = await _select(rdb, [roy])
 
     assert (sel.newest_answer_id, sel.newest_drawn_box_id) == (v2, d1)
+
+
+# ----- detector frames (pure) -----------------------------------------------------------
+
+T = datetime(2026, 6, 1, 14, 0, tzinfo=UTC)
+
+
+def _box(box_id, frame=7, **overrides) -> verified_dataset.Box:
+    fields = dict(
+        box_id=box_id,
+        saved_frame_id=frame,
+        camera="seahivecam",
+        ts=T,
+        bbox=(100, 100, 300, 200),
+        bbox_source="drawn" if box_id.startswith("add") else "model",
+        outcome="species",
+        accepted_name="Seriola zonata",
+        life_stage=None,
+        confidence="certain",
+        status="single",
+        label_source=None,
+        user_ids=(1,),
+        model_name=None,
+        model_score=None,
+        held_back=None,
+    )
+    return verified_dataset.Box(**(fields | overrides))
+
+
+def _frame(frame=7, *, completed=True, model=("ev1",)) -> verified_dataset.Frame:
+    return verified_dataset.Frame(frame, "seahivecam", T, f"/f/{frame}.jpg", completed, model)
+
+
+def _sel(boxes, *frames) -> verified_dataset.Selection:
+    return verified_dataset.Selection(
+        tuple(boxes), {f.saved_frame_id: f for f in frames}, 0, None, None
+    )
+
+
+def test_a_complete_frame_goes_in_without_its_no_animal_boxes():
+    boxes = [
+        _box("ev1"),
+        _box("ev2", outcome="unidentifiable", accepted_name=None),
+        _box("ev3", outcome="no_animal", accepted_name=None),
+        _box("add4"),
+    ]
+    plan = verified_dataset.detector_frames(_sel(boxes, _frame(model=("ev1", "ev2", "ev3"))))
+
+    assert plan.frames == (7,) and plan.held_back == {}
+    assert [b.box_id for b in plan.annotations[7]] == ["ev1", "ev2", "add4"]
+
+
+def test_an_incomplete_frame_is_held_back():
+    plan = verified_dataset.detector_frames(_sel([_box("ev1")], _frame(completed=False)))
+
+    assert plan.held_back == {7: "not marked complete"} and plan.frames == ()
+
+
+def test_a_box_nobody_listed_answered_holds_the_frame_back():
+    plan = verified_dataset.detector_frames(_sel([_box("ev1")], _frame(model=("ev1", "ev9"))))
+
+    assert plan.held_back == {7: "box ev9 has no answer from the listed accounts"}
+
+
+def test_a_held_back_box_holds_the_frame_back():
+    boxes = [
+        _box("ev1", held_back="disputed"),
+        _box("ev2", frame=8),
+        _box("add5", frame=8, held_back="confidence uncertain"),
+    ]
+    sel = _sel(boxes, _frame(), _frame(8, model=("ev2",)))
+
+    plan = verified_dataset.detector_frames(sel)
+
+    assert plan.held_back == {
+        7: "box ev1 held back: disputed",
+        8: "box add5 held back: confidence uncertain",
+    }
+    assert plan.frames == () and plan.annotations == {}

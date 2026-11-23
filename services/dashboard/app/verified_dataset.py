@@ -210,3 +210,46 @@ async def select(conn, user_ids: list[int]) -> Selection:
         newest_answer_id=newest_answer_id,
         newest_drawn_box_id=max((b["id"] for b in drawn), default=None),
     )
+
+
+@dataclass(frozen=True)
+class DetectorPlan:
+    frames: tuple[int, ...]  # saved_frame_ids, ascending
+    annotations: dict[int, tuple[Box, ...]]  # per included frame, in Selection order
+    held_back: dict[int, str]  # saved_frame_id -> reason, for every other frame in the selection
+
+
+def _frame_problem(frame: Frame, boxes: list[Box]) -> str | None:
+    """Why the detector may not learn from `frame`, or None: a fish left unboxed would teach it
+    that the fish is background, so every model box must have an answer that counts."""
+    if not frame.completed:
+        return "not marked complete"
+    selected = {b.box_id for b in boxes}
+    for box_id in frame.model_box_ids:
+        if box_id not in selected:
+            return f"box {box_id} has no answer from the listed accounts"
+    for b in boxes:
+        if b.held_back:
+            return f"box {b.box_id} held back: {b.held_back}"
+    return None
+
+
+def detector_frames(sel: Selection) -> DetectorPlan:
+    """The completed frames whose every box counts, with the boxes to annotate: species and
+    "can't identify" (an animal is there), never "no animal" (that is background)."""
+    by_frame: dict[int, list[Box]] = {}
+    for b in sel.boxes:
+        if b.saved_frame_id is not None:
+            by_frame.setdefault(b.saved_frame_id, []).append(b)
+    included: list[int] = []
+    annotations: dict[int, tuple[Box, ...]] = {}
+    held_back: dict[int, str] = {}
+    for frame_id, frame in sorted(sel.frames.items()):
+        boxes = by_frame.get(frame_id, [])
+        problem = _frame_problem(frame, boxes)
+        if problem:
+            held_back[frame_id] = problem
+            continue
+        included.append(frame_id)
+        annotations[frame_id] = tuple(b for b in boxes if b.outcome != NO_ANIMAL)
+    return DetectorPlan(tuple(included), annotations, held_back)
