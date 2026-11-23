@@ -12,6 +12,13 @@ under-resourced. The point of the run is to fix a numerical baseline —
 later experiment (pretrained backbone, more data, taxonomically-aware
 loss, …) has something to beat.
 
+Fine-tuning (--init-checkpoint, --init-classes; spec
+docs/superpowers/specs/2026-11-23-training-machine-design.md): the run starts from a published
+bundle instead of random weights. The backbone loads whole and the head's rows are copied by class
+name, so a class the starting model lacks (no_animal) keeps the fresh head's initialisation. The
+starting model is scored on the validation set first (metrics_before.json), and every score also
+covers the reviewers' crops alone (review_val_*).
+
 Inputs:
   data/fine_tune/<binomial_slug>/*.jpg  + _dataset_manifest.json + _taxonomy.json
 
@@ -20,6 +27,7 @@ Outputs:
       config.json               — exact hyperparams + class list, for replay
       train_history.json        — per-epoch train/val loss + accuracy
       metrics.json              — final top-1 / top-5 / macro F1
+      metrics_before.json       — the starting model's scores (fine-tuning only)
       classification_report.txt — sklearn-style per-class P/R/F1
       checkpoint_best.pt        — weights of the best-macro-F1 epoch
       checkpoint_last.pt        — weights of the final epoch (for resume)
@@ -52,6 +60,7 @@ import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from finetune_init import head_rows, is_review_crop, is_review_source, split_review_source
 from PIL import Image
 from sklearn.metrics import classification_report, f1_score, top_k_accuracy_score
 from sklearn.model_selection import train_test_split
@@ -62,6 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATASET_DIR = REPO_ROOT / "data" / "fine_tune"
 MANIFEST_PATH = DATASET_DIR / "_dataset_manifest.json"
 TAXONOMY_PATH = DATASET_DIR / "_taxonomy.json"
+NO_ANIMAL = "no_animal"  # the assembler's class for "no animal here" answers
 RUNS_DIR = REPO_ROOT / "data" / "baseline_runs"
 
 
@@ -90,6 +100,10 @@ class TrainConfig:
     # source drive_ids; honest generalisation test, but most classes here
     # have only one source so they end up entirely train- or val-only.
     split_mode: str = "stratified"
+    # Fine-tuning: a published checkpoint to start from and its classes.json (the head's row order;
+    # empty = the checkpoint's own "classes"). Empty init_checkpoint = random init, as before.
+    init_checkpoint: str = ""
+    init_classes: str = ""
 
 
 # ---------- dataset ----------
@@ -242,7 +256,7 @@ def _split_temporal_within_source(
         # (e.g. "drive:video", "inat:image") after the cropper's multi-source
         # refactor — match on the trailing token so both legacy and prefixed
         # values resolve correctly.
-        kind = (rec.get("source_kind") or "").rsplit(":", 1)[-1]
+        kind = ((rec or {}).get("source_kind") or "").rsplit(":", 1)[-1]
         if rec is None or kind != "video":
             image_only.append(i)
             continue
@@ -252,6 +266,14 @@ def _split_temporal_within_source(
     train_idx_list: list[int] = list(image_only)
     for drive_id, items in by_drive.items():
         items.sort(key=lambda kv: kv[0])
+        if is_review_source(drive_id):
+            # A reviewers' camera-day: whole frames held out (several boxes share one frame), and
+            # none from a day with fewer than 3 frames. The base clips keep the rule below
+            # unchanged, so their validation items stay the live model's.
+            train_part, val_part = split_review_source(items, cfg.val_split)
+            train_idx_list.extend(train_part)
+            val_idx_list.extend(val_part)
+            continue
         n = len(items)
         n_val = max(1, int(round(n * cfg.val_split)))
         train_part = [s for _, s in items[: n - n_val]]
@@ -260,7 +282,7 @@ def _split_temporal_within_source(
         val_idx_list.extend(val_part)
 
     print(
-        f"  temporal-within-source: {len(by_drive)} videos contribute val frames; "
+        f"  temporal-within-source: {len(by_drive)} video sources (clips and reviewers' camera-days); "
         f"{len(image_only)} image-only crops stay in train"
     )
     return np.array(train_idx_list), np.array(val_idx_list)
@@ -320,6 +342,100 @@ def build_model(cfg: TrainConfig) -> nn.Module:
         drop_path_rate=cfg.drop_path,
     )
     return model
+
+
+def load_init(model: nn.Module, cfg: TrainConfig, classes: list[str]) -> dict:
+    """Start from a published bundle: the backbone whole, the head's rows by class name. A class the
+    starting model lacks keeps the fresh head's row. Refuses a checkpoint whose backbone does not
+    fit (any key missing or left over besides the head)."""
+    ckpt = torch.load(cfg.init_checkpoint, map_location="cpu", weights_only=False)
+    sd = ckpt.get("model", ckpt.get("state_dict", ckpt))
+    if all(k.startswith("module.") for k in sd):
+        sd = {k[len("module.") :]: v for k, v in sd.items()}
+    old_classes = (
+        json.loads(Path(cfg.init_classes).read_text()) if cfg.init_classes else ckpt["classes"]
+    )
+    head_w, head_b = sd.pop("head.weight"), sd.pop("head.bias")
+    if head_w.shape[0] != len(old_classes):
+        raise ValueError(
+            f"the starting head has {head_w.shape[0]} rows but its class list {len(old_classes)}"
+        )
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if unexpected or sorted(missing) != ["head.bias", "head.weight"]:
+        raise ValueError(
+            f"the starting checkpoint does not fit {cfg.arch}: "
+            f"missing {sorted(missing)[:5]}, unexpected {sorted(unexpected)[:5]}"
+        )
+    rows = head_rows(classes, old_classes)
+    head = model.get_classifier()
+    with torch.no_grad():
+        for i, j in enumerate(rows):
+            if j is not None:
+                head.weight[i].copy_(head_w[j])
+                head.bias[i].copy_(head_b[j])
+    new = [c for c, j in zip(classes, rows, strict=True) if j is None]
+    dropped = sorted(set(old_classes) - set(classes))
+    print(
+        f"init: {cfg.init_checkpoint} — {len(classes) - len(new)} head rows kept, "
+        f"new classes {new}, starting classes not in this run {dropped}"
+    )
+    return {"kept": len(classes) - len(new), "new_classes": new, "dropped_classes": dropped}
+
+
+def _macro_f1(labels: np.ndarray, preds: np.ndarray) -> float:
+    """Macro F1 over the classes validation holds (a class only predicted would add a 0 and make
+    the score move with stray predictions)."""
+    return float(
+        f1_score(labels, preds, labels=np.unique(labels), average="macro", zero_division=0)
+    )
+
+
+@torch.no_grad()
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    cfg: TrainConfig,
+    amp_dtype: torch.dtype,
+    subsets: dict[str, np.ndarray],
+) -> tuple[dict, np.ndarray | None, np.ndarray | None]:
+    """Scores on the validation loader (unshuffled, so each subset mask lines up with its items):
+    loss, top-1, top-5, macro F1, and top-1, macro F1 and count per named subset."""
+    model.eval()
+    all_logits: list[np.ndarray] = []
+    all_labels: list[np.ndarray] = []
+    val_loss, val_n = 0.0, 0
+    for x, y in loader:
+        x = x.to(cfg.device, non_blocking=True)
+        y = y.to(cfg.device, non_blocking=True)
+        with torch.amp.autocast("cuda", dtype=amp_dtype):
+            logits = model(x)
+            loss = F.cross_entropy(logits, y, label_smoothing=cfg.label_smoothing)
+        val_loss += float(loss.item()) * x.size(0)
+        val_n += x.size(0)
+        all_logits.append(logits.float().cpu().numpy())
+        all_labels.append(y.cpu().numpy())
+    if val_n == 0:
+        return {"val_loss": 0.0, "val_top1": 0.0, "val_top5": 0.0, "val_macro_f1": 0.0}, None, None
+    logits = np.concatenate(all_logits)
+    labels = np.concatenate(all_labels)
+    preds = logits.argmax(axis=1)
+    try:
+        top5 = float(top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes))))
+    except ValueError:
+        top5 = float("nan")
+    scores: dict = {
+        "val_loss": val_loss / val_n,
+        "val_top1": float((preds == labels).mean()),
+        "val_top5": top5,
+        "val_macro_f1": _macro_f1(labels, preds),
+        "val_weighted_f1": float(f1_score(labels, preds, average="weighted", zero_division=0)),
+    }
+    for name, mask in subsets.items():
+        scores[f"{name}_val_n"] = int(mask.sum())
+        if mask.any():
+            scores[f"{name}_val_top1"] = float((preds[mask] == labels[mask]).mean())
+            scores[f"{name}_val_macro_f1"] = _macro_f1(labels[mask], preds[mask])
+    return scores, logits, labels
 
 
 # ---------- main training loop ----------
@@ -383,19 +499,34 @@ def train(cfg: TrainConfig) -> dict:
         pin_memory=True,
     )
 
-    model = build_model(cfg).to(cfg.device)
+    model = build_model(cfg)
+    init = load_init(model, cfg, classes) if cfg.init_checkpoint else None
+    model = model.to(cfg.device)
     optim = torch.optim.AdamW(
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.999)
     )
     amp_dtype = (
         torch.bfloat16
-        if cfg.amp_dtype == "bf16" and torch.cuda.is_bf16_supported()
+        if cfg.amp_dtype == "bf16" and torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         else torch.float16
     )
+    # The reviewers' crops alone (the camera's own view), and those of them that name a species
+    # (a starting model without no_animal cannot score the rest).
+    review = np.array([is_review_crop(p) for p, _ in val_items], dtype=bool)
+    val_labels = np.array([y for _, y in val_items])
+    no_animal = classes.index(NO_ANIMAL) if NO_ANIMAL in classes else -1
+    subsets = {"review": review, "review_species": review & (val_labels != no_animal)}
 
     # Save config + class list up front so partial runs are inspectable.
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
     (run_dir / "classes.json").write_text(json.dumps(classes, indent=2))
+
+    if init is not None:
+        # The starting model on the very items this run is judged on: the "before" of before/after.
+        before, _, _ = evaluate(model, val_loader, cfg, amp_dtype, subsets)
+        before |= {"init_checkpoint": cfg.init_checkpoint, **init}
+        (run_dir / "metrics_before.json").write_text(json.dumps(before, indent=2))
+        print("  before  " + "  ".join(f"{k}={v:.3f}" for k, v in before.items() if _is_num(v)))
 
     best_f1 = -1.0
     history: list[dict] = []
@@ -419,55 +550,24 @@ def train(cfg: TrainConfig) -> dict:
             running_n += x.size(0)
         train_loss = running_loss / max(1, running_n)
 
-        # Validation
-        model.eval()
-        all_logits: list[np.ndarray] = []
-        all_labels: list[np.ndarray] = []
-        val_loss, val_n = 0.0, 0
-        with torch.no_grad():
-            for x, y in val_loader:
-                x = x.to(cfg.device, non_blocking=True)
-                y = y.to(cfg.device, non_blocking=True)
-                with torch.amp.autocast("cuda", dtype=amp_dtype):
-                    logits = model(x)
-                    loss = F.cross_entropy(logits, y, label_smoothing=cfg.label_smoothing)
-                val_loss += float(loss.item()) * x.size(0)
-                val_n += x.size(0)
-                all_logits.append(logits.float().cpu().numpy())
-                all_labels.append(y.cpu().numpy())
-        val_loss = val_loss / max(1, val_n)
-
-        if val_n > 0:
-            logits = np.concatenate(all_logits)
-            labels = np.concatenate(all_labels)
-            preds = logits.argmax(axis=1)
-            top1 = float((preds == labels).mean())
-            try:
-                top5 = float(
-                    top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes)))
-                )
-            except ValueError:
-                top5 = float("nan")
-            macro_f1 = float(f1_score(labels, preds, average="macro", zero_division=0))
-        else:
-            top1 = top5 = macro_f1 = 0.0
-
+        scores, _, _ = evaluate(model, val_loader, cfg, amp_dtype, subsets)
+        macro_f1 = scores["val_macro_f1"]
         elapsed = time.monotonic() - t0
         row = {
             "epoch": epoch,
             "train_loss": round(train_loss, 4),
-            "val_loss": round(val_loss, 4),
-            "val_top1": round(top1, 4),
-            "val_top5": round(top5, 4),
-            "val_macro_f1": round(macro_f1, 4),
+            **{k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
             "lr": round(optim.param_groups[0]["lr"], 6),
             "elapsed_s": round(elapsed, 1),
         }
         history.append(row)
         print(
-            f"  ep{epoch:02d}  loss={train_loss:.3f}/{val_loss:.3f}  "
-            f"top1={top1:.3f}  top5={top5:.3f}  macroF1={macro_f1:.3f}  "
-            f"lr={row['lr']:.4f}  elapsed={elapsed:.0f}s"
+            f"  ep{epoch:02d}  loss={train_loss:.3f}/{scores['val_loss']:.3f}  "
+            f"top1={scores['val_top1']:.3f}  top5={scores['val_top5']:.3f}  "
+            f"macroF1={macro_f1:.3f}  "
+            f"review_top1={scores.get('review_val_top1', float('nan')):.3f}  "
+            f"review_species_top1={scores.get('review_species_val_top1', float('nan')):.3f}  "
+            f"lr={row['lr']:.6f}  elapsed={elapsed:.0f}s"
         )
 
         # Checkpoint best + last
@@ -495,37 +595,11 @@ def train(cfg: TrainConfig) -> dict:
         run_dir / "checkpoint_best.pt", map_location=cfg.device, weights_only=False
     )
     model.load_state_dict(best_ckpt["model"])
-    model.eval()
-    final_logits: list[np.ndarray] = []
-    final_labels: list[np.ndarray] = []
-    with torch.no_grad():
-        for x, y in val_loader:
-            x = x.to(cfg.device, non_blocking=True)
-            with torch.amp.autocast("cuda", dtype=amp_dtype):
-                logits = model(x)
-            final_logits.append(logits.float().cpu().numpy())
-            final_labels.append(y.numpy())
-
+    scores, logits, labels = evaluate(model, val_loader, cfg, amp_dtype, subsets)
     metrics = {"best_macro_f1": best_f1, "best_epoch": best_ckpt.get("epoch")}
-    if final_labels:
-        labels = np.concatenate(final_labels)
-        logits = np.concatenate(final_logits)
+    if labels is not None:
+        metrics |= {k: v for k, v in scores.items() if k != "val_loss"}
         preds = logits.argmax(axis=1)
-        metrics.update(
-            {
-                "val_top1": float((preds == labels).mean()),
-                "val_macro_f1": float(f1_score(labels, preds, average="macro", zero_division=0)),
-                "val_weighted_f1": float(
-                    f1_score(labels, preds, average="weighted", zero_division=0)
-                ),
-            }
-        )
-        try:
-            metrics["val_top5"] = float(
-                top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes)))
-            )
-        except ValueError:
-            pass
         report = classification_report(
             labels,
             preds,
@@ -539,14 +613,23 @@ def train(cfg: TrainConfig) -> dict:
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     print()
     print(f"done. best macro F1 = {best_f1:.4f}")
-    print(f"run dir: {run_dir.relative_to(REPO_ROOT)}")
+    print(f"run dir: {run_dir}")
     return metrics
 
 
-def main() -> None:
+def _is_num(v: object) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+def main(argv: list[str] | None = None) -> dict:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-id", default=time.strftime("baseline_%Y%m%dT%H%M%S"))
     ap.add_argument("--epochs", type=int, default=60)
+    ap.add_argument("--warmup-epochs", type=int, default=5)
+    ap.add_argument("--init-checkpoint", default="", help="fine-tune from this checkpoint")
+    ap.add_argument(
+        "--init-classes", default="", help="its classes.json (default: the checkpoint's own list)"
+    )
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--img-size", type=int, default=224)
@@ -565,11 +648,14 @@ def main() -> None:
         "frames from each video clip — same fish, different "
         "temporal segment, tests within-clip generalisation.",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     cfg = TrainConfig(
         run_id=args.run_id,
         epochs=3 if args.smoke else args.epochs,
+        warmup_epochs=min(args.warmup_epochs, 1) if args.smoke else args.warmup_epochs,
+        init_checkpoint=args.init_checkpoint,
+        init_classes=args.init_classes,
         batch_size=args.batch_size,
         lr=args.lr,
         img_size=args.img_size,
@@ -577,7 +663,7 @@ def main() -> None:
         num_workers=args.num_workers,
         split_mode=args.split_mode,
     )
-    train(cfg)
+    return train(cfg)
 
 
 if __name__ == "__main__":

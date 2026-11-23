@@ -2,7 +2,8 @@ name: CI
 
 # Every push to main and every pull request lints, smoke-imports the dashboard
 # and poller, runs the test suite against PostgreSQL, and builds the six images:
-# dashboard (service + lambda), poller (service + lambda), worker (cuda + cpu).
+# dashboard (service + lambda), poller (service + lambda), worker (cuda + cpu),
+# plus the training machine's image (ai-wahoobay-trainer) in the worker's job.
 # On main the images are pushed to the AI repositories in ECR (account
 # 226594054743, us-east-1) with the role the infra repository defines
 # (ai-wahoobay-images-gha, assumed over OIDC: no stored keys), tagged
@@ -100,8 +101,8 @@ jobs:
           pytest -q
 
   # -------------------------------------------------------------------
-  # Build the six images; on main, push them to ECR. One matrix entry per
-  # image. No weights travel in the worker images: the entrypoint fetches
+  # Build the six images (plus the trainer, in the worker's entry); on main,
+  # push them to ECR. One matrix entry per image. No weights travel in the worker images: the entrypoint fetches
   # them from MODELS_URL at start.
   # -------------------------------------------------------------------
   build-image:
@@ -147,6 +148,7 @@ jobs:
         id: tags
         run: |
           SHA12=$(echo "${{ github.sha }}" | cut -c1-12)
+          echo "sha12=${SHA12}" >> "$GITHUB_OUTPUT"
           IMAGE="${ECR_REGISTRY}/${{ matrix.repo }}"
           TAGS="${IMAGE}:sha-${SHA12}${{ matrix.suffix }}"
           if [ "$PUSH" = "true" ]; then
@@ -173,6 +175,35 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           # A plain manifest (no attestation index): what Lambda and App Runner pull.
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      # The training machine's image (docs/superpowers/specs/2026-11-23-training-machine-design.md):
+      # the worker's CUDA stage plus the training scripts, built in the worker's job while the
+      # builder still holds those layers, and pushed to its own repository (ai-wahoobay-trainer) so
+      # the worker keeps its 20-image rollback window. Staging does not deploy it: a training run
+      # names the image by digest (infra scripts/train_classifier.py).
+      - name: Build the trainer image (and push on main)
+        if: matrix.name == 'worker'
+        # Staging does not need it: a failed trainer build or push (e.g. its repository not yet
+        # deployed by infra) marks the step, never blocks deploy-staging.
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/worker/Dockerfile
+          target: trainer
+          platforms: linux/amd64
+          push: ${{ env.PUSH == 'true' }}
+          tags: |
+            ${{ env.ECR_REGISTRY }}/ai-wahoobay-trainer:sha-${{ steps.tags.outputs.sha12 }}
+            ${{ env.ECR_REGISTRY }}/ai-wahoobay-trainer:main
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=worker
           provenance: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
