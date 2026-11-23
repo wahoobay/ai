@@ -1,6 +1,6 @@
 """Periodic work, run from an event rather than inside the web process.
 
-    python -m app.jobs refresh_matviews|alert_rules|archive_labels|rename_classes|migrate|seed|import_legacy|status|all
+    python -m app.jobs refresh_matviews|alert_rules|archive_labels|rename_classes|build_dataset|migrate|seed|import_legacy|status|all
     app.lambda_entry.handler({"job": "..."})   the jobs and migrate Lambdas
 
 The dashboard holds no loops: the materialized-view refresh and the alert rules
@@ -123,6 +123,14 @@ async def rename_classes(pool: AsyncConnectionPool) -> dict[str, Any]:
     return changed
 
 
+async def build_dataset(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """The verified dataset (spec 2026-11-22): the listed reviewers' answers as a training
+    snapshot under DATASET_URL; run by hand, never scheduled."""
+    from . import verified_dataset
+
+    return await verified_dataset.build_dataset(pool)
+
+
 async def status(pool: AsyncConnectionPool) -> dict[str, Any]:
     """What is going on inside: the schema revision, the last job runs, the pollers,
     row counts. A read for the platform's verify script; not recorded as a run."""
@@ -163,6 +171,7 @@ JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "status": status,
     "archive_labels": archive_labels,
     "rename_classes": rename_classes,
+    "build_dataset": build_dataset,
 }
 READ_ONLY = {"status"}  # not recorded in job_runs
 ALL = ("refresh_matviews", "alert_rules")

@@ -242,25 +242,56 @@ and avoid the "same fish in train and val" trap.
 The detector is the same YOLO v26 the production worker uses — so the
 training distribution matches inference exactly.
 
-### A6. (Optional) layer in reviewer corrections
+### A6. Layer in the reviewers' verified labels
 
-Once reviewers have submitted corrections against v2's outputs:
+The labelling tool's answers reach training through two steps
+(spec `docs/superpowers/specs/2026-11-22-verified-dataset-training-design.md`).
 
-```bash
-curl -s "http://127.0.0.1:18080/api/export/labeled_corrections.csv" \
-     -o labeled_corrections.csv
+1. **Snapshot them on AWS.** The `build_dataset` job reads the answers of
+   the accounts in `DATASET_ACCOUNTS` (today Roy's), keeps only the boxes
+   that count by `review_labels` (disputed boxes, uncertain answers and
+   species still waiting for approval are held back), and writes a dated
+   snapshot under `DATASET_URL` (staging:
+   `s3://platform-wahoobay-models/datasets/verified/staging/`): classifier
+   crops per accepted name, "no animal here" crops in `no_animal/`, complete
+   frames with COCO boxes for the detector, `manifest.json`, and
+   `report.txt` listing everything held back and why. A run with nothing
+   new writes nothing.
 
-python scripts/build_finetuning_dataset.py \
-  --corrections labeled_corrections.csv \
-  --frames-root frames/ \
-  --out data/fine_tune_v2/ \
-  --merge-into data/fine_tune/   # layer corrections on top of the auto-crops
-```
+   ```bash
+   AWS_PROFILE=cdk AWS_MAX_ATTEMPTS=1 aws lambda invoke --cli-read-timeout 900 \
+     --function-name ai-wahoobay-staging-jobs --payload '{"job":"build_dataset"}' \
+     --cli-binary-format raw-in-base64-out out.json
+   ```
 
-The script reads the CSV, filters by reviewer confidence, optionally
-drops not-a-fish corrections (or routes them to `negatives/` for
-future detector fine-tuning), and writes the corrected-label crops
-into the per-species directories alongside the auto-generated ones.
+   A run can take longer than the CLI's default 60 s read timeout, after
+   which the CLI would retry and start a second, concurrent run: hence the
+   900 s timeout (the Lambda's limit) and a single attempt. The snapshots
+   are held in memory until written, which is ample at today's ~180 frames;
+   thousands of frames will need a container task instead of the Lambda.
+
+2. **Assemble the training folder where training runs.** The base crops
+   (`s3://platform-wahoobay-models/datasets/fine_tune/dgx-2026-10-24/fine_tune.tar`)
+   plus the newest snapshot, in the layout `train_baseline.py` reads. The
+   two renamed classes' folders take their new names; reviewers' crops join
+   the folder of their accepted name as `review_<box>.jpg`, and each
+   camera-day counts as one clip for the `by_source` and
+   `temporal_within_source` splits. A species with no folder is reported
+   and skipped unless `--allow-new-classes`.
+
+   ```bash
+   python scripts/assemble_training_set.py --base fine_tune.tar \
+     --snapshot s3://platform-wahoobay-models/datasets/verified/staging/ \
+     --out data/fine_tune
+   ```
+
+   It refuses a non-empty `--out` and never edits its inputs: to undo a
+   merge, build again without `--snapshot`. `_review_merge.json` in the
+   output names the snapshot and what was copied or skipped.
+
+A model trained with the `no_animal` class has one class more than the live
+one: before it ships, the worker must keep a box it calls `no_animal` out of
+the sightings (spec, "Handed to the classifier project").
 
 ---
 
