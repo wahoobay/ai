@@ -46,3 +46,59 @@ def test_a_complete_model_is_left_alone(tmp_path):
     (src / "detector_v26" / "1" / "model.pt").write_bytes(b"changed upstream")
     assert fetch_model(f"file://{src}", dest, "detector_v26", "1") == 0
     assert (dest / "detector_v26" / "model.pt").read_bytes() == b"weights"
+
+
+def test_a_fetch_records_its_version(tmp_path):
+    from fetch_models import fetch_model
+
+    src, dest = tmp_path / "src", tmp_path / "models"
+    _publish(src, "classifier_v2", "1", {"model.pt": b"one"})
+    fetch_model(f"file://{src}", dest, "classifier_v2", "1")
+    assert (dest / "classifier_v2" / ".version").read_text() == "1"
+
+
+def test_a_model_of_another_version_is_replaced(tmp_path):
+    """A new version pin must reach the GPU host, whose /data/models outlives every deploy
+    (2026-11-22: the renamed class list, dgx-2026-10-24-r1, would otherwise never load)."""
+    from fetch_models import fetch_model
+
+    src, dest = tmp_path / "src", tmp_path / "models"
+    _publish(src, "classifier_v2", "1", {"model.pt": b"one"})
+    _publish(src, "classifier_v2", "2", {"model.pt": b"two", "classes.json": b"[]"})
+    fetch_model(f"file://{src}", dest, "classifier_v2", "1")
+    assert fetch_model(f"file://{src}", dest, "classifier_v2", "2") == 2
+    assert (dest / "classifier_v2" / "model.pt").read_bytes() == b"two"
+    assert (dest / "classifier_v2" / ".version").read_text() == "2"
+
+
+def test_a_model_directory_without_a_version_file_is_left_alone(tmp_path):
+    """A bind mount (the DGX, a laptop) or a fetch from before .version existed: never replaced."""
+    from fetch_models import fetch_model
+
+    src, dest = tmp_path / "src", tmp_path / "models"
+    _publish(src, "classifier_v2", "2", {"model.pt": b"two"})
+    (dest / "classifier_v2").mkdir(parents=True)
+    (dest / "classifier_v2" / "model.pt").write_bytes(b"mounted")
+    assert fetch_model(f"file://{src}", dest, "classifier_v2", "2") == 0
+    assert (dest / "classifier_v2" / "model.pt").read_bytes() == b"mounted"
+
+
+def test_a_failed_fetch_of_a_new_version_keeps_the_old_one(tmp_path):
+    import pytest
+    from fetch_models import fetch_model
+
+    src, dest = tmp_path / "src", tmp_path / "models"
+    _publish(src, "classifier_v2", "1", {"model.pt": b"one"})
+    _publish(src, "classifier_v2", "2", {"model.pt": b"two"})
+    (src / "classifier_v2" / "2" / "model.pt").write_bytes(b"tampered")
+    fetch_model(f"file://{src}", dest, "classifier_v2", "1")
+    with pytest.raises(ValueError):
+        fetch_model(f"file://{src}", dest, "classifier_v2", "2")
+    assert (dest / "classifier_v2" / "model.pt").read_bytes() == b"one"
+    assert (dest / "classifier_v2" / ".version").read_text() == "1"
+
+
+def test_the_classifier_default_is_the_renamed_bundle():
+    from fetch_models import versions
+
+    assert versions("")["classifier_v2"] == "dgx-2026-10-24-r1"

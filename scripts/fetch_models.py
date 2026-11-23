@@ -3,12 +3,16 @@
 
     MODELS_URL      s3://platform-<location>-models/ (AWS) | file:///data/models | https://host/prefix
     MODELS_DIR      where the worker reads them (default /data/models)
-    MODEL_VERSIONS  "detector_v26=n3,classifier_v0_10_2=v0.10.2,classifier_v2=dgx-2026-10-24"
+    MODEL_VERSIONS  "detector_v26=n3,classifier_v0_10_2=v0.10.2,classifier_v2=dgx-2026-10-24-r1"
 
 Layout, as published by the infra repository's scripts/publish_models.py:
 <MODELS_URL>/<model>/<version>/<files> plus a SHA256SUMS file. A model directory
 that already holds files is left alone (a bind-mounted data/models wins); each
-fetched file is checked against SHA256SUMS before it is kept. For a laptop
+fetched file is checked against SHA256SUMS before it is kept. Each fetch records its
+version in ``<model>/.version``; a directory whose ``.version`` names another version is
+fetched again and swapped in only once complete (2026-11-22: a version pin has to reach the GPU
+host, whose /data/models outlives every deploy). A directory without ``.version`` is still left
+alone, so one fetched before this change must be removed once by hand. For a laptop
 without bucket access, scripts/fetch_models.sh still downloads the two public
 Fishial bundles.
 """
@@ -31,8 +35,11 @@ except ImportError:  # run from the repository rather than an image
 DEFAULT_VERSIONS = {
     "detector_v26": "n3",
     "classifier_v0_10_2": "v0.10.2",
-    "classifier_v2": "dgx-2026-10-24",
+    "classifier_v2": "dgx-2026-10-24-r1",
 }
+
+
+VERSION_FILE = ".version"
 
 
 def versions(spec: str | None = None) -> dict[str, str]:
@@ -51,8 +58,12 @@ def fetch_model(models_url: str, dest: Path, model: str, version: str) -> int:
     number of files written (0 when the directory already holds files)."""
     target = dest / model
     if target.is_dir() and any(p.is_file() for p in target.rglob("*")):
-        print(f"{model}: present in {target}, left alone")
-        return 0
+        marker = target / VERSION_FILE
+        held = marker.read_text().strip() if marker.is_file() else None
+        if held is None or held == version:
+            print(f"{model}: present in {target}, left alone")
+            return 0
+        print(f"{model}: {target} holds {held}; fetching {version}")
     # Whole or not at all: files land in <model>.partial/ and the directory is renamed into place at the
     # end, so a download interrupted by a deploy (the models volume persists on the GPU host) is redone,
     # never mistaken for a complete model by the next start.
@@ -72,8 +83,9 @@ def fetch_model(models_url: str, dest: Path, model: str, version: str) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         written += 1
+    (staging / VERSION_FILE).write_text(version)
     if target.exists():
-        shutil.rmtree(target)  # an empty or stale directory; a filled one returned above
+        shutil.rmtree(target)  # empty, or a complete fetch of another version
     staging.rename(target)
     print(f"{model}@{version}: {written} file(s) into {target}")
     return written
