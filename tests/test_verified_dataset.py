@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 from app import verified_dataset
+from app.label_archive import UnknownAccount
 from review_fixtures import add_item, add_verdict, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
@@ -322,3 +324,111 @@ def test_a_held_back_box_holds_the_frame_back():
         8: "box add5 held back: confidence uncertain",
     }
     assert plan.frames == () and plan.annotations == {}
+
+
+# ----- the build_dataset job -----------------------------------------------------------
+
+
+@pytest.fixture
+def dataset_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATASET_URL", f"file://{tmp_path}/datasets")
+    monkeypatch.setenv("DATASET_ACCOUNTS", '["roy tester"]')
+    monkeypatch.setenv("GIT_SHA", "abc1234")
+    monkeypatch.setenv("TZ", "America/New_York")
+    stamps = iter(f"2026-11-23T00000{n}Z" for n in range(1, 10))
+    monkeypatch.setattr(verified_dataset, "_stamp", lambda: next(stamps))
+    return tmp_path / "datasets"
+
+
+async def _roy_and_a_frame(db, tmp_path, boxes=ONE_BOX):
+    frame = await seed_frame(db, tmp_path, boxes=boxes)
+    roy = await make_user(db, "roy tester")
+    vid = await add_verdict(db, frame["event_ids"][0], roy, name="Seriola zonata")
+    return frame, roy, vid
+
+
+async def test_no_accounts_does_nothing(rdb, dataset_env, monkeypatch):
+    monkeypatch.delenv("DATASET_ACCOUNTS")
+
+    assert await verified_dataset.build_dataset(rdb) == {"skipped": "DATASET_ACCOUNTS is empty"}
+    assert not dataset_env.exists()
+
+
+async def test_accounts_without_a_url_fail(rdb, dataset_env, monkeypatch):
+    monkeypatch.delenv("DATASET_URL")
+
+    with pytest.raises(RuntimeError, match="DATASET_URL"):
+        await verified_dataset.build_dataset(rdb)
+
+
+async def test_an_unknown_account_fails_without_naming_it(rdb, dataset_env, monkeypatch):
+    monkeypatch.setenv("DATASET_ACCOUNTS", '["nobody"]')
+
+    with pytest.raises(UnknownAccount) as e:
+        await verified_dataset.build_dataset(rdb)
+    assert "nobody" not in str(e.value)
+
+
+async def test_a_run_writes_a_snapshot_then_latest(rdb, tmp_path, dataset_env):
+    frame, roy, vid = await _roy_and_a_frame(rdb, tmp_path)
+
+    result = await verified_dataset.build_dataset(rdb)
+
+    folder = dataset_env / result["snapshot"]
+    snap = json.loads((folder / "snapshot.json").read_text())
+    latest = json.loads((dataset_env / "latest.json").read_text())
+    assert latest == {"snapshot": result["snapshot"], "sha256": snap["content_hash"]}
+    assert (snap["git_sha"], snap["account_ids"], snap["newest_answer_id"]) == (
+        "abc1234",
+        [roy],
+        vid,
+    )
+    assert (folder / f"classifier/Seriola_zonata/ev{frame['event_ids'][0]}.jpg").is_file()
+    assert (result["unchanged"], result["accounts"], result["counts"]) == (
+        False,
+        1,
+        snap["counts"],
+    )
+
+
+async def test_an_unchanged_run_writes_nothing(rdb, tmp_path, dataset_env):
+    await _roy_and_a_frame(rdb, tmp_path)
+
+    first = await verified_dataset.build_dataset(rdb)
+    second = await verified_dataset.build_dataset(rdb)
+
+    assert (second["snapshot"], second["unchanged"]) == (None, True)
+    assert sorted(p.name for p in dataset_env.iterdir()) == sorted(
+        [first["snapshot"], "latest.json"]
+    )
+
+
+async def test_a_new_answer_makes_a_new_snapshot_and_keeps_the_old(rdb, tmp_path, dataset_env):
+    frame, roy, _ = await _roy_and_a_frame(rdb, tmp_path, boxes=THREE_BOXES[:2])
+    first = await verified_dataset.build_dataset(rdb)
+    await add_verdict(rdb, frame["event_ids"][1], roy, name="Seriola zonata")
+
+    second = await verified_dataset.build_dataset(rdb)
+
+    assert second["snapshot"] not in (None, first["snapshot"])
+    assert (dataset_env / first["snapshot"] / "manifest.json").is_file()
+    latest = json.loads((dataset_env / "latest.json").read_text())
+    assert latest["snapshot"] == second["snapshot"]
+
+
+async def test_no_username_or_email_in_any_file_or_result(rdb, tmp_path, dataset_env):
+    await _roy_and_a_frame(rdb, tmp_path)
+
+    result = await verified_dataset.build_dataset(rdb)
+
+    blobs = [p.read_bytes() for p in dataset_env.rglob("*") if p.is_file()]
+    blobs.append(json.dumps(result).encode())
+    assert not [
+        b for b in blobs if b"roy tester" in b or b"Roy Tester" in b or b"@example.org" in b
+    ]
+
+
+def test_build_dataset_is_a_job_run_by_hand():
+    from app import jobs
+
+    assert jobs.JOBS["build_dataset"] is jobs.build_dataset and "build_dataset" not in jobs.ALL

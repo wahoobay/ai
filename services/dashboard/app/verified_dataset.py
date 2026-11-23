@@ -4,14 +4,30 @@ training half; spec docs/superpowers/specs/2026-11-22-verified-dataset-training-
 `select` reads which boxes count: only the listed accounts' answers go into the one resolution
 rule (review_labels.resolve), so another account's test answer can neither replace nor dispute
 theirs. `detector_frames` decides which completed frames the detector may learn from: every fish
-boxed and every box counting, "no animal" boxes left unannotated as background.
+boxed and every box counting, "no animal" boxes left unannotated as background. The
+`build_dataset` job (run by hand) writes a snapshot under DATASET_URL only when its content
+changed, and never deletes one: the database is not append-only, so a snapshot is the only
+record of the state it was built from.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
 
+from common import taxonomy
+from common.storage import exists, join, open_read, put
+from psycopg_pool import AsyncConnectionPool
+
+from .config import site_tz
+from .frames import frame_url
+from .label_archive import CONTENT_TYPES, UnknownAccount, content_hash, read_only_transaction
 from .review_labels import CONFIDENCE_RANK, load_verdicts, resolve
 from .review_queue import fetch_all
 from .species_suggestions import pending_species_events
@@ -253,3 +269,108 @@ def detector_frames(sel: Selection) -> DetectorPlan:
         included.append(frame_id)
         annotations[frame_id] = tuple(b for b in boxes if b.outcome != NO_ANIMAL)
     return DetectorPlan(tuple(included), annotations, held_back)
+
+
+# ----- the build_dataset job -------------------------------------------------------------
+
+_APP_DIR = Path(__file__).resolve().parent
+# main.py's rule: the repository root in a checkout, /app in the image.
+_REPO_ROOT = _APP_DIR.parents[2] if _APP_DIR.parents[1].name == "services" else _APP_DIR.parent
+
+# Species reviewers added carry the AphiaID they were checked against (0007).
+_SUGGESTED_APHIA_SQL = """
+    SELECT approved_name, aphia_id FROM species_suggestions
+     WHERE status = 'approved' AND approved_name IS NOT NULL AND aphia_id IS NOT NULL
+     ORDER BY id
+"""
+
+
+def _stamp() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
+
+
+def _accounts() -> list[str]:
+    raw = os.environ.get("DATASET_ACCOUNTS", "").strip()
+    return [str(u) for u in json.loads(raw)] if raw else []
+
+
+def _taxonomy_csv() -> Path:
+    explicit = os.environ.get("REVIEW_TAXONOMY_CSV", "").strip()
+    if explicit:
+        return Path(explicit)
+    assets = os.environ.get("REVIEW_ASSETS_DIR", "").strip()
+    return (Path(assets) if assets else _REPO_ROOT / "assets") / "taxonomy.csv"
+
+
+def _content_type(name: str) -> str:
+    return CONTENT_TYPES.get(os.path.splitext(name)[1].lower(), "application/octet-stream")
+
+
+def _read_frame(image_path: str) -> bytes:
+    return open_read(frame_url(image_path))
+
+
+def _latest(url: str) -> dict[str, Any]:
+    latest = join(url, "latest.json")
+    return json.loads(open_read(latest)) if exists(latest) else {}
+
+
+def _write_snapshot(url: str, files: dict[str, bytes], provenance: dict[str, Any]) -> str:
+    """The snapshot's files, then snapshot.json, then latest.json last: a run that dies part-way
+    never leaves a half-written snapshot named as the latest. An existing snapshot is never
+    written over."""
+    stamp = _stamp()
+    folder = join(url, stamp)
+    if exists(join(folder, "snapshot.json")):
+        raise RuntimeError(f"snapshot {stamp} already exists; run again in a second")
+    for name in sorted(files):
+        put(join(folder, name), files[name], _content_type(name))
+    snapshot = {"snapshot": stamp, **provenance}
+    put(join(folder, "snapshot.json"), json.dumps(snapshot, indent=1).encode(), "application/json")
+    latest = {"snapshot": stamp, "sha256": provenance["content_hash"]}
+    put(join(url, "latest.json"), json.dumps(latest).encode(), "application/json")
+    return stamp
+
+
+async def build_dataset(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Snapshot DATASET_ACCOUNTS' verified boxes under DATASET_URL/<stamp>/ when anything
+    changed since latest.json's. Accounts appear as ids only, here and in every file."""
+    accounts = _accounts()
+    if not accounts:
+        return {"skipped": "DATASET_ACCOUNTS is empty"}
+    url = os.environ.get("DATASET_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATASET_ACCOUNTS is set but DATASET_URL is not")
+    from .verified_dataset_files import build_files  # it imports this module
+
+    async with pool.connection() as conn, read_only_transaction(conn):
+        rows = await fetch_all(
+            conn, "SELECT id, username FROM users WHERE username = ANY(%s)", (accounts,)
+        )
+        missing = len(set(accounts) - {r["username"] for r in rows})
+        if missing:
+            raise UnknownAccount(f"{missing} of the DATASET_ACCOUNTS match no review account")
+        ids = sorted(r["id"] for r in rows)
+        sel = await select(conn, ids)
+        suggested = await fetch_all(conn, _SUGGESTED_APHIA_SQL)
+
+    aphia = {r["approved_name"]: r["aphia_id"] for r in suggested}
+    aphia |= taxonomy.aphia_by_accepted(taxonomy.read(_taxonomy_csv()))
+    plan = detector_frames(sel)
+    files, counts = await asyncio.to_thread(
+        build_files, sel, plan, _read_frame, aphia, ZoneInfo(site_tz())
+    )
+    digest = content_hash(files)
+    result: dict[str, Any] = {"snapshot": None, "unchanged": True, "accounts": len(ids)}
+    if (await asyncio.to_thread(_latest, url)).get("sha256") != digest:
+        provenance = {
+            "git_sha": os.environ.get("GIT_SHA") or None,
+            "content_hash": digest,
+            "account_ids": ids,
+            "newest_answer_id": sel.newest_answer_id,
+            "newest_drawn_box_id": sel.newest_drawn_box_id,
+            "counts": counts,
+        }
+        stamp = await asyncio.to_thread(_write_snapshot, url, files, provenance)
+        result |= {"snapshot": stamp, "unchanged": False}
+    return result | {"counts": counts}
