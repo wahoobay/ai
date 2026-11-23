@@ -27,6 +27,7 @@ SITE_KEYS = (
     "TZ",
     "CAMERA_METADATA_PATH",
     "NEGATIVE_REGIONS_PATH",
+    "NEGATIVE_REGIONS_URL",
     "SENSESTREAM_WEATHER_DEPLOYMENT_URI",
 )
 
@@ -91,7 +92,7 @@ def test_dashboard_config_carries_the_site(monkeypatch):
         "UTC",
     )
     assert cfg.camera_metadata_path == "/data/camera_metadata.json"
-    assert cfg.negative_regions_path == "/data/camera_negative_regions.json"
+    assert cfg.negative_regions_url == "file:///data/camera_negative_regions.json"
     assert cfg.port == 8080
 
 
@@ -115,6 +116,30 @@ def test_worker_config_names_its_location(monkeypatch):
 
     _site(monkeypatch)
     assert Config.from_env().location_id == "wahoobay"
+
+
+def test_the_dashboard_and_the_worker_share_one_regions_url(monkeypatch):
+    """The admin page writes the no-fish zones where the worker reads them: NEGATIVE_REGIONS_URL (s3:// on AWS),
+    else the file at NEGATIVE_REGIONS_PATH as a file:// URL."""
+    from app.main import DashboardCfg
+
+    from services.worker.app.config import Config
+
+    def both():
+        return {DashboardCfg().negative_regions_url, Config.from_env().negative_regions_url}
+
+    _site(monkeypatch)
+    assert both() == {"file:///data/camera_negative_regions.json"}
+    _site(monkeypatch, NEGATIVE_REGIONS_PATH="/srv/wahoo bay/regions.json")
+    assert both() == {"file:///srv/wahoo%20bay/regions.json"}
+    _site(
+        monkeypatch,
+        NEGATIVE_REGIONS_PATH="/srv/regions.json",
+        NEGATIVE_REGIONS_URL="s3://b/config/r.json",
+    )
+    assert both() == {"s3://b/config/r.json"}
+    _site(monkeypatch, NEGATIVE_REGIONS_PATH="")
+    assert Config.from_env().negative_regions_url == ""  # empty still turns the worker's filter off
 
 
 def test_no_site_strings_left_in_code():

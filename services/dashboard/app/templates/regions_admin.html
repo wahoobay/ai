@@ -60,8 +60,8 @@
 <div class="help">
   Pick a camera, then <b>click on the image to add polygon vertices</b>.
   Press <b>Close polygon</b> (or double-click) to commit the current
-  shape, then start the next one. Hit <b>Save</b> to write the JSON to
-  disk. Restart the workers afterwards for the change to take effect.
+  shape, then start the next one. Hit <b>Save</b> to store the regions
+  where the worker reads them; it applies them within a minute, no restart.
   <br><br>
   <b>How the filter works:</b> a detection is dropped only when its
   bbox closely <i>matches</i> a polygon — IoU(bbox, polygon's bounding
@@ -295,7 +295,7 @@ $("save").addEventListener("click", async () => {
       setStatus(`save failed: HTTP ${r.status} — ${err}`, "err");
       return;
     }
-    setStatus("saved. Restart the worker(s) for the new regions to take effect.", "ok");
+    setStatus("saved. The worker applies the new regions within a minute.", "ok");
   } catch (e) {
     setStatus(`save failed: ${e}`, "err");
   }

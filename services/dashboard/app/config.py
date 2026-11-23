@@ -21,9 +21,23 @@ class Settings:
     deployment_uri: str  # the SenseStream deployment readings are tagged with
     tz: str  # IANA zone the dashboard renders in
     camera_metadata_path: str
-    negative_regions_path: str
+    # The no-fish zones: the admin page writes them there, the worker reads them there.
+    negative_regions_url: str
     export_prefix: str  # CSV/Parquet filename prefix (default: location_id)
     database_url: str
+
+
+def negative_regions_url(env: Mapping[str, str] = os.environ) -> str:
+    """Where the no-fish zones live, the same for the dashboard and the worker: NEGATIVE_REGIONS_URL (s3:// on
+    AWS, so the admin page's save reaches the worker on the GPU host), else the file at NEGATIVE_REGIONS_PATH
+    as a file:// URL (a laptop). Empty means none (the worker's filter is off)."""
+    url = env.get("NEGATIVE_REGIONS_URL", "").strip()
+    if url:
+        return url
+    path = env.get("NEGATIVE_REGIONS_PATH", "/data/camera_negative_regions.json").strip()
+    # The file:// URL common.storage.as_url makes, not imported: the migrations and the scripts load this
+    # module with services/dashboard alone on the path.
+    return Path(os.path.abspath(path)).as_uri() if path else ""
 
 
 def database_url_from_env(env: Mapping[str, str] = os.environ) -> str:
@@ -71,9 +85,7 @@ def settings(env: Mapping[str, str] = os.environ) -> Settings:
         deployment_uri=deployment_uri,
         tz=site_tz(env),
         camera_metadata_path=env.get("CAMERA_METADATA_PATH", "/data/camera_metadata.json"),
-        negative_regions_path=env.get(
-            "NEGATIVE_REGIONS_PATH", "/data/camera_negative_regions.json"
-        ),
+        negative_regions_url=negative_regions_url(env),
         export_prefix=env.get("EXPORT_PREFIX", "").strip() or site,
         database_url=database_url_from_env(env),
     )

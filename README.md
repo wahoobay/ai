@@ -9,10 +9,13 @@ and surfaced through a FastAPI dashboard that doubles as a reviewer
 queue — humans correct mis-identifications and those corrections feed
 the next training cycle.
 
-Currently runs 24/7 on a single NVIDIA H200 (`/raid/scratch/dzimmerman2021/wahoobay`
-on FAU's lab DGX). Public access is via an ephemeral Cloudflare quick
-tunnel; per lab policy this machine cannot host a permanent public
-endpoint, so the cloud migration is on the roadmap.
+Runs on AWS, in stacks defined by the sibling repository `wahoobay/infra`:
+the dashboard on App Runner behind CloudFront, the worker on a GPU host (one
+NVIDIA L4), Aurora PostgreSQL and a few Lambdas. Staging
+(<https://staging-ai.wahoobay.net>) is the environment running today;
+production (`ai.wahoobay.net`) is defined but not deployed. Until 2026-11-15
+it ran on an NVIDIA H200 in FAU's lab DGX
+([`docs/dgx-history.md`](docs/dgx-history.md)).
 
 ---
 
@@ -35,13 +38,15 @@ endpoint, so the cloud migration is on the roadmap.
 
 ## What this project does
 
-End-to-end, in one paragraph: two underwater RTSP cameras stream into
-worker processes running on the DGX's GPU. Every frame goes through a
+End-to-end, in one paragraph: the underwater camera's RTSP stream reaches
+a worker process on the GPU host's L4 (the DGX also ran a second worker, for
+the pier camera). Every frame goes through a
 YOLO object detector. Each detected fish box gets cropped, classified
 into one of 223 species by a from-scratch DINOv2 classifier, smoothed
 across consecutive frames by a constant-velocity tracker, and persisted
-to Postgres. The dashboard reads from Postgres, proxies the worker's
-annotated MJPEG stream for the live view, and exposes a reviewer UI for
+to Postgres. The dashboard reads from Postgres, plays the live video
+(HLS through CloudFront on AWS, the worker's annotated MJPEG elsewhere), and
+exposes a reviewer UI for
 humans to correct anything that looks wrong. Corrections accumulate in
 their own table and are the seed corpus for the next training run.
 
@@ -108,7 +113,10 @@ their own table and are the seed corpus for the next training run.
    └─────────────────┘
 ```
 
-[`docs/architecture.md`](docs/architecture.md) breaks each box down.
+[`docs/architecture.md`](docs/architecture.md) breaks each box down. The
+diagram has the DGX's two workers; on AWS one worker reads the SEAHIVE
+camera through MediaMTX on the GPU host, and viewers get HLS through
+CloudFront ([`deploy/gpu-host/README.md`](deploy/gpu-host/README.md)).
 
 ---
 
@@ -181,8 +189,10 @@ their own table and are the seed corpus for the next training run.
 │   ├── gen_synthetic_sensor_data.py     Diurnal-pattern synthetic sonde for offline demos
 │   ├── make_sample_dataset.py           Generates data/sample (drawn frames, invented detections, synthetic readings)
 │   ├── fetch_models.py                  <MODELS_URL>/<model>/<version>/ → /data/models, verified against SHA256SUMS
-│   └── dev/                             start_all.sh, start_postgres.sh (runs the migrations), run_worker.sh, run_worker_pier.sh,
+│   └── dev/                             bare-metal launchers (how the DGX ran): start_all.sh, start_postgres.sh (runs the migrations), run_worker.sh, run_worker_pier.sh,
 │                                        run_dashboard.sh, run_poller.sh, run_jobs.sh, stop_postgres.sh
+│
+├── deploy/gpu-host/                What runs on the AWS GPU host: compose (worker, MediaMTX, encoder, Caddy), boot.sh, update.sh, replay.conf
 │
 ├── db/                             Alembic: alembic.ini + migrations/versions/ (0001_baseline.sql = all tables, indexes, matviews)
 │
@@ -193,7 +203,7 @@ their own table and are the seed corpus for the next training run.
 │   │   └── classifier_v2/               DINOv2 ViT-S/14 (default)
 │   ├── sample/                          Committed sample dataset: 40 drawn frames, 320 detections, four days of readings (make seed)
 │   ├── camera_metadata.json             lat/lng/depth/heading per camera (committed)
-│   ├── camera_negative_regions.json     per-camera no-fish-zone polygons (committed; edit via /admin/regions.html)
+│   ├── camera_negative_regions.json     per-camera no-fish-zone polygons (committed format, no polygons; /admin/regions.html saves to NEGATIVE_REGIONS_URL)
 │   ├── test_videos/                     fallback playlist (gitignored)
 │   └── baseline_runs/                   train_baseline output dirs
 │
@@ -216,34 +226,20 @@ their own table and are the seed corpus for the next training run.
 
 ## Quick start
 
-### A. Existing DGX install
+### A. The running system (AWS)
 
-The system is already running. To check or restart, follow
+Staging is at <https://staging-ai.wahoobay.net> (sign in; an admin approves
+new accounts). It follows `main`: every push deploys it ("Deploying (AWS)"
+below). To check on it, restart a piece of it or read its logs, see
 [`docs/operations.md`](docs/operations.md). Briefly:
 
 ```bash
-# Confirm services are listening
-ss -ltn | grep -E ':8081|:8083|:8082|:18080|:5432'
-# Workers (8081 = SEAHIVECAM, 8083 = pier), poller (8082), dashboard (18080), postgres (5432)
-pgrep -af scripts/dev/run_jobs.sh   # the jobs loop (matview refresh + alert rules) has no port
-
-# Tail the dashboard log
-tail -f logs/app/dashboard.log
+curl -s https://staging-ai.wahoobay.net/healthz
+aws logs tail /ai/wahoobay/staging/gpu-host --region us-east-1 --since 1h   # the worker, MediaMTX, the encoder
 ```
 
-The dashboard is at `http://127.0.0.1:18080`. From a laptop:
-
-```bash
-ssh -L 18080:localhost:18080 <dgx-host>
-# then http://localhost:18080 in a browser on the laptop
-```
-
-The Cloudflare quick tunnel URL is ephemeral (changes on every
-`cloudflared` restart, including DGX reboots). Find the current URL:
-
-```bash
-grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' logs/app/cloudflared.log | head -1
-```
+Right now staging plays a recording of the pier camera in the live camera's
+place and records nothing (`deploy/gpu-host/replay.conf`).
 
 ### B. Fresh machine (Docker Compose)
 
@@ -274,7 +270,7 @@ make up-cpu                      # or the CPU build (`--target cpu`) over data/t
 the database tests; the migration tests start their own PostgreSQL from local
 binaries when it is unset).
 
-### C. Fresh machine (conda, no Docker — this is how the DGX runs)
+### C. Bare metal (conda, no Docker — how the DGX ran until 2026-11-15)
 
 ```bash
 # One-time env setup (only if the wahoobay env doesn't already exist):
@@ -317,7 +313,7 @@ First-boot caveats:
 ## Environment contract
 
 The code assumes no site: the environment names it. The same variables are
-read by the DGX launchers (`scripts/dev/*.sh` export the Wahoo Bay values),
+read by the bare-metal launchers (`scripts/dev/*.sh` export the Wahoo Bay values),
 by compose (`docker-compose.yml` names a `demo` site; `.env` overrides) and by
 the AWS stacks (`wahoobay/infra`, `locations/<name>.yaml`). `.env.example`
 documents every variable; these are the ones that make a deployment a site.
@@ -332,7 +328,7 @@ documents every variable; these are the ones that make a deployment a site.
 | `MODELS_URL` | `file:///data/models` | Weights, as `<model>/<version>/` + `SHA256SUMS`; fetched at worker start |
 | `LIVE_HLS_BASE_URL` | empty | Empty = the MJPEG `<img>` from `STREAM_BASE_URL`. `/hls` on AWS: an hls.js `<video>` playing `/hls/<path>/index.m3u8`, variants `seahive` / `seahive_boxes` |
 | `STREAM_BASE_URL` | `/api` | Where the browser fetches the MJPEG stream: the dashboard's own proxy, or `/stream` on AWS (CloudFront → the GPU host, since App Runner cuts requests at 120 s) |
-| `WORKER_URL` | (unset) | Unset or empty = no camera pipeline: live video is the embed, worker routes and alerts are off. The DGX launchers set `http://127.0.0.1:8081`; `make up-gpu` / `up-cpu` set the compose worker |
+| `WORKER_URL` | (unset) | Unset or empty = no camera pipeline: live video is the embed, worker routes and alerts are off. On AWS the stack sets the GPU host's address; the bare-metal launchers set `http://127.0.0.1:8081`; `make up-gpu` / `up-cpu` set the compose worker |
 | `LIVE_VIDEO_EMBED_URL` | empty | With no worker, the video panel shows this embed |
 | `FEATURE_REVIEW_TOOL` | `false` | The volunteer review tool (routes, pool task, admin link) |
 | `MAIL_BACKEND` | `console` | `console` (the message, link included, goes to the log), `smtp` (`MAIL_SMTP_*`), `ses` (Amazon SES through the process's own AWS role; `MAIL_FROM` required; what AWS uses), `manual` (held) |
@@ -342,11 +338,13 @@ documents every variable; these are the ones that make a deployment a site.
 | `SENSESTREAM_SYNTHETIC` | `false` | Write synthetic readings when no live source answers (local demos only) |
 | `JOBS_INTERVAL_S` | `60` | `run_jobs.sh`'s cadence (bare metal) |
 | `EXPORT_PREFIX`, `CAMERA_METADATA_PATH`, `NEGATIVE_REGIONS_PATH` | `LOCATION_ID`, `/data/…` | Export file names; the two per-camera JSON files |
+| `NEGATIVE_REGIONS_URL` | empty (= the file at `NEGATIVE_REGIONS_PATH`) | Where the no-fish zones live, the same for the dashboard (the admin page writes them) and the worker (reads them at start and every minute). On AWS `s3://<frames bucket>/config/camera_negative_regions.json`, set by the infra stack and `boot.sh` |
 
-Three shapes run the same code: the DGX (bare metal, `scripts/dev`), a
-laptop (`make up`, compose profiles `web` / `gpu` / `cpu`) and AWS (App
-Runner for the dashboard, Lambdas for jobs, migrate, fetch and write; see
-`wahoobay/infra`). Every image CI builds carries `GIT_SHA`, which the
+Two shapes run the same code: AWS (App Runner for the dashboard, Lambdas
+for jobs, migrate, fetch and write, a GPU host for the worker; see
+`wahoobay/infra`) and a laptop (`make up`, compose profiles `web` / `gpu` /
+`cpu`). The bare-metal launchers in `scripts/dev` are how the DGX ran it
+until 2026-11-15. Every image CI builds carries `GIT_SHA`, which the
 worker stamps on its rows.
 
 ---
@@ -358,9 +356,11 @@ worker stamps on its rows.
   runs `scripts/deploy_env.sh staging <sha12>`: `scripts/promote.sh` points the
   `staging` tags at the build (App Runner auto-deploys the dashboard), the four
   Lambdas are updated, the migrate Lambda runs (a failure stops the deploy
-  before the dashboard rolls), App Runner's deployment is awaited, and the
-  hostname is smoked (`/healthz`, `/login`, `/robots.txt`; the direct App Runner
-  URL must answer 403).
+  before the dashboard rolls), the GPU host checks out the build and restarts
+  its worker (`deploy/gpu-host/update.sh`, through SSM), App Runner's deployment
+  is awaited, and the hostname is smoked (`/healthz`, `/login`, `/robots.txt`;
+  the direct App Runner URL must answer 403). Every push restarts the worker,
+  so even a docs-only merge briefly interrupts the live picture.
 - **Production is by hand:** Actions → `deploy-prod` → the full SHA (it must be
   on `main`) and `confirm=deploy`. Same steps against `prod`; a release
   `ai-prod-<date>-<sha7>` records it.
@@ -372,8 +372,7 @@ worker stamps on its rows.
   Never offered for production.
 - The variables (`STAGING_*`, `PROD_*`: role ARN, function names, App Runner
   service ARN, hostname, service URL) come from the `AiStack` outputs; the
-  infra repository's README ("AI stacks") says how to set them. The DGX is not
-  deployed this way: see `docs/operations.md`.
+  infra repository's README ("AI system") says how to set them.
 - **Running one job on staging:** Actions → `run-job-staging` → the job
   (`status`, `import_legacy`) hands staging's jobs Lambda `{"job": "<job>"}`
   asynchronously (the import outlasts a synchronous call). The result is a JSON
@@ -417,22 +416,23 @@ where it stopped.
 
 ## What's currently running
 
-Authoritative current state lives in [`docs/operations.md`](docs/operations.md).
-As of the last doc refresh:
+Staging, in AWS us-east-1 (stack `ai-wahoobay-staging`; "Where it runs" in
+[`docs/operations.md`](docs/operations.md) has the full list):
 
-| Service | Port | Role |
-|---|---:|---|
-| worker (SEAHIVECAM) | `127.0.0.1:8081` | Primary cam = Axis PTZ inside the VITB Octopus housing |
-| worker (pier cam)   | `127.0.0.1:8083` | Secondary cam = City of Pompano Beach pier-mounted Axis |
-| sensestream poller  | `127.0.0.1:8082` | Pulls water + weather; running live (Wahoo Bay API + Open-Meteo) |
-| dashboard           | `127.0.0.1:18080` | FastAPI + reviewer queue + admin endpoints |
-| postgres            | `127.0.0.1:5432` | Local cluster under `./pgdata/` |
-| cloudflared         | (random `*.trycloudflare.com`) | Public-tunnel proxy in front of the dashboard |
+| Piece | Where | Role |
+|---|---|---|
+| CloudFront | `staging-ai.wahoobay.net` | The only public entry: the dashboard, and the live video from the GPU host |
+| Dashboard | App Runner `ai-wahoobay-staging-dashboard` | FastAPI + reviewer queue + admin pages |
+| Worker, MediaMTX, encoder, Caddy | GPU host `ai-wahoobay-staging-gpu` (`g6.xlarge`, one NVIDIA L4) | The camera pipeline and the live stream (`deploy/gpu-host/`) |
+| Jobs, migrate, fetch, write | Lambdas `ai-wahoobay-staging-*` | Matview refresh, alert rules and the label archive every 30 minutes; schema migrations at deploy; water and weather readings |
+| Postgres | Aurora Serverless v2 `ai-wahoobay-staging-db` | Everything the dashboard shows |
+| Frames, weights | S3 `ai-wahoobay-staging-frames`, `platform-wahoobay-models` | Saved frames; weights, sample data, recordings |
 
-Hardware: NVIDIA H200 on FAU's lab DGX. GPU pinning lives in `.env`
-(`CUDA_VISIBLE_DEVICES=4` for SEAHIVECAM, `CUDA_VISIBLE_DEVICES_PIER=5`
-for pier — the workers use separate GPUs so neither's compile / inference
-contends with the other).
+Staging plays a recording of the pier camera instead of the live camera and
+records nothing while it does (`deploy/gpu-host/replay.conf`). Production
+(`ai-wahoobay-prod`, `ai.wahoobay.net`) is defined but not deployed. Until
+2026-11-15 everything ran on an NVIDIA H200 in FAU's lab DGX, public through
+a Cloudflare quick tunnel ([`docs/dgx-history.md`](docs/dgx-history.md)).
 
 ---
 
@@ -444,7 +444,7 @@ as the system evolves.
 | To change... | Touch... |
 |---|---|
 | Which classifier the worker runs | `CLASSIFIER_BACKEND` env (default `v2`; set to `fishial` for the legacy rollback) |
-| The v2 classifier's checkpoint or class set | Drop new files into `data/models/classifier_v2/` and restart the worker |
+| The v2 classifier's checkpoint or class set | Publish a new version to the models bucket (infra `scripts/publish_models.py`) and have the worker fetch it (`scripts/fetch_models.py`); locally, drop the files into `data/models/classifier_v2/` and restart the worker |
 | Detector confidence floor / NMS threshold | `DET_CONF_THRESHOLD`, `DET_IOU_THRESHOLD` in `.env` (see [`docs/operations.md`](docs/operations.md)) |
 | When the classifier runs vs is skipped | `MIN_CLASSIFY_DET_CONF` (default 0.25 — runs on every detector emit) |
 | When a softmax result is "unknown" | `MIN_ACCEPT_ACCURACY` (default 0.55 — top-1 below this → topk=[]) |
@@ -458,9 +458,9 @@ as the system evolves.
 | Where frames and weights live | `FRAMES_URL`, `MODELS_URL` (`file://` locally, `s3://` on AWS); `scripts/fetch_models.py` brings weights in |
 | How often the fish counter and alerts refresh | the jobs runner: `JOBS_INTERVAL_S` for `run_jobs.sh`; the platform's cadence for the jobs Lambda |
 | Live video on a site without a worker | `LIVE_VIDEO_EMBED_URL` (an embed replaces the MJPEG panel when `WORKER_URL` is empty) |
-| Sign-in mail | `MAIL_BACKEND` (`console` logs it, `smtp` sends it) + `MAIL_SMTP_*`, `MAIL_FROM` |
+| Sign-in mail | `MAIL_BACKEND` (`ses` on AWS, `console` logs it, `smtp` sends it) + `MAIL_SMTP_*`, `MAIL_FROM` |
 | The database schema | a new Alembic revision in `db/migrations/versions/`; `python -m app.migrate` / `make migrate` applies it |
-| Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard (or hand-edit `data/camera_negative_regions.json`); restart worker |
+| Per-camera no-fish-zone polygons | `/admin/regions.html` in the dashboard; the worker applies a save within a minute. Kept at `NEGATIVE_REGIONS_URL` (the frames bucket on AWS); on a laptop hand-editing `data/camera_negative_regions.json` works too (`docs/operations.md`, "Polygon mask") |
 | Curated Latin→common-name overrides | `services/dashboard/app/common_names.py` `COMMON_NAMES` dict (no restart hot-reload yet for the curated layer) |
 | Reviewer flow / correction modal | `services/dashboard/app/static/app.js` (`correctionFormHtml`, `submitCorrection`, `_enterBboxEdit`) |
 | Postgres schema | Alembic revisions in `db/migrations/versions/`: `alembic -c db/alembic.ini upgrade head` (see docs/operations.md, "Applying a schema change to the live database") |
@@ -507,9 +507,9 @@ Terms that appear all over the codebase + docs:
   `pipeline_git_sha`) stamped on every detection row. Given any row you
   can reconstruct which weights + which code + which config produced it.
 - **Matview** — Postgres materialised views (`species_sightings_mat`,
-  `species_sightings_hourly_mat`) refreshed by a dashboard background
-  task. They back the user-facing aggregate endpoints; refreshing them
-  costs a fraction of a second so we do it every 60 s.
+  `species_sightings_hourly_mat`) refreshed by the `refresh_matviews`
+  job (every 30 minutes on AWS staging; every 60 s by `run_jobs.sh` on
+  bare metal). They back the user-facing aggregate endpoints.
 
 ---
 
@@ -518,9 +518,14 @@ Terms that appear all over the codebase + docs:
 - [`docs/architecture.md`](docs/architecture.md) — system overview,
   components, data flow, smoother + autoswitch + provenance design,
   shared-memory frame hand-off, backend abstraction (v2 vs fishial).
-- [`docs/operations.md`](docs/operations.md) — runbook: starting and
-  stopping services, common failures, log locations, the public-tunnel
-  lifecycle, every env var grouped by concern.
+- [`docs/operations.md`](docs/operations.md) — runbook for the system on
+  AWS: where each piece runs, health checks, deploys and restarts, logs,
+  common failures, every env var grouped by concern.
+- [`deploy/gpu-host/README.md`](deploy/gpu-host/README.md) — what runs on
+  the AWS GPU host: the worker, MediaMTX, the encoder, Caddy, replaying a
+  recording, and the streaming-cost knob.
+- [`docs/dgx-history.md`](docs/dgx-history.md) — the DGX install's runbook,
+  kept for the bare-metal launchers in `scripts/dev` (retired 2026-11-15).
 - [`docs/data_pipeline.md`](docs/data_pipeline.md) — exactly what gets
   stored where (every table, every JSONL log, every disk artifact), the
   autoswitch fallback isolation rules, retention guidance.

@@ -61,6 +61,17 @@ def test_s3_storage_uses_the_client_with_content_type(monkeypatch):
         open_read("s3://bucket/nope.jpg")
 
 
+def test_as_url_turns_a_path_into_a_file_url_and_leaves_urls_and_empty_alone(tmp_path):
+    from common.storage import as_url
+
+    assert as_url("s3://b/config/r.json") == "s3://b/config/r.json"
+    assert as_url("file:///data/r.json") == "file:///data/r.json"
+    assert as_url("") == "" and as_url("  ") == ""
+    path = tmp_path / "a b" / "r.json"
+    put(as_url(str(path)), b"{}", "application/json")  # a space survives the round trip
+    assert path.read_bytes() == b"{}" and open_read(as_url(str(path))) == b"{}"
+
+
 def test_unknown_schemes_are_refused():
     with pytest.raises(ValueError):
         open_read("ftp://host/x")

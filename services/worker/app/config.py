@@ -26,6 +26,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import quote
 
+from common.storage import as_url
+
 
 def _bool(key: str, default: bool = False) -> bool:
     v = os.environ.get(key)
@@ -95,9 +97,10 @@ class Config:
     classifier_v2_input_size: int
     classifier_v2_compile: bool
 
-    # Per-camera no-fish-zone polygons. JSON file path; see
-    # data/camera_negative_regions.json for format. Empty string disables.
-    negative_regions_path: str
+    # Per-camera no-fish-zone polygons: NEGATIVE_REGIONS_URL (s3:// on AWS, where the dashboard's admin page
+    # saves them), else the file at NEGATIVE_REGIONS_PATH as a file:// URL; see
+    # data/camera_negative_regions.json for the format. Empty disables.
+    negative_regions_url: str
     device: str
     det_imgsz: int
     det_conf_threshold: float
@@ -198,10 +201,8 @@ class Config:
             classifier_v2_arch=_str("CLASSIFIER_V2_ARCH", "vit_small_patch14_dinov2"),
             classifier_v2_input_size=_int("CLASSIFIER_V2_INPUT_SIZE", 224),
             classifier_v2_compile=_bool("CLASSIFIER_V2_COMPILE", True),
-            negative_regions_path=_str(
-                "NEGATIVE_REGIONS_PATH",
-                "/data/camera_negative_regions.json",
-            ),
+            negative_regions_url=_str("NEGATIVE_REGIONS_URL", "").strip()
+            or as_url(_str("NEGATIVE_REGIONS_PATH", "/data/camera_negative_regions.json")),
             device=_str("DEVICE", "cuda:0"),
             det_imgsz=_int("DET_IMGSZ", 640),
             det_conf_threshold=_float("DET_CONF_THRESHOLD", 0.25),

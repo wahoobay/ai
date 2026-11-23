@@ -1,333 +1,126 @@
 # Operations runbook
 
-Everything you need to start, stop, recover, observe, and reconfigure
-the live system on the DGX.
+How to check, restart, observe and change the fish-ID system where it runs: on AWS, in the stacks the
+`wahoobay/infra` repository defines. The infra README is the runbook for the infrastructure itself (stopping and
+restarting the site, settings and secrets, the stacks' own deploys); this file is the application's side. What
+runs on the GPU host is in [`deploy/gpu-host/README.md`](../deploy/gpu-host/README.md).
+
+Until 2026-11-15 the system ran on FAU's lab DGX. That machine is shut down for good: nothing runs there, and it
+is not restarted. Its runbook (the bare-metal launchers in `scripts/dev/`, the Cloudflare tunnel, the nightly
+backup) is kept in [`dgx-history.md`](dgx-history.md).
 
 ---
 
-## Currently running (snapshot)
+## Where it runs
 
-| Service | URL | Process model |
-|---|---|---|
-| Postgres | `127.0.0.1:5432` | Conda binary, cluster at `./pgdata`, daemonised by `pg_ctl` |
-| Worker — SEAHIVECAM | `127.0.0.1:8081` | `python -m app.main` from `services/worker/`, primary cam, GPU-pinned via `CUDA_VISIBLE_DEVICES` |
-| Worker — pier cam | `127.0.0.1:8083` | Same code, different env (`*_PIER` overrides). Runs on a separate GPU so neither cam contends with the other |
-| Dashboard | `127.0.0.1:18080` | `python -m app.main` from `services/dashboard/` |
-| SenseStream poller | `127.0.0.1:8082` | `python -m app.main` from `services/sensestream_poller/` |
-| Cloudflare tunnel | random `*.trycloudflare.com` URL | `~/.local/bin/cloudflared tunnel --url http://localhost:18080` |
+Staging is the only environment running. `ai-wahoobay-prod` (`ai.wahoobay.net`) is defined in infra but not
+deployed; it gets the GPU host at cutover (only one environment has one at a time).
 
-All five Python processes are launched via `scripts/dev/run_*.sh` from
-disowned bash background jobs. They survive logout, and an `@reboot`
-crontab entry brings all but the tunnel back after a DGX reboot — see
-"Recovery from a DGX reboot" below.
+| Piece | Staging (`ai-wahoobay-staging`, us-east-1) |
+|---|---|
+| Public entry | CloudFront at <https://staging-ai.wahoobay.net>: the dashboard, and the live video (`/hls/*`, `/stream/*`) from the GPU host |
+| Dashboard | App Runner service `ai-wahoobay-staging-dashboard` (one or two instances), reachable only through CloudFront, which adds `X-Origin-Verify` |
+| Worker | The GPU host `ai-wahoobay-staging-gpu`, a `g6.xlarge` (one NVIDIA L4), running `deploy/gpu-host/` under Docker Compose: the worker, MediaMTX, the NVENC encoder and Caddy. One worker, for the SEAHIVE camera (the DGX also ran one for the pier camera). Administered through SSM; there is no SSH |
+| Periodic jobs | Lambda `ai-wahoobay-staging-jobs` on EventBridge rules, every 30 minutes: `refresh_matviews`, `alert_rules`, `archive_labels`. `seed`, `status` and `import_legacy` run on demand (README, "Deploying (AWS)") |
+| Water and weather | Lambda `ai-wahoobay-staging-fetch` every 30 minutes, the SQS queue `ai-wahoobay-staging-readings`, Lambda `ai-wahoobay-staging-write` |
+| Schema | Lambda `ai-wahoobay-staging-migrate`, run by every deploy before the dashboard rolls |
+| Database | Aurora PostgreSQL Serverless v2, cluster `ai-wahoobay-staging-db` (0.5 to 2 ACU) |
+| Frames | S3 `ai-wahoobay-staging-frames` |
+| Weights, the sample dataset, recordings, label archives | S3 `platform-wahoobay-models`, shared by the environments |
+
+**Staging plays a recording, not the camera.** `deploy/gpu-host/replay.conf` names the pier camera's clips of
+2024-06-16 and 2024-07-11 for staging (Dan, 2026-11-04). MediaMTX plays the file in the camera's place, the worker
+draws its boxes on it, and nothing is recorded (`PERSIST_ENABLED=false`): no detections, frame stats or saved
+frames. The alert rules `pipeline_silence` and `frame_stats_stalled` stay on while it plays. Emptying the
+`staging=` line and merging puts the camera back (`deploy/gpu-host/README.md`, "Replay").
 
 ---
 
 ## Quick health check
 
 ```bash
-# from the DGX (or via SSH tunnel)
-curl -s http://127.0.0.1:8081/healthz       # SEAHIVECAM worker
-curl -s http://127.0.0.1:8083/healthz       # pier cam worker
-curl -s http://127.0.0.1:8082/healthz       # sensestream poller
-curl -s http://127.0.0.1:18080/healthz      # dashboard
+curl -s https://staging-ai.wahoobay.net/healthz     # the dashboard, through CloudFront
 
-# fuller picture (autoswitch state, fps, current source label)
-curl -s http://127.0.0.1:8081/stats | python3 -m json.tool
-curl -s http://127.0.0.1:8083/stats | python3 -m json.tool
-
-# what model is running?
-curl -s http://127.0.0.1:18080/api/provenance/current | python3 -m json.tool
+# from a wahoobay/infra checkout: the site as a visitor gets it
+python -m scripts.verify_ai staging
 ```
 
-The dashboard's banner across the top of the page lists any active SLO
-alerts. If the banner is empty, all six health rules are satisfied.
+The dashboard's banner lists any active alerts; an empty banner means every rule is satisfied.
+
+The worker answers only inside the VPC. To look at it, open a session on the GPU host (its instance id:
+`aws ec2 describe-instances --filters Name=tag:Name,Values=ai-wahoobay-staging-gpu`):
+
+```bash
+aws ssm start-session --region us-east-1 --target <instance id>
+# then, on the host:
+curl -s localhost:8081/healthz
+curl -s localhost:8081/stats | python3 -m json.tool     # autoswitch state, fps, the current source
+sudo docker compose -f /opt/wahoobay/deploy/gpu-host/docker-compose.yml ps
+nvidia-smi                                               # the worker and the encoder share the L4
+```
+
+A worker is ready when its log shows `v2: classifier ready — arch=vit_small_patch14_dinov2, classes=223, …`.
+On the GPU host the classifier is not compiled (`CLASSIFIER_V2_COMPILE=false`: the CUDA image has no C
+compiler), so there is no warmup.
 
 ---
 
-## Starting from cold
+## Deploys, restarts and stops
 
-Order matters: postgres → workers → dashboard → poller → tunnel.
+- **Every push to `main` deploys staging**, a docs-only one too (README, "Deploying (AWS)"): new images, the
+  Lambdas, the migrate Lambda, then the GPU host checks out the build and restarts its worker, and App Runner
+  rolls the dashboard. The live picture and the worker's records pause while that happens, so merges to `main`
+  are timed with Dan. Production is deployed by hand (`deploy-prod`).
+- **Restart one container** on the GPU host, from an SSM session:
+  `sudo docker compose -f /opt/wahoobay/deploy/gpu-host/docker-compose.yml restart worker` (or `mediamtx`,
+  `encoder`, `caddy`). The smoother's in-memory state resets and track IDs restart at 1; persisted detections
+  are unaffected.
+- **Re-run the host's start-up** (after changing the cameras secret, say):
+  `sudo /opt/wahoobay/deploy/gpu-host/boot.sh`. It rewrites `.env` from `/etc/wahoobay/host.env` and the
+  environment's secrets, pulls the images and brings the stack up; the systemd unit `wahoobay-gpu-host` runs it at
+  every boot. Never edit the host's `.env` by hand: the next boot or deploy overwrites it.
+- **Restart the dashboard** without a code change: `aws apprunner start-deployment --service-arn <arn>` (the ARN
+  is in the repository variables and the `AiStack` outputs).
+- **Stop and start the whole site**: the cost dashboard's stop button puts up the maintenance page and stops what
+  costs money; the infra README's "Restart the AI site after a stop" (`python -m scripts.restart_ai staging`)
+  brings it back.
 
-All runtime knobs (RTSP URLs + creds, account/session settings, GPU pin,
-autoswitch thresholds, classifier backend, etc.) live in a single `.env` file at
-the repo root. Each `scripts/dev/run_*.sh` auto-sources it, so
-cold-start is just "run the script." If `.env` doesn't exist, copy
-`.env.example` and fill in the secrets — the file is gitignored and
-should be mode 600 (`chmod 600 .env`).
+### What a change needs
 
-```bash
-conda activate wahoobay
-cd /raid/scratch/dzimmerman2021/wahoobay
-mkdir -p logs/app
-
-# 1. postgres
-./scripts/dev/start_postgres.sh
-# Starts the cluster if not running, then brings the schema to the current
-# Alembic revision (`alembic upgrade head`; a database that predates Alembic
-# is stamped at the baseline first). Safe here because nothing is reading
-# the database yet. Do NOT run it against a live, in-use cluster "to be
-# safe": see "Applying a schema change to the live database" below.
-
-# 2. workers (one per camera)
-nohup ./scripts/dev/run_worker.sh      > logs/app/worker.log      2>&1 &
-nohup ./scripts/dev/run_worker_pier.sh > logs/app/worker_pier.log 2>&1 &
-
-# 3. dashboard
-nohup ./scripts/dev/run_dashboard.sh > logs/app/dashboard.log 2>&1 &
-
-# 4. SenseStream poller
-nohup ./scripts/dev/run_poller.sh > logs/app/poller.log 2>&1 &
-
-# 4b. jobs loop: matview refresh + alert rules every 60 s (no port; the
-#     dashboard holds no refreshers). ./scripts/dev/start_all.sh starts
-#     everything above, this included.
-nohup ./scripts/dev/run_jobs.sh > logs/app/jobs.log 2>&1 &
-
-# 5. public tunnel (optional — only when actively demoing)
-nohup ~/.local/bin/cloudflared tunnel --url http://localhost:18080 \
-  --no-autoupdate > logs/app/cloudflared.log 2>&1 &
-
-# Find the public URL once cloudflared has logged it:
-grep -aEo 'https://[a-z0-9-]+\.trycloudflare\.com' logs/app/cloudflared.log | head -1
-```
-
-Override a knob for a single run by setting it inline in front of the
-script — inline env wins over `.env` because `.env` is sourced inside
-the script, but only with `${VAR:-default}` semantics for the explicit
-knobs the script references. To change a knob persistently, edit
-`.env` and restart the relevant service.
-
-### What "ready" looks like
-
-A worker is *fully* ready when its log shows three things in order:
-
-```
-v2: torch.compile warmup done in 18.8s (batches=[1, 2, 4, 8])
-v2: classifier ready — arch=vit_small_patch14_dinov2, classes=223, ...
-RTSPSource connected: rtsp://...
-```
-
-Cold-start budget: ~25-30 s from `python -m app.main` to first detection.
-
-### GPU pinning on the shared DGX
-
-The DGX is shared with other researchers; one neighbour saturating GPU 0
-will spike `last_infer_ms` from ~1 ms to several hundred. Pin to a
-specific physical GPU via `CUDA_VISIBLE_DEVICES` in `.env`. With the
-two-worker setup we use separate GPUs for SEAHIVECAM (GPU 4) and pier
-(GPU 5). Inside the process, both keep `DEVICE=cuda:0` — the env var
-remaps the visible GPU to index 0.
-
-**Don't** set `DEVICE=cuda:4` directly. ultralytics YOLO clobbers
-`CUDA_VISIBLE_DEVICES` on init when given a non-zero device index,
-which breaks the subsequent classifier `torch.jit.load` with
-`device_count() is 1`.
-
-Pre-flight check before restarting:
-
-```bash
-nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader
-```
-
-Pick a GPU at 0 % util and below ~50 GB memory used.
+| Change | On AWS |
+|---|---|
+| Dashboard code, templates, JS, CSS | A merge to `main`. Static files carry `?v=<hash>`; hard-reload if a page still looks stale |
+| Worker code | A merge to `main` (the GPU host restarts the worker) |
+| A new Alembic revision | A merge to `main`: the deploy's migrate Lambda applies it before the dashboard rolls (mind "Applying a schema change" below) |
+| A setting (environment variable) | The dashboard's and the Lambdas' come from the AI stack in `wahoobay/infra` (`wbplatform/stacks/ai.py`, `locations/wahoobay.yaml`): change it there and deploy infra. The worker's come from the `.env` that `deploy/gpu-host/boot.sh` writes, so a new worker setting is a line in `boot.sh` and a merge |
+| The camera's address or password | The secret `/ai/wahoobay/<env>/cameras` (key `seahivecam`), then re-run `boot.sh` |
+| A recording in the camera's place | `deploy/gpu-host/replay.conf` and a merge |
+| New model weights | Publish them to the models bucket (infra `scripts/publish_models.py`); `scripts/fetch_models.py` says how a worker chooses a version and when it replaces the copy it keeps under `/opt/wahoobay-data/models` |
+| No-fish-zone polygons | `/admin/regions.html`, Save; the worker applies it within a minute (see "Polygon mask for false-positive geometry") |
 
 ---
 
-## Upgrading the DGX checkout (one-time, after the October 2026 platform work)
+## Logs
 
-The code the DGX runs became the code that also runs on a laptop and on AWS.
-One maintenance window of a few minutes, in this order, from the repo root
-with the `wahoobay` conda env active. Stop first: `start_all.sh` only starts
-what is not already listening, and the schema change below must not run while
-the old dashboard still refreshes the matviews.
+| What | CloudWatch log group (us-east-1) |
+|---|---|
+| The GPU host's containers (worker, MediaMTX, encoder, Caddy, replay) | `/ai/wahoobay/staging/gpu-host`, kept 30 days |
+| The dashboard | `/aws/apprunner/ai-wahoobay-staging-dashboard/<service id>/application`; `…/service` has App Runner's own deploy events |
+| Jobs, migrations, sensor fetch and write | `/aws/lambda/ai-wahoobay-staging-jobs`, `…-migrate`, `…-fetch`, `…-write`; each job run logs one JSON line and writes a row to `job_runs` |
 
-```bash
-# 1. touch logs/app/MAINTENANCE (pauses the five-minute health check), then stop
-#    the dashboard, the workers and the poller (the "Stopping" section; leave
-#    postgres up). The public demo is down from here to step 6: ~3 min.
-git pull                                                       # 2. the code
-git show dgx-2026-10-24:data/models/classifier_v2/checkpoint_best.pt \
-  > data/models/classifier_v2/checkpoint_best.pt               # 3. the checkpoint git no longer tracks (ignored from now on)
-pip install -r services/dashboard/requirements.txt \
-            -r services/sensestream_poller/requirements.txt    # 4. alembic, SQLAlchemy, boto3, pillow, ... -- not the worker's
-                                                               #    requirements: torch stays exactly as installed
-./scripts/dev/start_postgres.sh                                # 5. postgres is up, so this only runs the migrations: stamp 0001,
-                                                               #    then 0002 and 0003. 0002 builds an index CONCURRENTLY over all of
-                                                               #    detection_events: ~7 min for the DGX's 668M rows (280 GB). The
-                                                               #    script prints no alembic lines; step 7 is the check.
-./scripts/dev/start_all.sh                                     # 6. workers, dashboard, poller and the new jobs loop
-alembic -c db/alembic.ini current                              # 7. check: 0003 (head)
-curl -s localhost:18080/healthz && curl -s localhost:18080/robots.txt
-tail -n 3 logs/app/jobs.log                                    #    ok=True lines every minute
-```
-
-If step 5 stops with `canceling statement due to lock timeout`, something was
-still reading `detection_events`; nothing changed -- stop it and run step 5
-again. An interrupted index build leaves an INVALID index, which the revision
-drops and rebuilds on the retry (`SELECT indexrelid::regclass FROM pg_index
-WHERE NOT indisvalid` should print nothing afterwards).
-
-The checkout must be on `main` for `git pull` to fast-forward (the October
-2026 upgrade found it on a feature branch that `main` already contained). While
-the dashboard runs, `git status` shows `assets/species.xlsx` modified: the sheet
-poller rewrites that tracked file on every sync. `git checkout -- assets/species.xlsx`
-before a `git pull`; the next poll rewrites it.
-
-Nothing in `.env` has to change: the launchers export the Wahoo Bay values
-(`SENSESTREAM_DEPLOYMENT_URI=wahoo_2`, `TZ=America/New_York`,
-`FEATURE_REVIEW_TOOL=true`, `SENSESTREAM_SYNTHETIC=true`) and derive
-`FRAMES_URL` from `FRAMES_DIR` the same way in the worker and the dashboard
-launchers. The old `DASHBOARD_MAIL_*` names still work; with no mail setting
-the dashboard now logs sign-up links to `logs/app/dashboard.log` instead of
-holding them. New frames land under `<FRAMES_DIR>/wahoobay/YYYY/MM/DD/HH/`;
-old rows keep their absolute paths and still open.
-
-**Trying changes on the DGX.** Production owns the ports (5432, 8081-8083,
-18080) and the database, so a second checkout there is for `pytest` (with a
-scratch database: `TEST_DATABASE_URL` pointing at a database that is not
-`wahoobay`) and `ruff`, not for a second compose stack. Run the compose
-stack (`make up`, `make seed`) on a laptop, where the ports are free.
-
-## Stopping
-
-Pause the five-minute health check first (`touch logs/app/MAINTENANCE`,
-see "Recovery from a DGX reboot"), or it restarts whatever you stop.
+The Lambda and App Runner groups keep everything (no retention set).
 
 ```bash
-# kill by listening port — robust against pid-file drift
-for port in 8081 8083 18080 8082; do
-  ss -ltnp 2>/dev/null | grep ":$port" \
-    | grep -oP 'pid=\K\d+' | xargs -r kill -TERM
-done
-
-# stop the cloudflared tunnel
-pkill -f 'cloudflared tunnel'
-
-# stop postgres
-./scripts/dev/stop_postgres.sh
+aws logs tail /ai/wahoobay/staging/gpu-host --region us-east-1 --since 1h --filter-pattern ERROR
+aws logs tail /aws/lambda/ai-wahoobay-staging-jobs --region us-east-1 --since 2h
 ```
 
-Graceful shutdown gives each subprocess up to ~5 s *per background
-task* to drain in-flight work (save queue, frame-stats flush, pg
-connection close) before that task is abandoned — not a flat ~5 s for
-the whole process. The dashboard alone cancels five background tasks
-(SLO checker, matview refresher, sheet poller, session pruner, review
-pool) in sequence on shutdown, then closes its DB pool (its own 5 s
-default timeout), so its worst case is ~25-30 s, not "a few seconds" — this
-matters because a cancelled task's in-flight Postgres statement can be
-slow to unwind (the matview refresher's REFRESH has been observed
-taking 47 s, 75 s, and 144 s) and psycopg has to let that drain before
-honouring the cancellation; it's bounded now (each task gets at most
-~5 s before shutdown moves on and abandons it) rather than blocking on
-the slowest one indefinitely, which is what it did before. If you
-`kill -9` you'll get warnings about un-released semaphores in the log;
-harmless but ugly.
+The worker's per-detection event log (`events-YYYY-MM-DD.jsonl`, a durable mirror of `detection_events`) is on the
+GPU host's disk under `/opt/wahoobay-data/logs/events/`.
 
 ---
 
-## Recovery from a DGX reboot
-
-Every five minutes, this entry in the user crontab runs
-`scripts/dev/health_check.sh`:
-
-```
-*/5 * * * * /raid/scratch/dzimmerman2021/wahoobay/scripts/dev/health_check.sh >> /raid/scratch/dzimmerman2021/wahoobay/logs/app/health_check.log 2>&1
-```
-
-The check looks at the five ports (5432, 8081, 8083, 18080, 8082) and the
-jobs loop. When everything is up it only rewrites `logs/app/health_check.last`
-(the heartbeat: its mtime is the last time cron ran it) and prints nothing.
-When something is down it writes what was missing to
-`logs/app/health_check.log` and runs `start_all.sh`, which follows "Starting
-from cold" above (postgres, both workers, dashboard, poller, jobs loop) and
-skips any service whose port is already listening — so it is also the
-quickest by-hand restart:
-
-```bash
-./scripts/dev/start_all.sh
-```
-
-Before stopping anything on purpose, pause the check, or it brings the
-service back within five minutes:
-
-```bash
-touch logs/app/MAINTENANCE   # health_check.sh only heartbeats while this exists
-rm logs/app/MAINTENANCE      # when the stack is back
-```
-
-It never kills a process: a dashboard that listens but fails `/healthz` is
-logged, and restarting it stays a by-hand decision ("Restarting one service").
-
-Why not `@reboot`: that entry (2026-10-07 to 2026-10-25) ran once per boot,
-and only if cron had this crontab loaded at that moment. After the October
-2026 `/raid` restore it did not — probably because the account is resolved
-through SSSD, which started two seconds before cron — and the stack stayed
-down for eight days with nothing in the log to show for it. A recurring entry
-gets a new chance every five minutes, and a stale heartbeat is the signal
-that cron itself is not running the crontab: re-save it with
-`crontab -l | crontab -`.
-
-Neither starts the public tunnel. A restarted tunnel has a new URL that has
-to be sent to the people using it, and the lab machine should only be
-exposed while demoing. Start it by hand (step 5 above) when you need it.
-
-After a reboot, check `logs/app/start_all.log` and the quick health check.
-The workers use the GPUs pinned in `.env`; if a neighbour has taken them by
-then, see "GPU pinning" above.
-
----
-
-## Restarting one service
-
-The pattern is the same for all of them: kill by listening port, then
-re-run the launcher script. `touch logs/app/MAINTENANCE` first and `rm` it
-afterwards, or the five-minute health check may race you for the port.
-Common cases:
-
-```bash
-# Just the SEAHIVECAM worker
-ss -ltnp 2>/dev/null | grep ':8081' | grep -oP 'pid=\K\d+' | xargs -r kill -TERM
-sleep 5  # let the inference subprocess + save thread drain
-nohup ./scripts/dev/run_worker.sh > logs/app/worker.log 2>&1 &
-
-# Just the pier worker
-ss -ltnp 2>/dev/null | grep ':8083' | grep -oP 'pid=\K\d+' | xargs -r kill -TERM
-sleep 5
-nohup ./scripts/dev/run_worker_pier.sh > logs/app/worker_pier.log 2>&1 &
-
-# Just the dashboard
-ss -ltnp 2>/dev/null | grep ':18080' | grep -oP 'pid=\K\d+' | xargs -r kill -TERM
-# Wait for the port to actually free rather than sleeping a fixed time:
-# graceful shutdown cancels four background tasks with a 5 s bound each,
-# so it can take ~20 s when a matview refresh is mid-flight. Relaunching
-# while the old process still holds :18080 fails to bind and leaves the
-# dashboard down.
-while ss -ltn 2>/dev/null | grep -q ':18080 '; do sleep 1; done
-# >> not >: the dashboard log is months of history; > truncates it.
-nohup ./scripts/dev/run_dashboard.sh >> logs/app/dashboard.log 2>&1 &
-```
-
-The smoother resets on worker restart (which is fine — its in-memory
-state isn't precious; the persisted detections are unaffected). Track
-IDs restart at 1 after the restart.
-
----
-
-## When does a change require a restart?
-
-| Change | Which service | Restart needed? |
-|---|---|---|
-| Dashboard HTML / JS / CSS | dashboard | **No** — `?v=<mtime-hash>` query string cache-busts; just hard-refresh the browser |
-| Dashboard Python code | dashboard | **Yes** — restart dashboard |
-| Worker Python code | worker(s) | **Yes** — restart worker(s) |
-| `.env` value | depends on knob — all if shared | **Yes** for the affected service(s) |
-| A new Alembic revision in `db/migrations/versions/` | none directly | **No** — but the running DB needs it: `alembic -c db/alembic.ini upgrade head` with the care described in "Applying a schema change to the live database" below |
-| `data/camera_negative_regions.json` (polygon mask) | worker(s) | **Yes** — workers load the file at subprocess startup |
-| `assets/celebrities.json` | dashboard | **No** — hot-reloaded automatically by the sheet poller; manual force: `POST /api/admin/refresh_sheets` |
-| `assets/species_manifest.json` (common-name fallbacks) | dashboard | **No** — same hot-reload path |
-| Curated `COMMON_NAMES` dict in `common_names.py` | dashboard | **Yes** — Python code change, restart |
-| New classifier checkpoint at `data/models/classifier_v2/checkpoint_best.pt` | worker(s) | **Yes** — restart worker(s); torch.compile re-warms (~25 s) |
+## Changes that touch the data
 
 ### Frames and models behind URLs
 
@@ -340,16 +133,6 @@ absolute paths and still open. Model weights come from `MODELS_URL`
 `scripts/publish_models.py`); a worker container fetches them at start with
 `scripts/fetch_models.py` unless `/data/models` already holds files.
 
-**DGX, one-time after the pull that removed it from git:**
-`data/models/classifier_v2/checkpoint_best.pt` is no longer tracked (it lives
-in the models bucket as `classifier_v2/dgx-2026-10-24`), so `git pull` deletes
-the working-tree copy. Restore it before the next worker restart:
-
-    git show dgx-2026-10-24:data/models/classifier_v2/checkpoint_best.pt > data/models/classifier_v2/checkpoint_best.pt
-
-It is ignored from then on. The running worker is unaffected (the weights are
-in memory).
-
 ### Applying a schema change to the live database
 
 The schema is owned by Alembic: `db/alembic.ini` and `db/migrations/versions/`.
@@ -361,13 +144,15 @@ database gets every column); later revisions are small and additive.
 - **Fresh database**: `alembic -c db/alembic.ini upgrade head`. This is what
   `start_postgres.sh`, the compose `migrate` service (`make migrate`) and the
   AWS migrate Lambda run.
-- **The DGX database** (built by `init.sql` over the years, no
-  `alembic_version` table): one-time `alembic -c db/alembic.ini stamp 0001`,
-  then `upgrade head`. `start_postgres.sh` does exactly this itself when it
-  finds the tables but no `alembic_version`, so a cold start needs nothing
-  extra. Revision 0002 (`location_id` on every data table) adds the column as
-  a catalog-only change and builds its indexes `CONCURRENTLY`, so it can run
-  while the workers write.
+- **On AWS** the migrate Lambda runs `upgrade head` in every deploy, before
+  the dashboard rolls; a failure stops the deploy there. The worker of the
+  previous build is still writing while it runs, so the lock rules below
+  apply to every revision. (The DGX database predated Alembic and was stamped
+  at `0001` once; `start_postgres.sh` still does that for a bare-metal
+  database that has the tables but no `alembic_version`.) Revision 0002
+  (`location_id` on every data table) adds the column as a catalog-only
+  change and builds its indexes `CONCURRENTLY`, so it can run while the
+  workers write.
 - **Writing a change**: `alembic -c db/alembic.ini revision -m "<what>"`,
   then fill in `upgrade()` / `downgrade()`. Keep statements idempotent
   (`IF NOT EXISTS`), build large indexes `CONCURRENTLY` inside
@@ -387,7 +172,9 @@ continuously: stop the dashboard, run the migration, start it again (a few
 seconds of downtime). A revision that must do either should set
 `lock_timeout` (`op.execute("SET lock_timeout = '5s'")`) so it gives up
 rather than queue behind a long refresh; a timed-out migration changed
-nothing and can be retried in a minute.
+nothing and can be retried in a minute. On AWS the matview refresh is a job
+every 30 minutes rather than a loop every minute, so the queueing is rarer,
+not impossible.
 
 Before touching production, see what a revision would do:
 
@@ -398,45 +185,12 @@ alembic -c db/alembic.ini history          # what exists
 
 ---
 
-## Logs
-
-All long-running processes write to `logs/app/`:
-
-```
-logs/app/worker.log          # SEAHIVECAM worker pipeline + provenance + smoother + autoswitch
-logs/app/worker_pier.log     # pier cam worker (same format)
-logs/app/dashboard.log       # FastAPI access log + SLO checker + sheet poller + reload events
-logs/app/poller.log          # SenseStream probe results, idle-mode messages
-logs/app/cloudflared.log     # tunnel status + the assigned public URL
-logs/app/postgres.log        # Postgres server log
-logs/events/events-YYYY-MM-DD.jsonl   # per-detection JSONL audit trail (durable backup of detection_events)
-```
-
-There is no log rotation configured at the moment — if disk fills,
-manually trim or run `logrotate`.
-
-Useful one-liners:
-
-```bash
-# Last 50 worker errors
-grep -E 'ERROR|Traceback' logs/app/worker.log | tail -50
-
-# Current fps from worker stats
-curl -s http://127.0.0.1:8081/stats | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-print(f'seen={d[\"frames_seen\"]} inferred={d[\"frames_inferred\"]} infer_ms={d[\"last_infer_ms\"]:.1f}')"
-
-# All ERROR-level lines from the dashboard in the last hour
-awk -v cutoff="$(date -u -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')" '
-  $0 >= cutoff && /ERROR/' logs/app/dashboard.log
-```
-
----
-
 ## Configuration
 
-All knobs are env vars. `.env.example` documents every one. Major blocks:
+All knobs are env vars. `.env.example` documents every one. On AWS the
+dashboard's and the Lambdas' values come from the AI stack in `wahoobay/infra`,
+and the worker's from the `.env` that `deploy/gpu-host/boot.sh` writes ("What a
+change needs" above). Major blocks:
 
 | Block | Vars |
 |---|---|
@@ -456,7 +210,7 @@ All knobs are env vars. `.env.example` documents every one. Major blocks:
 | Features | `FEATURE_REVIEW_TOOL`, `LIVE_VIDEO_EMBED_URL`, `ROBOTS`, `ORIGIN_VERIFY_SECRET` |
 | Mail | `MAIL_BACKEND` (`console` default), `MAIL_SMTP_HOST/PORT/USER/PASSWORD/STARTTLS`, `MAIL_FROM` (the `DASHBOARD_MAIL_*` / `DASHBOARD_SMTP_*` spellings still count) |
 | Image saves (3 modes) | `SAVE_TIMELAPSE_SECONDS`, `SAVE_PER_DETECTION`, `SAVE_INTERESTING_ONLY`, `SAVE_INTERESTING_QUIET_SECONDS`, `SAVE_INTERESTING_MIN_CONF`, `SAVE_MIN_TRACK_GAP_SECONDS` |
-| Negative regions | `NEGATIVE_REGIONS_PATH` |
+| Negative regions | `NEGATIVE_REGIONS_URL` (s3:// on AWS; wins when set), else `NEGATIVE_REGIONS_PATH` |
 | HTTP / dashboard | `WORKER_HTTP_PORT`, `WORKER_HTTP_PORT_PIER`, `WORKER_URL_PIER`, `DASHBOARD_PORT`, `DASHBOARD_HOST`, `JPEG_QUALITY`, `LIVE_STREAM_MAX_FPS` |
 | Accounts / auth (see "Accounts and roles" below) | `DASHBOARD_COOKIE_SECURE`, `DASHBOARD_SESSION_TTL_H`, `DASHBOARD_SESSION_ABS_TTL_D`, `DASHBOARD_LOGIN_MAX_FAILS`, `DASHBOARD_LOGIN_LOCKOUT_MIN`, `DASHBOARD_REGISTRATION_OPEN`, `DASHBOARD_REGISTER_MAX_PER_IP_H`, `DASHBOARD_RESET_TTL_MIN`, `DASHBOARD_VERIFY_TTL_H`, `DASHBOARD_MAIL_BACKEND`, `DASHBOARD_SMTP_*`, `DASHBOARD_PUBLIC_BASE_URL` |
 | Drift / model-ops / jobs | `FRAME_STATS_EVERY_N_FRAMES`, `JOBS_INTERVAL_S` (`run_jobs.sh`: matview refresh + alert rules) |
@@ -506,7 +260,10 @@ bytes of 720p — even with the shared-memory hop in place (which is
 zero-copy and unaffected), the cv2 raw-JPEG encode for the
 `/stream_raw.mjpeg` MJPEG stream is per-frame and bottlenecks the
 FrameTap thread above 720p. **Do not raise to 1080p without also
-verifying steady-state fps doesn't collapse.** Measure with:
+verifying steady-state fps doesn't collapse.** On AWS the camera's URL, with
+its `resolution=` and `compression=`, is the `seahivecam` value in the cameras
+secret; the worker itself reads MediaMTX. Measure where the worker runs (on the
+GPU host, in an SSM session):
 
 ```bash
 g1=$(curl -s "http://127.0.0.1:8081/stats" | python3 -c "import json,sys;print(json.load(sys.stdin)['frames_seen'])")
@@ -520,32 +277,6 @@ the pier cam (which is set to 15 fps by camera config too).
 
 ---
 
-## Public tunnel lifecycle
-
-The current tunnel is a **quick tunnel** (no Cloudflare account,
-random `*.trycloudflare.com` URL). The URL **changes on every
-cloudflared restart**, including DGX reboots. After a restart, fetch
-the new URL:
-
-```bash
-grep -aEo 'https://[a-z0-9-]+\.trycloudflare\.com' logs/app/cloudflared.log | head -1
-```
-
-…and re-share with anyone using it.
-
-**Lab policy:** the DGX cannot be a permanent public host. The
-Cloudflare quick tunnel is intentionally ephemeral so the dashboard
-is reachable for live demos but the URL doesn't get circulated as a
-durable resource. Cloud migration (AWS) will land the permanent URL.
-
-For a **persistent URL** (e.g. `wahoobay-fish.example.com`), upgrade to
-a named tunnel: needs a Cloudflare account + a domain Cloudflare can
-manage DNS for. About 10 minutes of setup. See
-<https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/>.
-Don't do this on the DGX — wait for the cloud migration.
-
----
-
 ## Admin endpoints
 
 A few mutation endpoints exist beyond the reviewer-corrections flow:
@@ -555,14 +286,25 @@ A few mutation endpoints exist beyond the reviewer-corrections flow:
 `/admin/regions.html` — interactive UI for drawing per-camera
 no-fish-zone polygons (the SEAHIVE holes, dock pilings, etc.). Pick a
 camera, click on a frozen snapshot to add vertices, double-click to
-commit, Save to write the JSON file. **Restart the workers after
-saving** — they load the file once at subprocess start.
+commit, Save. The page writes the regions to `NEGATIVE_REGIONS_URL`: on
+AWS `s3://ai-wahoobay-<env>-frames/config/camera_negative_regions.json`
+(the infra stack gives App Runner the URL, `boot.sh` gives it to the
+worker); on a laptop, the file at `NEGATIVE_REGIONS_PATH`. The worker
+reads the same URL at start and again every minute, so a save applies
+within a minute with no restart; it logs each change once
+(`negative-regions filter loaded: …`).
 
 The companion API endpoints (read + write) are documented in
-[`docs/architecture.md`](architecture.md). Saving now requires an
-authenticated admin session (see "Accounts and roles" below) — the
-page itself still isn't network-authenticated, so access it via SSH
-tunnel rather than through the public tunnel.
+[`docs/architecture.md`](architecture.md). Saving requires an admin
+session (see "Accounts and roles" below).
+
+Until the first Save on AWS there is nothing at that URL: the worker logs
+`negative-regions filter: config s3://…/config/camera_negative_regions.json
+not found, disabled` and drops nothing. That is the same as the committed
+`data/camera_negative_regions.json`, which has no polygons for either
+camera (the DGX's copy had none either, checked 2026-11-22). A read that
+fails (S3 unreachable, a malformed object) leaves the regions in force as
+they were and logs a warning once.
 
 ### Force-refresh the Google Sheet
 
@@ -571,11 +313,11 @@ the `X-Requested-With: wahoobay` CSRF header. From a shell, log in and
 reuse the cookie jar:
 
 ```bash
-curl -s -c /tmp/wb_cookies -X POST http://127.0.0.1:18080/api/auth/login \
+curl -s -c /tmp/wb_cookies -X POST https://staging-ai.wahoobay.net/api/auth/login \
   -H "Content-Type: application/json" -H "X-Requested-With: wahoobay" \
   -d '{"username":"<admin username>","password":"<admin password>"}'
 
-curl -s -b /tmp/wb_cookies -X POST http://127.0.0.1:18080/api/admin/refresh_sheets \
+curl -s -b /tmp/wb_cookies -X POST https://staging-ai.wahoobay.net/api/admin/refresh_sheets \
   -H "X-Requested-With: wahoobay"
 ```
 
@@ -611,13 +353,14 @@ account is waiting for approval". A `disabled` account can't sign in. See
 
 **Creating the first admin.** Self-registration always creates a
 `pending` account, and approving one requires an admin who doesn't
-exist yet on a fresh database. Bootstrap it from the command line
-instead — this writes the account active and pre-approved, and never
-accepts the password as a CLI argument (prompts with `getpass`, since
-this is a shared machine where `ps` shows other users' command lines):
+exist yet on a fresh database. On AWS, `seed-staging` creates it from
+the app secret's `admin_password` (README, "Deploying (AWS)"). Anywhere
+with access to the database, bootstrap it from the command line instead
+— this writes the account active and pre-approved, and never accepts the
+password as a CLI argument (it prompts with `getpass`, so the password
+never shows up in `ps` or the shell history):
 
 ```bash
-conda activate wahoobay
 python scripts/create_user.py --username admin --display-name "Your Name" \
   --email you@example.org --role admin
 ```
@@ -631,9 +374,13 @@ and assigns a role in one step —
 to be verified first; verification and approval are independent
 checks.
 
-**The manual mail backend.** `DASHBOARD_MAIL_BACKEND=manual` (the
-default — there's no SMTP relay configured on the DGX) never actually
-sends the verification/reset email; it logs that a message was held
+**Mail.** On AWS the dashboard sends sign-up, verification and reset
+mail through Amazon SES (`MAIL_BACKEND=ses`, from `no-reply@wahoobay.net`,
+set by the AI stack). Locally the default, `console`, writes each message,
+link included, to the log.
+
+**The manual mail backend.** `MAIL_BACKEND=manual` (the old default,
+from when no SMTP relay was configured) never actually sends the verification/reset email; it logs that a message was held
 and moves on, without ever printing the raw token or link (raw tokens
 never appear in logs), so the link isn't retrievable after the fact.
 In practice this means: don't rely on the email-verification step in
@@ -663,7 +410,8 @@ fix needs to be in place).
 **Closing signups.** `DASHBOARD_REGISTRATION_OPEN=false` closes
 `/register` and `POST /api/auth/register` (403) without a code change
 or restart-time flag — just flip the env var and restart the
-dashboard process. Existing accounts are unaffected either way.
+dashboard process (on AWS: a value in the AI stack's App Runner
+environment, in `wahoobay/infra`, and an infra deploy). Existing accounts are unaffected either way.
 
 ---
 
@@ -723,7 +471,8 @@ genuinely empty probe earns — a timeout means "we don't know," not
 "nothing there"; the identify lane has no per-species key to back off
 by, so a timed-out identify probe is simply retried, still bounded by
 the run's own probe/time budget. Its log lines start with
-`review pool:` in `logs/app/dashboard.log`; each run logs what it
+`review pool:` in the dashboard's log (on AWS, its App Runner
+application log group); each run logs what it
 added, how many probes it used, and any timeouts or errors.
 
 - **Status:** `GET /api/review/status` (admin) shows the last run, item
@@ -736,8 +485,8 @@ added, how many probes it used, and any timeouts or errors.
   If computing the progress summary itself times out, or a
   `GET /api/review/browse` query times out, the endpoint returns 503
   instead of hanging or 500ing; retry shortly.
-- **Turn it off:** set `REVIEW_POOL_ENABLED=false` in `.env` and restart
-  the dashboard (`0`, `no` and `off` work too, in any case; any other
+- **Turn it off:** set `REVIEW_POOL_ENABLED=false` in the dashboard's
+  environment (on AWS, the AI stack in `wahoobay/infra`) and restart the dashboard (`0`, `no` and `off` work too, in any case; any other
   value leaves it on). Queued boxes keep being served; nothing new is
   added.
 - **Date window:** each reviewer can limit *their own* queue to a range of
@@ -761,7 +510,7 @@ added, how many probes it used, and any timeouts or errors.
 The review tool's tables and columns are in
 `db/migrations/2026-09-24-review-tool.sql` (part of the Alembic baseline,
 `db/migrations/versions/0001_baseline.sql`, so a fresh database has them).
-It was applied to the DGX by hand (`psql -1 -f` of that file, 2026-09-26) before Alembic; a fresh database gets it from the baseline, so there is nothing to apply any more. It is idempotent. It changes `detection_corrections.event_id` to
+It was applied to the old DGX database by hand (`psql -1 -f` of that file, 2026-09-26) before Alembic; a fresh database, staging's included, gets it from the baseline, so there is nothing to apply any more. It is idempotent. It changes `detection_corrections.event_id` to
 `ON DELETE RESTRICT`: deleting a detection that has a human verdict now
 fails instead of silently deleting the verdict.
 
@@ -831,15 +580,12 @@ panels empty a day after the recording starts; the home tour uses the Reports pa
 
 ## Common issues
 
-### "Can't reach the dashboard from my laptop"
+### "The site shows a maintenance page"
 
-VS Code Remote-SSH normally auto-forwards 18080. Verify in the PORTS
-panel. If it dropped: PORTS → "Forward a Port" → 18080. Or use a
-manual SSH tunnel from a terminal: `ssh -L 18080:localhost:18080
-dgx1`.
-
-For the admin endpoints (`/admin/regions.html`, etc.) use the same
-tunnel — do not route them through the public Cloudflare tunnel.
+The site was stopped (the cost dashboard's stop button) or is still coming
+back. Start it with the infra README's "Restart the AI site after a stop".
+If AWS has no GPU instance free, `restart_ai` says so and changes nothing;
+retry every 15 to 30 minutes.
 
 ### "Dashboard loaded but everything is empty"
 
@@ -850,22 +596,30 @@ fix.
 
 On a fresh install there is nothing to show until a worker writes or the
 sample is loaded (`make seed` with compose, `python -m app.seed` on bare
-metal). The fish counter (`species_sightings_mat`) only moves when the jobs
-loop runs (`run_jobs.sh`; `logs/app/jobs.log`), since the dashboard holds no
-refreshers of its own.
+metal). The fish counter (`species_sightings_mat`) only moves when the
+`refresh_matviews` job runs (every 30 minutes on AWS staging; `run_jobs.sh`
+on bare metal), since the dashboard holds no refreshers of its own. While
+staging plays a recording nothing is recorded, so its 24-hour panels are
+empty a day after the recording starts.
 
 ### "Worker isn't writing detections"
 
 Check `/api/stats`:
 
-- `running: false` → worker crashed; tail `logs/app/worker.log`.
+- a recording is playing (`deploy/gpu-host/replay.conf` names one for the
+  environment) → nothing is written, by design ("Where it runs").
+- `running: false` → worker crashed; read its log (the GPU host's log
+  group on AWS).
 - `autoswitch.is_dark: true` → the live camera is dark (sunset / lens
   blocked / cable issue), pipeline is in fallback mode and
   **deliberately not writing video data.** The dashboard banner says
   so. Resolves on its own when light returns.
-- `frames_seen` not advancing → primary video source unreachable. Try
-  the URL from the DGX with `ffprobe -rtsp_transport tcp -i '<url>'`
-  to verify. Camera credentials live in `.env`; if they've rotated,
+- `frames_seen` not advancing → primary video source unreachable. On
+  AWS MediaMTX pulls the camera, so its lines in the GPU host's log group
+  say so first. Try the URL from the GPU host with
+  `ffprobe -rtsp_transport tcp -i '<url>'` (the `encoder` container has
+  `ffprobe`). The camera's URL and credentials live in the secret
+  `/ai/wahoobay/<env>/cameras` (key `seahivecam`); if they've rotated,
   Nigel Cardwell is the point of contact for the City of Pompano
   Beach (pier cam) and Wahoo Bay program staff for SEAHIVECAM.
 - `frames_seen` advancing but `frames_inferred` flat → inference
@@ -880,49 +634,14 @@ meaningful. Right after a fresh start there's nothing yet; the SLO
 rules dependent on the drift view will be silent (not alerting),
 which is correct.
 
-### "Postgres won't start"
-
-```bash
-ls pgdata/PG_VERSION                     # cluster initialised?
-cat logs/app/postgres.log | tail         # last error?
-pg_ctl -D pgdata status                  # is it actually running?
-```
-
-`FATAL: data directory "pgdata" has invalid permissions` means the
-directory is not mode 0700 or 0750; a `/raid` snapshot restore left every
-directory at 2755 in October 2026. `chmod 700 pgdata` and start again; the
-data is intact.
-
-If the cluster is corrupted or you want to start fresh:
-
-```bash
-./scripts/dev/stop_postgres.sh
-mv pgdata pgdata.broken-$(date +%s)
-./scripts/dev/start_postgres.sh
-```
-
-This wipes everything; only do it if you've exhausted recovery and the
-data isn't precious (it usually is — be careful).
-
-### "Cloudflare tunnel is dead but the dashboard is still up"
-
-`cloudflared` exited but the dashboard is fine — restart just the
-tunnel:
-
-```bash
-nohup ~/.local/bin/cloudflared tunnel --url http://localhost:18080 \
-  --no-autoupdate > logs/app/cloudflared.log 2>&1 &
-```
-
-Get the new URL from the log.
-
 ### "Throughput dropped below the camera's native fps"
 
 Camera streams at 15 fps but workers are only inferring at 13 fps? Three
 candidate culprits, in order of likelihood:
 
-1. **GPU contention** — another job on the same physical GPU. Check
-   `nvidia-smi`; pin to a free GPU.
+1. **GPU contention** — on the GPU host the worker shares the L4 with
+   the NVENC encoder only (9 % GPU and 1 % NVENC at bring-up); check
+   `nvidia-smi` there. (On the shared DGX it was other people's jobs.)
 2. **JPEG re-encode bottleneck on the raw stream** — at high
    `JPEG_QUALITY` and high resolution, the cv2 imencode call inside
    FrameTap can cap the grab rate. Lower `JPEG_QUALITY` or drop
@@ -934,6 +653,9 @@ candidate culprits, in order of likelihood:
 ### "v2 classifier load fails: missing checkpoint"
 
 Worker log shows `FileNotFoundError: .../classifier_v2/checkpoint_best.pt`.
+On AWS the worker's entrypoint fetches the weights from the models bucket
+(`scripts/fetch_models.py`) into `/opt/wahoobay-data/models` on the host;
+a failed fetch or checksum shows in its log just before this error. Locally:
 Confirm the file exists at the configured path (`CLASSIFIER_V2_CHECKPOINT`
 in `.env`). For the in-repo path, the file is gitignored and not
 distributed — copy it from `data/baseline_runs/<best_run>/checkpoint_best.pt`
@@ -947,9 +669,12 @@ Worker log on startup should show:
 negative-regions filter loaded: seahivecam=N@1280x720, pier_cam=M@1280x720
 ```
 
-If it says "no polygons; pass-through," then the JSON file's `regions`
+If it says "no polygons; pass-through," then the config's `regions`
 arrays are empty for those cameras. Draw polygons at
-`/admin/regions.html`, Save, restart the workers.
+`/admin/regions.html` and Save; the worker applies them within a minute.
+`config … not found, disabled` means nothing has been saved at
+`NEGATIVE_REGIONS_URL` yet (on AWS, before the first Save): see "Polygon
+mask for false-positive geometry".
 
 ### "Sheet poller flagged 'sheet_changed' but I didn't edit anything"
 
@@ -964,95 +689,26 @@ diff <(git show HEAD:assets/species.xlsx | sha256sum) <(sha256sum assets/species
 
 ---
 
-## Disk usage
+## Storage and backups
 
-The system writes:
+- **Frames**: S3 `ai-wahoobay-staging-frames`, keys
+  `<location>/YYYY/MM/DD/HH/<name>.jpg`. The bucket has no lifecycle rule,
+  so nothing expires (checked 2026-11-23).
+- **Database**: Aurora's automated backups, kept 7 days, with
+  point-in-time restore inside that window (checked 2026-11-23). A restore
+  makes a new cluster; pointing the stack at it is an infra change.
+- **Reviewers' work**: the `archive_labels` job (every 30 minutes) copies
+  the verdicts, drawn boxes, skips and frames of the accounts infra lists in
+  `ai.label_archive_accounts` to
+  `s3://platform-wahoobay-models/labels/<env>/<account slug>/`, with a new
+  snapshot only when something changed.
+- **On the GPU host**: the weights under `/opt/wahoobay-data/models`
+  (fetched again if lost), the event log under
+  `/opt/wahoobay-data/logs/events/`, recordings under
+  `/opt/wahoobay-data/replay/`.
 
-- `frames/YYYY/MM/DD/HH/<frame>.{jpg, annotated.jpg, coco.json}` — at
-  the configured save cadence. With default settings (timelapse 60 s,
-  interesting-only on detections), grows about 1-2 GB/day **per
-  camera**. With two cameras that's 2-4 GB/day.
-- `logs/events/events-YYYY-MM-DD.jsonl` — one line per detection per
-  frame, ~150-500 MB/day at typical activity.
-- Postgres tables — `detection_events` is the largest. About 30 M
-  rows / ~10 GB after a few weeks of continuous operation. Hourly
-  matview refreshes add ~10 MB/day.
-
-There is no automatic retention. To clean up old frames or events,
-write a cron job or use the export pipeline to ship to S3 and delete
-locally. None of this is set up yet.
-
-For an emergency wipe of detection-side data while preserving reviewer
-corrections + ingest pipelines:
-
-```sql
--- inside psql -h 127.0.0.1 -U wahoobay wahoobay
-BEGIN;
-ALTER TABLE detection_corrections DROP CONSTRAINT IF EXISTS detection_corrections_event_id_fkey;
-TRUNCATE TABLE detection_events, saved_frames, frame_stats RESTART IDENTITY;
-ALTER TABLE detection_corrections
-  ADD CONSTRAINT detection_corrections_event_id_fkey
-  FOREIGN KEY (event_id) REFERENCES detection_events(id) ON DELETE CASCADE NOT VALID;
-REFRESH MATERIALIZED VIEW species_sightings_mat;
-REFRESH MATERIALIZED VIEW species_sightings_hourly_mat;
-COMMIT;
-```
-
-The `NOT VALID` is intentional — existing orphan corrections (their
-`event_id` no longer matches anything) survive; future inserts get the
-constraint enforced.
-
-Then delete the frames:
-
-```bash
-mv frames frames.deleting && mkdir frames && nohup rm -rf frames.deleting &
-```
-
-The `mv` + background `rm` keeps inference writing to a fresh tree
-immediately; the deletion of ~10 M files takes ~10 min in the
-background.
-
----
-
-## Backups
-
-`scripts/dev/backup_db.sh` runs nightly at 02:30 from the user's
-crontab (`crontab -l`) and appends one line per run to
-`logs/app/backup.log` (`… ok dump=… labels=N -> …` or `FAILED …`). It
-keeps what can't be re-derived from the cameras:
-
-- `wahoobay-<stamp>.dump`: `pg_dump --format=custom` of the whole schema
-  and every table's data **except** the camera-derived bulk
-  (`detection_events`, `saved_frames`, `frame_stats`; matview data is
-  never dumped). That covers accounts, every verdict, the review tables,
-  alerts, and the sensor and weather history, about 10 MB a night.
-- `labels-<stamp>.csv.gz`: every row of `detection_corrections` joined
-  with its detection (camera, timestamp, frame, model box and guess) and
-  its saved frame's path. It is self-contained, so volunteers' work stays
-  usable even if `detection_events` itself were lost.
-
-Files are mode 0600 (they hold emails and password hashes). They're
-written to `/raid/scratch/dzimmerman2021/backups/wahoobay-db/`, and files
-older than 30 days are pruned. There is no second copy by default: the home
-directory (`/mnt/beegfs/home/...`) is on the DGX's nearly full root disk and
-must not hold project data (2026-10-01). Set `BACKUP_COPY_DIR` to add a
-copy elsewhere; an off-machine copy waits for the cloud move. Run it by hand
-at any time: `scripts/dev/backup_db.sh`.
-
-To restore:
-
-- **One table from last night** (someone deleted verdicts, say): restore
-  the dump into a scratch database and copy the rows you need back.
-  ```bash
-  createdb wahoobay_restore
-  pg_restore --no-owner -d wahoobay_restore <dump>    # FKs to detection_events will fail; the rows load
-  ```
-  Then `DROP DATABASE wahoobay_restore;` when done.
-- **The labels alone**: the CSV loads anywhere
-  (`\copy … FROM PROGRAM 'zcat labels-….csv.gz' WITH (FORMAT csv, HEADER)`).
-
-`frames/` and `logs/` are append-only and easy to `rsync` somewhere
-durable.
+The DGX's nightly `pg_dump` and labels CSV stopped with the DGX
+([`dgx-history.md`](dgx-history.md), "Backups").
 
 ---
 
@@ -1069,7 +725,9 @@ Combined, you can fully reproduce any historical detection. Run
 `/api/provenance/current` on the dashboard to see the current
 fingerprint of running rows.
 
-When you cut a new classifier checkpoint:
+When you cut a new classifier checkpoint on AWS, publish it to the models
+bucket and have the worker fetch it, as `scripts/fetch_models.py`
+describes; it re-hashes when it starts. On bare metal:
 
 1. Drop the new `checkpoint_best.pt` + `classes.json` + `config.json`
    into `data/models/classifier_v2/`.

@@ -181,7 +181,14 @@ def run_inference_worker(
     provenance = compute_provenance(cfg)
 
     classifier = _Pipeline(cfg)
-    negative_filter = NegativeRegionFilter(getattr(cfg, "negative_regions_path", None))
+    negative_filter = NegativeRegionFilter(getattr(cfg, "negative_regions_url", None))
+    # The dashboard's admin page saves the regions to the same URL; re-reading them on a thread of their own
+    # (negative_regions.RELOAD_INTERVAL_S) applies a save without restarting the worker.
+    regions_stop = threading.Event()
+    if negative_filter.url:
+        threading.Thread(
+            target=negative_filter.watch, args=(regions_stop,), name="negative-regions", daemon=True
+        ).start()
     event_log = EventLog(cfg.events_log_dir)
     saver = ImageSaver(cfg)
 
@@ -481,6 +488,7 @@ def run_inference_worker(
     except Exception:
         log.exception("inference subprocess: unhandled error, exiting")
     finally:
+        regions_stop.set()
         # Drain pending saves before pg is closed so record_saved_frame
         # rows for queued jobs still land. Sentinel + join with timeout.
         try:

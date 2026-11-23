@@ -39,15 +39,16 @@ to their own processes for blast-radius and CUDA-state reasons:
 
 | Service | Module | Purpose |
 |---|---|---|
-| `worker` (×2) | `services/worker/app/` | RTSP ingest + GPU inference + DB writes + annotated MJPEG. **One worker per camera** — SEAHIVECAM on `:8081`, pier cam on `:8083`. Each worker spawns its own inference subprocess. |
+| `worker` (×2) | `services/worker/app/` | RTSP ingest + GPU inference + DB writes + annotated MJPEG. **One worker per camera**: on AWS one, for the SEAHIVE camera, on the GPU host's `:8081` (the DGX also ran the pier camera's on `:8083`). Each worker spawns its own inference subprocess. |
 | `dashboard` | `services/dashboard/app/` | FastAPI web UI + REST API + reviewer queue + CSV/Parquet exports. Stateless per request: no refreshers, an empty connection pool when idle; one sheet-poller task. |
-| jobs runner | `services/dashboard/app/jobs.py` | `python -m app.jobs` (the DGX: `run_jobs.sh` every 60 s; AWS: the jobs Lambda on a schedule) — matview refresh, alert rules, migrate, seed; one row per run in `job_runs`. |
+| jobs runner | `services/dashboard/app/jobs.py` | `python -m app.jobs` (AWS: the jobs Lambda on EventBridge schedules, every 30 minutes on staging; bare metal: `run_jobs.sh` every 60 s) — matview refresh, alert rules, migrate, seed; one row per run in `job_runs`. |
 | `sensestream_poller` | `services/sensestream_poller/app/` | Pulls water-quality + weather, writes to Postgres. |
-| `postgres` | (built-in `pg_ctl`) | Persistence. Local cluster under `./pgdata/`. |
+| `postgres` | Aurora PostgreSQL on AWS | Persistence. Aurora Serverless v2 on AWS; the compose `postgres` service on a laptop; a local cluster under `./pgdata/` on bare metal. |
 
 Everything talks via:
-1. **Postgres** — the durable substrate. DSN
-   `postgresql://wahoobay:wahoobay@localhost:5432/wahoobay`.
+1. **Postgres** — the durable substrate. Locally the DSN is
+   `postgresql://wahoobay:wahoobay@localhost:5432/wahoobay`; on AWS the stack
+   injects `DB_*` from the database secret.
 2. **Object storage behind URLs** — `FRAMES_URL` (`file:///data/frames` on
    a host, `s3://<bucket>/` on AWS): saved frames as
    `<location>/YYYY/MM/DD/HH/<ts>_f<frame_id>_<source>.jpg`, the key stored in
@@ -140,7 +141,7 @@ remaining budget.
 |---|---|---|
 | `VideoSource` | `sources.py` | Yields `(frame_id, frame_bgr, source_name)`. Three concrete sources: `PlaylistSource` (folder of MP4s, used as the dark-time fallback), `RTSPSource`, `HTTPSource` (MJPEG over HTTP/HTTPS). `AutoswitchSource` wraps a primary + fallback and switches based on rolling mean-luma — see "Autoswitch" below. |
 | Classifier backend | `classifier_v2.py` (default) **or** `fishial.py` (legacy) | The inference subprocess selects one at boot from `CLASSIFIER_BACKEND`. **v2** is a DINOv2 ViT-S/14 trained from random init on our crops + iNat photos (223 classes), accelerated with `torch.compile(mode="reduce-overhead")` so single-crop latency is ~0.7 ms after warmup. **fishial** wraps the legacy 866-class Fishial ArcFace + sub-centre + KNN classifier. Both share the same YOLO v26 detector and return `list[FishDetection]` (defined in `pipeline_types.py`) so the rest of the pipeline is backend-agnostic. |
-| `NegativeRegionFilter` | `negative_regions.py` | Drops detector false-positives on stationary reef geometry (SEAHIVE cut-outs). Per-camera polygons loaded from `data/camera_negative_regions.json`. A detection is dropped only when its bbox-IoU with the polygon's bounding rect clears `min_iou` (default 0.5) — so the hole's own large false positive matches and drops, while a fish swimming through has a tiny bbox and small IoU and is kept. |
+| `NegativeRegionFilter` | `negative_regions.py` | Drops detector false-positives on stationary reef geometry (SEAHIVE cut-outs). Per-camera polygons read from `NEGATIVE_REGIONS_URL` (the frames bucket on AWS; `data/camera_negative_regions.json` on a laptop) at start and every minute, so an admin's save on `/admin/regions.html` applies without a restart. A detection is dropped only when its bbox-IoU with the polygon's bounding rect clears `min_iou` (default 0.5) — so the hole's own large false positive matches and drops, while a fish swimming through has a tiny bbox and small IoU and is kept. |
 | `DetectionSmoother` | `tracker.py` | Constant-velocity tracker. Greedy IoU association between frames, EMA on velocity, blends raw observation with motion prediction. Returns smoothed display detections AND a parallel list of track IDs for the raw detections (so each event row gets stamped with its track). Smoothing is **display-only** — the raw detections are what's persisted. |
 | Persistence | `persistence.py`, `pipeline.py` | `PgWriter.record_detections` writes a row per detection per frame to `detection_events`. `EventLog` mirrors each event to JSONL on disk (durable backup). `ImageSaver.maybe_save` decides when to write an annotated + raw JPEG (three modes, see [`data_pipeline.md`](data_pipeline.md)); writes happen in a background save-worker thread inside the subprocess so the inference loop never blocks on disk I/O. |
 | Annotation | `overlay.py` | Draws bboxes, species labels, confidence chips onto a frame. Returns a fresh buffer (copies the frame internally) so the annotated output is safe across the shm slot release. |
@@ -261,7 +262,7 @@ One async task runs inside the dashboard process (the sheet poller, below).
 The matview refresh and the SLO rules used to run here too; since the move
 to a stateless web process they are **jobs** — `python -m app.jobs
 refresh_matviews|alert_rules|migrate|seed|all`, looped by
-`scripts/dev/run_jobs.sh` on the DGX and run by the jobs Lambda on a
+`scripts/dev/run_jobs.sh` on bare metal and run by the jobs Lambda on a
 schedule on AWS, each run recorded in `job_runs`:
 
 - **`refresh_matviews`** refreshes `species_sightings_mat` and
@@ -429,7 +430,7 @@ for the column-by-column reference.
 | Object | What it does |
 |---|---|
 | `species_sightings` (view) | One row per persistent track, dominant species by weighted vote (sum of accuracy across track lifetime). The "fish counter" — folds out the flip-flop where one fish gets multiple species labels across frames. |
-| `species_sightings_mat` (matview) | Materialised version of `species_sightings`. Refreshed every `MATVIEW_REFRESH_INTERVAL_S` (60 s default) by the dashboard. |
+| `species_sightings_mat` (matview) | Materialised version of `species_sightings`. Refreshed by the `refresh_matviews` job (every 30 minutes on AWS staging; every 60 s by `run_jobs.sh` on bare metal). |
 | `species_sightings_hourly_mat` (matview) | Hourly rollup of the above. |
 | `species_counts_hourly` (view) | Hourly rollup of `detection_events` by species. |
 | `frame_stats_hourly` (view) | Hourly rollup of drift signals. |
@@ -439,22 +440,23 @@ for the column-by-column reference.
 
 ## What gets exposed publicly
 
-When the Cloudflare tunnel is up, **only the dashboard** (port 18080) is
-reachable from the internet. The worker (8081 / 8083) and poller
-(8082) are local-only. There's no inbound port forwarding on the DGX
-or on FAU's network — `cloudflared` makes an outbound TLS connection
-to Cloudflare and routes return traffic back through it.
+On AWS **only CloudFront is public**: `staging-ai.wahoobay.net` sends
+pages and API calls to App Runner (the dashboard) and `/hls/*` and
+`/stream/*` to Caddy on the GPU host, each origin checking CloudFront's
+header secret. The worker's API (8081) answers only inside the VPC, to the
+dashboard and the jobs Lambda. (The DGX was reachable only through a
+Cloudflare quick tunnel to the dashboard; see `docs/dgx-history.md`.)
 
-The dashboard exposes all read endpoints freely, including over the
-public Cloudflare tunnel — anonymous visitors see the live fish view
-unchanged. Every mutation endpoint requires an authenticated session
+Signed out, only the sign-in pages, their mail links and `/healthz`
+answer ("Accounts and roles" in `docs/operations.md`). Every mutation
+endpoint requires an authenticated session
 cookie (`POST /api/auth/login`) carrying the `reviewer` or `admin`
 role; the admin endpoints (`/admin/*.html`, `POST
 /api/admin/refresh_sheets`, `POST /api/admin/negative_regions`, and
 the account/session-management routes) require `admin` specifically.
 This replaced an earlier bearer-token scheme (`DASHBOARD_WRITE_TOKEN`)
 that has since been removed entirely. Unlike that scheme, the admin
-UI and admin endpoints are reachable through the public tunnel the
+UI and admin endpoints are reachable through the public hostname the
 same as everything else — the design's whole premise is that
 session/role auth, not network topology, is what has to hold here. See
 "Accounts and roles" in `docs/operations.md` and
@@ -466,8 +468,9 @@ On AWS the shape is CloudFront in front of App Runner. The distribution adds
 anything without it, so the service is unreachable except through the
 distribution; `/healthz` stays open for App Runner's health check.
 `/robots.txt` disallows crawlers unless `ROBOTS=allow` (production only).
-Sign-up and reset mail goes through `MAIL_BACKEND`: `console` (the message to
-the log; default, staging) or `smtp`.
+Sign-up and reset mail goes through `MAIL_BACKEND`: `ses` on AWS (Amazon SES,
+from `no-reply@wahoobay.net`), `console` (the message to the log; the default)
+or `smtp`.
 
 ---
 
@@ -483,7 +486,7 @@ Common changes, with the file you'd touch:
 | Add a column every row carries | an Alembic revision + the writers: `persistence.py` (worker), `write_readings` (poller), `seed.py` |
 | Add a CSV export | `services/dashboard/app/exports.py` (new streamer) + `services/dashboard/app/main.py` (new endpoint) + `services/dashboard/app/templates/index.html` (new button) |
 | Add a new view to the Reports panel | `services/dashboard/app/templates/index.html` (new tab + panel) + `services/dashboard/app/static/app.js` (`tickReports` dispatcher + renderer) + any new API endpoints |
-| Add a new camera source | Add fields to `.env` (`VIDEO_SOURCE_X`, `SOURCE_LABEL_PRIMARY_X`, `WORKER_HTTP_PORT_X`, `CUDA_VISIBLE_DEVICES_X`) + a `scripts/dev/run_worker_X.sh` script + a dashboard proxy endpoint (`/api/stream_X.mjpeg`, `/api/snapshot_X.jpg`) + a button in the camera-toggle UI |
+| Add a new camera source | On AWS the GPU host runs one worker, for the `seahive` path; a second camera needs its own MediaMTX path and worker service in `deploy/gpu-host/` (not built). On bare metal: add fields to `.env` (`VIDEO_SOURCE_X`, `SOURCE_LABEL_PRIMARY_X`, `WORKER_HTTP_PORT_X`, `CUDA_VISIBLE_DEVICES_X`) + a `scripts/dev/run_worker_X.sh` script + a dashboard proxy endpoint (`/api/stream_X.mjpeg`, `/api/snapshot_X.jpg`) + a button in the camera-toggle UI |
 | Add a new classifier backend | Mirror `services/worker/app/classifier_v2.py`'s constructor + `process_frame` signature; add a branch in `services/worker/app/inference_proc.py`'s `backend == "..."` dispatch |
 | Change the smoother behaviour | `services/worker/app/tracker.py` |
 | Add a new admin-only page | Drop a template under `services/dashboard/app/templates/`, add `GET /admin/<name>.html` + any companion API endpoints (mutation ones gated on `Depends(require_role("admin"))` from `services/dashboard/app/auth.py` — see `routes_admin_users.py` for the pattern: `require_csrf` too, and a `user_audit` row for anything that changes state) |
