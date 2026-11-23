@@ -14,7 +14,8 @@ class names (staging had 750 rows of 'Brachygenys chrysargyrea' and none of the 
 
 RENAMES is this migration's own frozen copy of services/common/class_renames.py (a migration never
 imports code that may change after it ran). The downgrade swaps the names back; it is exact only
-while neither new name was a model output before the upgrade, which held on staging when this ran.
+for a database where neither new name was a model output before the upgrade (staging had none when
+this was written; a fresh database has no detections at all).
 """
 
 from __future__ import annotations
@@ -68,9 +69,12 @@ def _rename(pairs: dict[str, str]) -> None:
             names,
         )
         bind.execute(_TOPK, names)
-    # The hourly view rolls up the per-track one, so it refreshes second.
-    op.execute("REFRESH MATERIALIZED VIEW species_sightings_mat")
-    op.execute("REFRESH MATERIALIZED VIEW species_sightings_hourly_mat")
+    # The hourly view rolls up the per-track one, so it refreshes second. CONCURRENTLY, so the
+    # public species list and trends keep answering during the deploy; it cannot run inside a
+    # transaction, so the renames above commit first (re-running them changes nothing).
+    with op.get_context().autocommit_block():
+        op.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY species_sightings_mat")
+        op.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY species_sightings_hourly_mat")
 
 
 def upgrade() -> None:

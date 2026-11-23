@@ -34,11 +34,11 @@ DATA_TABLES = {
 }
 
 
-def alembic(*args: str, url: str) -> subprocess.CompletedProcess:
+def alembic(*args: str, url: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [*ALEMBIC, *args],
         cwd=REPO,
-        env={**os.environ, "DATABASE_URL": url},
+        env={**os.environ, "DATABASE_URL": url, **(env or {})},
         capture_output=True,
         text=True,
         check=True,
@@ -303,10 +303,10 @@ def test_0008_downgrade_restores_the_old_names(pg_url):
         assert _read(pg_url, eid) == (old, old, topk)
 
 
-def test_0008_renames_are_the_live_table():
+def test_0008_renames_are_the_live_table(monkeypatch):
     """The migration keeps its own frozen copy (a migration never imports code that may change
     later); every pair in it is still in the table the rest of the system reads."""
-    sys.path.insert(0, str(REPO / "services"))
+    monkeypatch.syspath_prepend(str(REPO / "services"))
     from common.class_renames import CLASS_RENAMES
 
     path = REPO / "db" / "migrations" / "versions" / "0008_class_renames.py"
@@ -336,3 +336,49 @@ def test_0008_leaves_review_items_alone(pg_url):
     alembic("upgrade", "head", url=pg_url)
     alembic("downgrade", "0007", url=pg_url)
     assert query(pg_url, "SELECT predicted FROM review_items") == [(GRUNT_NEW,)]
+
+
+def test_0008_does_not_block_readers_of_the_sightings_views(pg_url):
+    """The public species list and trends read the views while CI's deploy migrates: a reader
+    mid-query must not make the migration wait (or the reader wait on it). A plain REFRESH needs
+    an exclusive lock that a reader's open transaction holds off; 0008 refreshes concurrently."""
+    alembic("upgrade", "0007", url=pg_url)
+    for i in range(3):
+        _event(
+            pg_url, GRUNT, [_guess(GRUNT, 0.9)], track_id=7, ts=f"now() - interval '{i} minutes'"
+        )
+    with psycopg.connect(pg_url) as conn:
+        conn.execute("REFRESH MATERIALIZED VIEW species_sightings_mat")
+        conn.execute("REFRESH MATERIALIZED VIEW species_sightings_hourly_mat")
+    with psycopg.connect(pg_url) as reader:
+        reader.execute("SELECT count(*) FROM species_sightings_mat").fetchone()
+        reader.execute("SELECT count(*) FROM species_sightings_hourly_mat").fetchone()
+        alembic("upgrade", "head", url=pg_url, env={"PGOPTIONS": "-c lock_timeout=3000"})
+        reader.rollback()
+    assert query(pg_url, "SELECT species_id FROM species_sightings_mat") == [(GRUNT_NEW,)]
+
+
+def test_0008_renames_name_and_species_id_independently(pg_url):
+    """A top-k entry whose name and species_id differ (the worker writes them equal, but nothing
+    forces it): each key changes only where it equals the old name."""
+    alembic("upgrade", "0007", url=pg_url)
+    topk = [
+        {"name": GRUNT, "species_id": "grunt-id", "accuracy": 0.6},
+        {"name": "Smallmouth grunt", "species_id": GRUNT, "accuracy": 0.3},
+    ]
+    eid = _event(pg_url, "Scarus iseri", topk)
+    alembic("upgrade", "head", url=pg_url)
+    assert _read(pg_url, eid)[2] == [
+        {"name": GRUNT_NEW, "species_id": "grunt-id", "accuracy": 0.6},
+        {"name": "Smallmouth grunt", "species_id": GRUNT_NEW, "accuracy": 0.3},
+    ]
+
+
+def test_0008_downgrade_restores_entries_below_the_top(pg_url):
+    alembic("upgrade", "0007", url=pg_url)
+    topk = [_guess("Scarus iseri", 0.5), _guess(CHUB, 0.2), _guess(GRUNT, 0.1)]
+    eid = _event(pg_url, "Scarus iseri", topk)
+    alembic("upgrade", "head", url=pg_url)
+    assert [g["name"] for g in _read(pg_url, eid)[2]] == ["Scarus iseri", CHUB_NEW, GRUNT_NEW]
+    alembic("downgrade", "0007", url=pg_url)
+    assert _read(pg_url, eid) == ("Scarus iseri", "Scarus iseri", topk)

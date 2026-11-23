@@ -13,11 +13,11 @@ from app.model_assets import fetch_class_lists
 from fastapi.testclient import TestClient
 from review_fixtures import TEST_DSN
 
-VERSIONS = {"classifier_v2": "dgx-2026-10-24", "detector_v26": "n3"}
+VERSIONS = {"classifier_v2": "dgx-2026-10-24-r1", "detector_v26": "n3"}
 
 
 def _source(tmp_path: Path) -> str:
-    src = tmp_path / "bucket" / "classifier_v2" / "dgx-2026-10-24"
+    src = tmp_path / "bucket" / "classifier_v2" / "dgx-2026-10-24-r1"
     src.mkdir(parents=True)
     (src / "classes.json").write_text(json.dumps(["Ocyurus chrysurus", "Chelonia mydas"]))
     (src / "model.safetensors").write_bytes(b"\0" * 1024)  # never fetched: only the class list
@@ -63,7 +63,7 @@ async def test_the_dashboard_fetches_the_class_list_when_it_starts(
     monkeypatch.setenv("REVIEW_POOL_ENABLED", "false")
     monkeypatch.setenv("MODELS_URL", _source(tmp_path))
     monkeypatch.setenv("MODELS_DIR", str(tmp_path / "models"))
-    monkeypatch.setenv("MODEL_VERSIONS", "classifier_v2=dgx-2026-10-24")
+    monkeypatch.setenv("MODEL_VERSIONS", "classifier_v2=dgx-2026-10-24-r1")
     with TestClient(build_app()):
         pass
     assert (

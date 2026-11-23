@@ -103,6 +103,6 @@ them (idempotent; it refreshes the sightings views only when it changed somethin
 3. Check that the species list and trends show one row for each fish, and that wahoobay.org's
    smallmouth grunt page still shows its live tiles.
 
-The migration's non-concurrent view refresh blocks species and trend reads for its few seconds.
+The migration refreshes the views concurrently, so species and trend reads keep answering during it.
 `ai-wahoobay-prod` is defined but not deployed; when it is, `0008` runs on a database with no
 detections and the steps above do not apply.

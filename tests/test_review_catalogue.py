@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from app.review_catalogue import (
@@ -151,7 +152,7 @@ async def test_aget_rebuilds_off_the_event_loop_and_current_never_rebuilds(
 
 # --- The renamed classifier classes (docs/superpowers/specs/2026-11-22-class-renames-design.md) ---
 
-REPO = __import__("pathlib").Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[1]
 CLASSES_JSON = REPO / "data" / "models" / "classifier_v2" / "classes.json"
 # sha256 of classes.json as published in classifier_v2/dgx-2026-10-24 (its SHA256SUMS).
 PUBLISHED_SHA256 = "05acae233f4eeae4db53b9ce3b47721035f68620eab8a0047479fd9d40600b54"
