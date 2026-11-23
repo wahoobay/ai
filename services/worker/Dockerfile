@@ -124,3 +124,17 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=3 \
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "app.main"]
+
+# ---- trainer ----------------------------------------------------------------
+# The training machine's image (spec docs/superpowers/specs/2026-11-23-training-machine-design.md):
+# the CUDA stage above plus scikit-learn (the DGX training environment's version) and the training
+# scripts, laid out so /app is the repository root the scripts expect (data/ under it). A SageMaker
+# training job runs it as `<entrypoint> train`; scripts/train_job.py ignores the "train". CI builds it
+# right after the worker image and pushes it to its own repository, ai-wahoobay-trainer.
+FROM cuda AS trainer
+RUN python -m pip install --no-cache-dir scikit-learn==1.8.0
+COPY assets/taxonomy.csv /app/assets/taxonomy.csv
+COPY scripts/finetune_init.py scripts/assemble_training_set.py scripts/train_baseline.py scripts/train_job.py /app/scripts/
+HEALTHCHECK NONE
+ENTRYPOINT ["python", "/app/scripts/train_job.py"]
+CMD []

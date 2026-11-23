@@ -10,6 +10,21 @@ random init** on a 223-class dataset assembled from three sources
 that order of provenance maturity). The legacy Fishial ArcFace + KNN
 classifier remains bundled as the one-env-var rollback path.
 
+## Fine-tuning on AWS (since 2026-11-23)
+
+The DGX is gone; a run is one SageMaker training job (spec
+`docs/superpowers/specs/2026-11-23-training-machine-design.md`). The trainer image
+(`services/worker/Dockerfile` target `trainer`, ECR `ai-wahoobay-trainer`) runs
+`scripts/train_job.py`: it checks the inputs' SHA256SUMS, assembles `data/fine_tune` from the
+base crops plus a verified snapshot (`scripts/assemble_training_set.py`), fine-tunes the live
+classifier (`scripts/train_baseline.py --init-checkpoint --init-classes`: head rows copied by class
+name, `no_animal` new) and leaves the run's files, `metrics_before.json` (the starting model on
+the same validation set) and `inputs.json` in S3. Start it from infra:
+`python -m scripts.train_classifier staging --wait` (README, "The training machine"). Nothing a
+run produces goes live by itself.
+
+The sections below describe the original DGX pipeline that built the base crops.
+
 ---
 
 ## The big picture
