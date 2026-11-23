@@ -59,9 +59,15 @@ the detector retrain waits.
   `review_val_top1`, `review_val_macro_f1`, `review_val_n`. The base set is 78% iNaturalist photos;
   the reviewers' crops are the camera's own view, where the model works.
 - `--warmup-epochs` joins the command line. The split stays `temporal_within_source` with seed 42,
-  the live model's: the base crops' validation items are the ones it never trained on, so starting
-  from its weights leaks nothing into validation, and each camera-day of review crops holds out its
-  last 20%.
+  the live model's: the base crops' validation items are the ones it never trained on (482, checked
+  in review), so starting from its weights leaks nothing into validation.
+- A reviewers' camera-day is split by whole frames: the last 20% of its frames go to validation, and
+  a day with fewer than 3 frames stays in training. Many of Roy's frames hold a whole school (up to
+  61 boxes) and 21 of his 34 camera-days are a single frame; splitting box by box would put
+  neighbours from one frame on both sides. The base clips keep the original rule.
+- Macro F1 averages over the classes validation holds, not over every class that was predicted,
+  so one stray prediction no longer moves it. A second subset, `review_species`, leaves out
+  `no_animal`, which the starting model cannot score.
 - Defaults for a fine-tune, set by the launcher, not the trainer: 20 epochs, learning rate 1e-4,
   2 warm-up epochs.
 

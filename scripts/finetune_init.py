@@ -12,8 +12,10 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 SUMS = "SHA256SUMS"
-# scripts/assemble_training_set.py names the reviewers' crops review_<box_id>.jpg
+# scripts/assemble_training_set.py names the reviewers' crops review_<box_id>.jpg and gives each
+# camera-day the drive_id review:<camera>:<local date>
 REVIEW_PREFIX = "review_"
+REVIEW_SOURCE = "review:"
 
 
 def head_rows(new_classes: Sequence[str], old_classes: Sequence[str]) -> list[int | None]:
@@ -29,6 +31,25 @@ def head_rows(new_classes: Sequence[str], old_classes: Sequence[str]) -> list[in
 
 def is_review_crop(path: str | Path) -> bool:
     return Path(path).name.startswith(REVIEW_PREFIX)
+
+
+def is_review_source(drive_id: str) -> bool:
+    """The assembler's drive_id for a reviewers' camera-day: review:<camera>:<local date>."""
+    return drive_id.startswith(REVIEW_SOURCE)
+
+
+def split_review_source(
+    items: Sequence[tuple[int, int]], val_split: float, min_frames: int = 3
+) -> tuple[list[int], list[int]]:
+    """One reviewers' camera-day, as (frame_index, sample) pairs, split by whole frames: the last
+    val_split of its distinct frames (at least one) go to validation, so no frame has boxes on both
+    sides; a day with fewer than min_frames frames stays in training whole."""
+    frames = sorted({f for f, _ in items})
+    n_val = max(1, int(round(len(frames) * val_split))) if len(frames) >= min_frames else 0
+    held = set(frames[len(frames) - n_val :]) if n_val else set()
+    train = [s for f, s in items if f not in held]
+    val = [s for f, s in items if f in held]
+    return train, val
 
 
 def sha256_file(path: Path) -> str:

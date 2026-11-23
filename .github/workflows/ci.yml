@@ -188,6 +188,9 @@ jobs:
       # names the image by digest (infra scripts/train_classifier.py).
       - name: Build the trainer image (and push on main)
         if: matrix.name == 'worker'
+        # Staging does not need it: a failed trainer build or push (e.g. its repository not yet
+        # deployed by infra) marks the step, never blocks deploy-staging.
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           context: .

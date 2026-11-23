@@ -27,6 +27,7 @@ x-worker: &worker
   build:
     context: .
     dockerfile: services/worker/Dockerfile
+    target: cuda # not the last stage: that is the trainer image
   depends_on:
     postgres:
       condition: service_healthy

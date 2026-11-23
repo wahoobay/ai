@@ -204,3 +204,22 @@ def _raw(root: Path) -> list[str]:
         "--repo-root",
         str(root / "repo"),
     ]
+
+
+def test_a_reviewers_camera_day_is_split_by_whole_frames():
+    from finetune_init import split_review_source
+
+    # 5 frames (seconds of day), several boxes each: the last frame (20%) goes to validation whole.
+    items = [(100, 0), (100, 1), (200, 2), (300, 3), (400, 4), (500, 5), (500, 6), (500, 7)]
+    train, val = split_review_source(items, 0.2)
+    assert val == [5, 6, 7] and train == [0, 1, 2, 3, 4]
+
+
+def test_a_reviewers_day_with_few_frames_stays_in_training():
+    from finetune_init import split_review_source
+
+    one_frame = [(100, i) for i in range(30)]  # a school of grunts in one frame
+    assert split_review_source(one_frame, 0.2) == (list(range(30)), [])
+    two = [(100, 0), (200, 1)]
+    assert split_review_source(two, 0.2) == ([0, 1], [])
+    assert split_review_source([(1, 0), (2, 1), (3, 2)], 0.2) == ([0, 1], [2])

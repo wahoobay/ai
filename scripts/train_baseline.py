@@ -60,7 +60,7 @@ import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from finetune_init import head_rows, is_review_crop
+from finetune_init import head_rows, is_review_crop, is_review_source, split_review_source
 from PIL import Image
 from sklearn.metrics import classification_report, f1_score, top_k_accuracy_score
 from sklearn.model_selection import train_test_split
@@ -71,6 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATASET_DIR = REPO_ROOT / "data" / "fine_tune"
 MANIFEST_PATH = DATASET_DIR / "_dataset_manifest.json"
 TAXONOMY_PATH = DATASET_DIR / "_taxonomy.json"
+NO_ANIMAL = "no_animal"  # the assembler's class for "no animal here" answers
 RUNS_DIR = REPO_ROOT / "data" / "baseline_runs"
 
 
@@ -255,7 +256,7 @@ def _split_temporal_within_source(
         # (e.g. "drive:video", "inat:image") after the cropper's multi-source
         # refactor — match on the trailing token so both legacy and prefixed
         # values resolve correctly.
-        kind = (rec.get("source_kind") or "").rsplit(":", 1)[-1]
+        kind = ((rec or {}).get("source_kind") or "").rsplit(":", 1)[-1]
         if rec is None or kind != "video":
             image_only.append(i)
             continue
@@ -265,6 +266,14 @@ def _split_temporal_within_source(
     train_idx_list: list[int] = list(image_only)
     for drive_id, items in by_drive.items():
         items.sort(key=lambda kv: kv[0])
+        if is_review_source(drive_id):
+            # A reviewers' camera-day: whole frames held out (several boxes share one frame), and
+            # none from a day with fewer than 3 frames. The base clips keep the rule below
+            # unchanged, so their validation items stay the live model's.
+            train_part, val_part = split_review_source(items, cfg.val_split)
+            train_idx_list.extend(train_part)
+            val_idx_list.extend(val_part)
+            continue
         n = len(items)
         n_val = max(1, int(round(n * cfg.val_split)))
         train_part = [s for _, s in items[: n - n_val]]
@@ -273,7 +282,7 @@ def _split_temporal_within_source(
         val_idx_list.extend(val_part)
 
     print(
-        f"  temporal-within-source: {len(by_drive)} videos contribute val frames; "
+        f"  temporal-within-source: {len(by_drive)} video sources (clips and reviewers' camera-days); "
         f"{len(image_only)} image-only crops stay in train"
     )
     return np.array(train_idx_list), np.array(val_idx_list)
@@ -373,16 +382,24 @@ def load_init(model: nn.Module, cfg: TrainConfig, classes: list[str]) -> dict:
     return {"kept": len(classes) - len(new), "new_classes": new, "dropped_classes": dropped}
 
 
+def _macro_f1(labels: np.ndarray, preds: np.ndarray) -> float:
+    """Macro F1 over the classes validation holds (a class only predicted would add a 0 and make
+    the score move with stray predictions)."""
+    return float(
+        f1_score(labels, preds, labels=np.unique(labels), average="macro", zero_division=0)
+    )
+
+
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
     cfg: TrainConfig,
     amp_dtype: torch.dtype,
-    review: np.ndarray,
-) -> tuple[dict, np.ndarray, np.ndarray]:
-    """Scores on the validation loader (unshuffled, so `review` lines up with its items): loss,
-    top-1, top-5, macro F1, and top-1 and macro F1 over the reviewers' crops alone."""
+    subsets: dict[str, np.ndarray],
+) -> tuple[dict, np.ndarray | None, np.ndarray | None]:
+    """Scores on the validation loader (unshuffled, so each subset mask lines up with its items):
+    loss, top-1, top-5, macro F1, and top-1, macro F1 and count per named subset."""
     model.eval()
     all_logits: list[np.ndarray] = []
     all_labels: list[np.ndarray] = []
@@ -406,19 +423,18 @@ def evaluate(
         top5 = float(top_k_accuracy_score(labels, logits, k=5, labels=list(range(cfg.num_classes))))
     except ValueError:
         top5 = float("nan")
-    scores = {
+    scores: dict = {
         "val_loss": val_loss / val_n,
         "val_top1": float((preds == labels).mean()),
         "val_top5": top5,
-        "val_macro_f1": float(f1_score(labels, preds, average="macro", zero_division=0)),
+        "val_macro_f1": _macro_f1(labels, preds),
         "val_weighted_f1": float(f1_score(labels, preds, average="weighted", zero_division=0)),
-        "review_val_n": int(review.sum()),
     }
-    if review.any():
-        scores["review_val_top1"] = float((preds[review] == labels[review]).mean())
-        scores["review_val_macro_f1"] = float(
-            f1_score(labels[review], preds[review], average="macro", zero_division=0)
-        )
+    for name, mask in subsets.items():
+        scores[f"{name}_val_n"] = int(mask.sum())
+        if mask.any():
+            scores[f"{name}_val_top1"] = float((preds[mask] == labels[mask]).mean())
+            scores[f"{name}_val_macro_f1"] = _macro_f1(labels[mask], preds[mask])
     return scores, logits, labels
 
 
@@ -494,7 +510,12 @@ def train(cfg: TrainConfig) -> dict:
         if cfg.amp_dtype == "bf16" and torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         else torch.float16
     )
+    # The reviewers' crops alone (the camera's own view), and those of them that name a species
+    # (a starting model without no_animal cannot score the rest).
     review = np.array([is_review_crop(p) for p, _ in val_items], dtype=bool)
+    val_labels = np.array([y for _, y in val_items])
+    no_animal = classes.index(NO_ANIMAL) if NO_ANIMAL in classes else -1
+    subsets = {"review": review, "review_species": review & (val_labels != no_animal)}
 
     # Save config + class list up front so partial runs are inspectable.
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
@@ -502,7 +523,7 @@ def train(cfg: TrainConfig) -> dict:
 
     if init is not None:
         # The starting model on the very items this run is judged on: the "before" of before/after.
-        before, _, _ = evaluate(model, val_loader, cfg, amp_dtype, review)
+        before, _, _ = evaluate(model, val_loader, cfg, amp_dtype, subsets)
         before |= {"init_checkpoint": cfg.init_checkpoint, **init}
         (run_dir / "metrics_before.json").write_text(json.dumps(before, indent=2))
         print("  before  " + "  ".join(f"{k}={v:.3f}" for k, v in before.items() if _is_num(v)))
@@ -529,7 +550,7 @@ def train(cfg: TrainConfig) -> dict:
             running_n += x.size(0)
         train_loss = running_loss / max(1, running_n)
 
-        scores, _, _ = evaluate(model, val_loader, cfg, amp_dtype, review)
+        scores, _, _ = evaluate(model, val_loader, cfg, amp_dtype, subsets)
         macro_f1 = scores["val_macro_f1"]
         elapsed = time.monotonic() - t0
         row = {
@@ -545,6 +566,7 @@ def train(cfg: TrainConfig) -> dict:
             f"top1={scores['val_top1']:.3f}  top5={scores['val_top5']:.3f}  "
             f"macroF1={macro_f1:.3f}  "
             f"review_top1={scores.get('review_val_top1', float('nan')):.3f}  "
+            f"review_species_top1={scores.get('review_species_val_top1', float('nan')):.3f}  "
             f"lr={row['lr']:.6f}  elapsed={elapsed:.0f}s"
         )
 
@@ -573,7 +595,7 @@ def train(cfg: TrainConfig) -> dict:
         run_dir / "checkpoint_best.pt", map_location=cfg.device, weights_only=False
     )
     model.load_state_dict(best_ckpt["model"])
-    scores, logits, labels = evaluate(model, val_loader, cfg, amp_dtype, review)
+    scores, logits, labels = evaluate(model, val_loader, cfg, amp_dtype, subsets)
     metrics = {"best_macro_f1": best_f1, "best_epoch": best_ckpt.get("epoch")}
     if labels is not None:
         metrics |= {k: v for k, v in scores.items() if k != "val_loss"}
