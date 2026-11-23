@@ -514,5 +514,5 @@ Behaviour:
 ## Rollout (after both PRs merge, on Dan's word)
 
 Infra first (its merge deploys staging), then ai (its merge redeploys the images). Then invoke once:
-`AWS_PROFILE=cdk aws lambda invoke --function-name ai-wahoobay-staging-jobs --payload '{"job":"build_dataset"}' --cli-binary-format raw-in-base64-out out.json`
+`AWS_PROFILE=cdk AWS_MAX_ATTEMPTS=1 aws lambda invoke --cli-read-timeout 900 --function-name ai-wahoobay-staging-jobs --payload '{"job":"build_dataset"}' --cli-binary-format raw-in-base64-out out.json` (a run can outlast the CLI's 60 s default, after which it would retry and start a second run)
 and check: `ok` true; `latest.json` names the snapshot; `report.txt`'s counts match Roy's data (about 1,100 species crops, 30 `no_animal`, about 179 detector frames, minus what the report holds back).

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,7 +28,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from .config import site_tz
 from .frames import frame_url
-from .label_archive import CONTENT_TYPES, UnknownAccount, content_hash, read_only_transaction
+from .label_archive import CONTENT_TYPES, UnknownAccount, content_hash
 from .review_labels import CONFIDENCE_RANK, load_verdicts, resolve
 from .review_queue import fetch_all
 from .species_suggestions import pending_species_events
@@ -64,6 +65,9 @@ class Frame:
     image_path: str
     completed: bool  # a review_frames row exists
     model_box_ids: tuple[str, ...]  # every detection event on the frame, "ev<id>", ascending
+    completed_by_listed: bool  # a listed account marked it complete
+    unlisted_drawn: int  # live boxes other accounts drew on it (the tool shows them to everyone)
+    has_twin: bool  # another saved_frames row has the same camera, frame_id and ts
 
 
 @dataclass(frozen=True)
@@ -105,11 +109,18 @@ _DRAWN_SQL = """
 
 _FRAMES_SQL = """
     SELECT s.id, s.source_name, s.ts, s.image_path, rf.saved_frame_id IS NOT NULL AS completed,
+           COALESCE(rf.completed_by = ANY(%(ids)s), false) AS completed_by_listed,
+           (SELECT count(*) FROM review_added_boxes b
+             WHERE b.saved_frame_id = s.id AND b.removed_at IS NULL
+               AND NOT b.user_id = ANY(%(ids)s)) AS unlisted_drawn,
+           EXISTS (SELECT 1 FROM saved_frames t
+                    WHERE t.source_name = s.source_name AND t.frame_id = s.frame_id
+                      AND t.ts = s.ts AND t.id <> s.id) AS has_twin,
            ARRAY(SELECT e.id FROM detection_events e
                   WHERE e.source_name = s.source_name AND e.frame_id = s.frame_id AND e.ts = s.ts
                   ORDER BY e.id) AS event_ids
       FROM saved_frames s LEFT JOIN review_frames rf ON rf.saved_frame_id = s.id
-     WHERE s.id = ANY(%s)
+     WHERE s.id = ANY(%(frames)s)
 """
 
 
@@ -216,8 +227,11 @@ async def select(conn, user_ids: list[int]) -> Selection:
             image_path=r["image_path"],
             completed=r["completed"],
             model_box_ids=tuple(f"ev{i}" for i in r["event_ids"]),
+            completed_by_listed=r["completed_by_listed"],
+            unlisted_drawn=r["unlisted_drawn"],
+            has_twin=r["has_twin"],
         )
-        for r in await fetch_all(conn, _FRAMES_SQL, (frame_ids,))
+        for r in await fetch_all(conn, _FRAMES_SQL, {"ids": list(user_ids), "frames": frame_ids})
     }
     return Selection(
         boxes=tuple(boxes),
@@ -240,6 +254,16 @@ def _frame_problem(frame: Frame, boxes: list[Box]) -> str | None:
     that the fish is background, so every model box must have an answer that counts."""
     if not frame.completed:
         return "not marked complete"
+    # The listed accounts must have covered the frame themselves: another account's completion
+    # or drawn box (which the tool shows to everyone, so a missed fish looks boxed) is dropped
+    # with the rest of its work. Twin rows split model boxes, drawn boxes and completion between
+    # two ids.
+    if not frame.completed_by_listed:
+        return "completed by an unlisted account"
+    if frame.has_twin:
+        return "another saved frame has the same camera, frame_id and ts"
+    if frame.unlisted_drawn:
+        return "a box drawn by an unlisted account"
     selected = {b.box_id for b in boxes}
     for box_id in frame.model_box_ids:
         if box_id not in selected:
@@ -283,6 +307,16 @@ _SUGGESTED_APHIA_SQL = """
      WHERE status = 'approved' AND approved_name IS NOT NULL AND aphia_id IS NOT NULL
      ORDER BY id
 """
+
+
+@asynccontextmanager
+async def _snapshot_transaction(conn):
+    """One read-only view of the database for every read: at the default READ COMMITTED a box
+    drawn and a frame completed between two of the job's statements could put a frame in the
+    snapshot without that box. REPEATABLE READ takes no locks, so the dashboard is not slowed."""
+    async with conn.transaction():
+        await conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        yield conn
 
 
 def _stamp() -> str:
@@ -343,7 +377,7 @@ async def build_dataset(pool: AsyncConnectionPool) -> dict[str, Any]:
         raise RuntimeError("DATASET_ACCOUNTS is set but DATASET_URL is not")
     from .verified_dataset_files import build_files  # it imports this module
 
-    async with pool.connection() as conn, read_only_transaction(conn):
+    async with pool.connection() as conn, _snapshot_transaction(conn):
         rows = await fetch_all(
             conn, "SELECT id, username FROM users WHERE username = ANY(%s)", (accounts,)
         )

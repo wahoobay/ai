@@ -16,7 +16,7 @@ from datetime import UTC
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from .review_catalogue import slug
 from .verified_dataset import NO_ANIMAL, Box, DetectorPlan, Selection
@@ -28,9 +28,10 @@ UNIDENTIFIED = "unidentified animal"
 
 def crop_box(bbox, width: int, height: int, pad: float = PAD) -> tuple[int, int, int, int] | None:
     """`bbox` (x1, y1, x2, y2) grown by `pad` of its width and height on each side and clamped to
-    the frame; None when nothing of it is left inside."""
+    the frame; None when the box itself has no area inside the frame (the padding alone would
+    make a crop with none of the animal)."""
     x1, y1, x2, y2 = (int(v) for v in bbox)
-    if x2 <= x1 or y2 <= y1:
+    if min(width, x2) <= max(0, x1) or min(height, y2) <= max(0, y1):
         return None
     dx, dy = round(pad * (x2 - x1)), round(pad * (y2 - y1))
     x1, y1 = max(0, x1 - dx), max(0, y1 - dy)
@@ -98,8 +99,17 @@ def build_files(
                 included.discard(frame_id)
                 frame_held[frame_id] = "frame image missing"
             continue
-        with Image.open(io.BytesIO(data)) as raw:
-            image = raw.convert("RGB")
+        try:
+            with Image.open(io.BytesIO(data)) as raw:
+                image = raw.convert("RGB")
+        except (UnidentifiedImageError, OSError):  # not an image, or truncated
+            for b in boxes:
+                if not b.held_back:
+                    held[b.box_id] = "frame image unreadable"
+            if frame_id in included:
+                included.discard(frame_id)
+                frame_held[frame_id] = "frame image unreadable"
+            continue
         width, height = image.size
         for b in boxes:
             if b.held_back:

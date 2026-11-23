@@ -259,9 +259,16 @@ The labelling tool's answers reach training through two steps
    new writes nothing.
 
    ```bash
-   AWS_PROFILE=cdk aws lambda invoke --function-name ai-wahoobay-staging-jobs \
-     --payload '{"job":"build_dataset"}' --cli-binary-format raw-in-base64-out out.json
+   AWS_PROFILE=cdk AWS_MAX_ATTEMPTS=1 aws lambda invoke --cli-read-timeout 900 \
+     --function-name ai-wahoobay-staging-jobs --payload '{"job":"build_dataset"}' \
+     --cli-binary-format raw-in-base64-out out.json
    ```
+
+   A run can take longer than the CLI's default 60 s read timeout, after
+   which the CLI would retry and start a second, concurrent run: hence the
+   900 s timeout (the Lambda's limit) and a single attempt. The snapshots
+   are held in memory until written, which is ample at today's ~180 frames;
+   thousands of frames will need a container task instead of the Lambda.
 
 2. **Assemble the training folder where training runs.** The base crops
    (`s3://platform-wahoobay-models/datasets/fine_tune/dgx-2026-10-24/fine_tune.tar`)

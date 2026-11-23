@@ -75,7 +75,9 @@ def _box(box_id, frame=7, **overrides) -> verified_dataset.Box:
 
 def _build(boxes, *, model=None, completed=True, frames=None):
     model = tuple(b.box_id for b in boxes if b.box_id.startswith("ev")) if model is None else model
-    frame = verified_dataset.Frame(7, "seahivecam", T, "/f/7.jpg", completed, model)
+    frame = verified_dataset.Frame(
+        7, "seahivecam", T, "/f/7.jpg", completed, model, completed, 0, False
+    )
     sel = verified_dataset.Selection(tuple(boxes), {7: frame}, 2, None, None)
     plan = verified_dataset.detector_frames(sel)
     store = {"/f/7.jpg": FRAME} if frames is None else frames
@@ -226,3 +228,19 @@ def test_taxonomy_maps_raw_names_to_accepted_names_and_aphia_ids(tmp_path):
         "Kyphosus": 126015,
     }
     assert taxonomy.read(tmp_path / "missing.csv") == {}
+
+
+def test_a_box_just_past_the_edge_is_outside_even_with_padding():
+    assert crop_box((1281, 10, 1381, 50), 1280, 720) is None
+    assert crop_box((-120, 10, -5, 50), 1280, 720) is None
+    assert crop_box((1270, 10, 1300, 50), 1280, 720) == (1268, 8, 1280, 52)
+
+
+def test_an_unreadable_frame_holds_its_boxes_and_frame_back():
+    for data in (b"not a jpeg", FRAME[: len(FRAME) // 2]):
+        boxes = [_box("ev1"), _box("ev2", outcome="no_animal", accepted_name=None)]
+        files, counts, manifest, coco, report = _build(boxes, frames={"/f/7.jpg": data})
+
+        assert {r["held_back"] for r in manifest["records"]} == {"frame image unreadable"}
+        assert coco["images"] == [] and "frame 7: frame image unreadable" in report
+        assert not [k for k in files if k.startswith(("classifier/", "detector/images/"))]

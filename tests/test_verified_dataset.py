@@ -275,7 +275,9 @@ def _box(box_id, frame=7, **overrides) -> verified_dataset.Box:
 
 
 def _frame(frame=7, *, completed=True, model=("ev1",)) -> verified_dataset.Frame:
-    return verified_dataset.Frame(frame, "seahivecam", T, f"/f/{frame}.jpg", completed, model)
+    return verified_dataset.Frame(
+        frame, "seahivecam", T, f"/f/{frame}.jpg", completed, model, completed, 0, False
+    )
 
 
 def _sel(boxes, *frames) -> verified_dataset.Selection:
@@ -432,3 +434,76 @@ def test_build_dataset_is_a_job_run_by_hand():
     from app import jobs
 
     assert jobs.JOBS["build_dataset"] is jobs.build_dataset and "build_dataset" not in jobs.ALL
+
+
+# ----- final review fixes: frames the listed accounts did not fully cover -------------------
+
+
+async def _plan(db, user_ids):
+    return verified_dataset.detector_frames(await _select(db, user_ids))
+
+
+async def test_a_frame_completed_by_an_unlisted_account_is_held_back(rdb, tmp_path):
+    frame = await seed_frame(rdb, tmp_path, boxes=ONE_BOX)
+    roy, amy = await make_user(rdb, "roy"), await make_user(rdb, "amy")
+    await add_verdict(rdb, frame["event_ids"][0], roy, name="Seriola zonata")
+    await complete(rdb, frame, amy)
+
+    plan = await _plan(rdb, [roy])
+
+    assert plan.held_back == {frame["saved_frame_id"]: "completed by an unlisted account"}
+
+
+async def test_a_box_another_account_drew_holds_the_frame_back(rdb, tmp_path):
+    frame = await seed_frame(rdb, tmp_path, boxes=ONE_BOX)
+    roy, amy = await make_user(rdb, "roy"), await make_user(rdb, "amy")
+    await add_verdict(rdb, frame["event_ids"][0], roy, name="Seriola zonata")
+    await drawn(rdb, frame, amy, [700, 300, 800, 400], label="Seriola zonata")
+    await complete(rdb, frame, roy)
+
+    plan = await _plan(rdb, [roy])
+
+    assert plan.held_back == {frame["saved_frame_id"]: "a box drawn by an unlisted account"}
+
+
+async def test_a_frame_with_a_twin_saved_frame_row_is_held_back(rdb, tmp_path):
+    frame = await seed_frame(rdb, tmp_path, boxes=ONE_BOX)
+    roy = await make_user(rdb, "roy")
+    async with rdb.connection() as conn:
+        cur = await conn.execute(
+            """INSERT INTO saved_frames (ts, frame_id, source_name, reason, image_path, coco_path,
+                                         num_fish)
+               SELECT ts, frame_id, source_name, reason, image_path, coco_path, num_fish
+                 FROM saved_frames WHERE id = %s RETURNING id""",
+            (frame["saved_frame_id"],),
+        )
+        twin = (await cur.fetchone())[0]
+    await add_verdict(rdb, frame["event_ids"][0], roy, name="Seriola zonata")
+    await complete(rdb, frame, roy)
+    await drawn(
+        rdb, frame | {"saved_frame_id": twin}, roy, [700, 300, 800, 400], label="Seriola zonata"
+    )
+
+    plan = await _plan(rdb, [roy])
+
+    assert plan.frames == ()
+    assert plan.held_back[frame["saved_frame_id"]] == (
+        "another saved frame has the same camera, frame_id and ts"
+    )
+
+
+async def test_the_job_reads_one_consistent_state(rdb, tmp_path, dataset_env, monkeypatch):
+    await _roy_and_a_frame(rdb, tmp_path)
+    seen = {}
+    original = verified_dataset.select
+
+    async def spy(conn, ids):
+        for name in ("transaction_isolation", "transaction_read_only"):
+            seen[name] = (await (await conn.execute(f"SHOW {name}")).fetchone())[0]
+        return await original(conn, ids)
+
+    monkeypatch.setattr(verified_dataset, "select", spy)
+
+    await verified_dataset.build_dataset(rdb)
+
+    assert seen == {"transaction_isolation": "repeatable read", "transaction_read_only": "on"}
