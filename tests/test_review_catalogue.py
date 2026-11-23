@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from app.review_catalogue import (
@@ -147,3 +148,76 @@ async def test_aget_rebuilds_off_the_event_loop_and_current_never_rebuilds(
     cat = await store.aget()
     assert cat.has_name("Seriola zonata") and seen == [False]
     assert store.current() is cat and seen == [False]
+
+
+# --- The renamed classifier classes (docs/superpowers/specs/2026-11-22-class-renames-design.md) ---
+
+REPO = Path(__file__).resolve().parents[1]
+CLASSES_JSON = REPO / "data" / "models" / "classifier_v2" / "classes.json"
+# sha256 of classes.json as published in classifier_v2/dgx-2026-10-24 (its SHA256SUMS).
+PUBLISHED_SHA256 = "05acae233f4eeae4db53b9ce3b47721035f68620eab8a0047479fd9d40600b54"
+
+
+def test_class_list_uses_the_new_names():
+    """Only the two names change: same 223 classes in the same order, so the same weights mean
+    the same predictions. Undoing the renames gives back the published file byte for byte."""
+    import hashlib
+
+    from common.class_renames import CLASS_RENAMES, folder
+
+    text = CLASSES_JSON.read_text()
+    classes = json.loads(text)
+    assert len(classes) == 223
+    assert classes.index("Brachygenys_chrysargyrea") == 85
+    assert classes.index("Kyphosus") == 108
+    for old, new in CLASS_RENAMES.items():
+        assert folder(new) in classes and folder(old) not in classes
+        text = text.replace(f'"{folder(new)}"', f'"{folder(old)}"')
+    assert hashlib.sha256(text.encode()).hexdigest() == PUBLISHED_SHA256
+
+
+def test_renamed_classes_attach_to_their_species_log_entries(tmp_path):
+    """The Species Log still spells both the old way; the renamed classes must land on those
+    entries (resolved, with their WoRMS data), not make new ones."""
+    manifest = tmp_path / "species_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {"binomial": "Haemulon chrysargyreum", "common_name": "Smallmouth Grunt"},
+                {"binomial": "Kyphosus sectatrix/bigibbus", "common_name": "Bermuda/Gray Chub"},
+            ]
+        )
+    )
+    (tmp_path / "inat.json").write_text("[]")
+    (tmp_path / "celebrities.json").write_text("{}")
+    cat = load_catalogue(
+        CataloguePaths(
+            species_manifest=manifest,
+            classes_json=CLASSES_JSON,
+            taxonomy_csv=REPO / "assets" / "taxonomy.csv",
+            inat_manifest=tmp_path / "inat.json",
+            celebrities_json=tmp_path / "celebrities.json",
+            photo_root=tmp_path,
+        )
+    )
+    for name, class_dir in (
+        ("Brachygenys chrysargyrea", "Brachygenys_chrysargyrea"),
+        ("Kyphosus", "Kyphosus"),
+    ):
+        [entry] = [e for e in cat.entries if e.name == name]
+        assert (entry.class_dir, entry.in_classifier, entry.in_species_log, entry.resolved) == (
+            class_dir,
+            True,
+            True,
+            True,
+        )
+    assert cat.accepted("Brachygenys chrysargyrea") == "Brachygenys chrysargyrea"
+    assert cat.accepted("Haemulon chrysargyreum") == "Brachygenys chrysargyrea"
+    assert cat.accepted("Kyphosus") == "Kyphosus"
+
+
+def test_common_names_for_the_new_names():
+    from app.common_names import common
+
+    assert common("Brachygenys chrysargyrea") == "Smallmouth Grunt"
+    assert common("Kyphosus") == "Sea Chub"

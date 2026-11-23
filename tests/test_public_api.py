@@ -7,6 +7,7 @@ import asyncio
 import csv
 import inspect
 import io
+import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -18,7 +19,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from review_fixtures import T0, TEST_DSN, add_item, add_verdict, login, make_user, seed_frame
+from review_fixtures import T0, TEST_DSN, add_item, add_verdict, jpeg, login, make_user, seed_frame
 
 pytestmark = pytest.mark.anyio
 EMBED = "https://www.youtube.com/embed/abc123"
@@ -1676,3 +1677,34 @@ async def test_a_download_cut_off_gives_its_place_back_at_once(
             assert not busy.locked(), ext  # the other still
             busy.release()
     assert list(spool.iterdir()) == []
+
+
+async def test_an_old_species_id_answers_as_the_new_one(rdb, public_client, review_assets):
+    """wahoobay.org's fish.json still names smallmouth grunt by the classifier's old class name
+    (renamed 2026-11-22); its species page asks for that id and must keep getting the fish."""
+    await seed_track(rdb, "Brachygenys chrysargyrea", 1, datetime.now(UTC) - timedelta(days=1))
+    await refresh_sightings(rdb)
+    # A species and its reference photo under the new name only (the fixture taxonomy has no
+    # row for the old one), so the old id finds the photo only through the rename.
+    assets = review_assets["assets"]
+    inat = json.loads((assets / "inat_manifest.json").read_text())
+    local = "assets/inat_photos/Brachygenys_chrysargyrea/21.jpg"
+    inat.append({"binomial": "Brachygenys chrysargyrea", "photo_id": 21, "local_path": local})
+    (assets / "inat_manifest.json").write_text(json.dumps(inat))
+    log = json.loads((assets / "species_manifest.json").read_text())
+    log.append({"binomial": "Brachygenys chrysargyrea", "common_name": "Smallmouth Grunt"})
+    (assets / "species_manifest.json").write_text(json.dumps(log))
+    jpeg(review_assets["root"] / local, (90, 120, 150), (64, 48))
+    with public_client(TZ=NEW_YORK) as client:
+        new = client.get("/api/public/species/Brachygenys%20chrysargyrea")
+        old = client.get("/api/public/species/Haemulon%20chrysargyreum")
+        new_photo = client.get("/api/public/species/Brachygenys%20chrysargyrea/photo.jpg")
+        old_photo = client.get("/api/public/species/Haemulon%20chrysargyreum/photo.jpg")
+        unknown = client.get("/api/public/species/Nonesuch%20fish")
+    assert new.status_code == 200, new.text
+    assert old.status_code == 200, old.text
+    assert old.json() == new.json()
+    assert old.json()["species_id"] == "Brachygenys chrysargyrea"
+    assert (old_photo.status_code, new_photo.status_code) == (200, 200)
+    assert old_photo.content == new_photo.content
+    assert unknown.status_code == 404

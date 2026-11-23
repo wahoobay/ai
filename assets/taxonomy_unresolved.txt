@@ -11,7 +11,6 @@ EucinostomusUlaema lefroyi	no match
 Holacanthus townsendi	genus only	Holacanthus
 Holothuria thomasi	fuzzy match (exact_subgenus)	Holothuria (Thymiosycia) thomasi
 Kyphosus sectatrix/bigibbus	genus only	Kyphosus
-Kyphosus sectatrixbigibbus	genus only	Kyphosus
 Labrisomus nuchipinnius	fuzzy match (phonetic)	Labrisomus nuchipinnis
 Mithrax cinctimanus	genus only	Mithrax
 Ocyropsis immaculata	genus only	Ocyropsis

@@ -1,6 +1,6 @@
 """Periodic work, run from an event rather than inside the web process.
 
-    python -m app.jobs refresh_matviews|alert_rules|archive_labels|migrate|seed|import_legacy|status|all
+    python -m app.jobs refresh_matviews|alert_rules|archive_labels|rename_classes|migrate|seed|import_legacy|status|all
     app.lambda_entry.handler({"job": "..."})   the jobs and migrate Lambdas
 
 The dashboard holds no loops: the materialized-view refresh and the alert rules
@@ -112,6 +112,17 @@ async def archive_labels(pool: AsyncConnectionPool) -> dict[str, Any]:
     return await label_archive.archive_labels(pool)
 
 
+async def rename_classes(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Rename detections still stored under a renamed class's old name (class_renames.py), then
+    refresh the sightings views if anything changed; detail = rows changed."""
+    from . import class_renames
+
+    changed = await class_renames.rename_stored(pool)
+    if any(changed.values()):
+        await refresh_matviews(pool)
+    return changed
+
+
 async def status(pool: AsyncConnectionPool) -> dict[str, Any]:
     """What is going on inside: the schema revision, the last job runs, the pollers,
     row counts. A read for the platform's verify script; not recorded as a run."""
@@ -151,6 +162,7 @@ JOBS: dict[str, Callable[[AsyncConnectionPool], Awaitable[dict[str, Any]]]] = {
     "import_legacy": import_legacy,
     "status": status,
     "archive_labels": archive_labels,
+    "rename_classes": rename_classes,
 }
 READ_ONLY = {"status"}  # not recorded in job_runs
 ALL = ("refresh_matviews", "alert_rules")

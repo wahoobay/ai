@@ -25,6 +25,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
+from common.class_renames import renamed
 from fastapi import APIRouter, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -615,6 +616,7 @@ def build_public_router(cfg, state) -> APIRouter:
     @router.get("/species/{species_id}/photo.jpg")
     async def public_species_photo(species_id: str) -> Response:
         """The species' iNaturalist reference photo, which the species list credits."""
+        species_id = renamed(species_id)  # an old class name, as on the profile below
         found = _photo(await _catalogue(), species_id)
         data = None
         if found is not None:
@@ -630,6 +632,9 @@ def build_public_router(cfg, state) -> APIRouter:
     async def public_species_profile(species_id: str) -> JSONResponse:
         """The species' list entry, its sightings by local hour of day and by month over the
         last twelve months (the site's zone), and its newest saved detections."""
+        # A class renamed on 2026-11-22 answers under its old id too: wahoobay.org's fish.json
+        # stores the old one. The alias can go once fish.json has been synced.
+        species_id = renamed(species_id)
         pool = _pool()
         if pool is None:
             return _no_database()

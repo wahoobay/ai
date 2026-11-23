@@ -3,12 +3,18 @@
 
     MODELS_URL      s3://platform-<location>-models/ (AWS) | file:///data/models | https://host/prefix
     MODELS_DIR      where the worker reads them (default /data/models)
-    MODEL_VERSIONS  "detector_v26=n3,classifier_v0_10_2=v0.10.2,classifier_v2=dgx-2026-10-24"
+    MODEL_VERSIONS  "detector_v26=n3,classifier_v0_10_2=v0.10.2,classifier_v2=dgx-2026-10-24-r1"
 
 Layout, as published by the infra repository's scripts/publish_models.py:
 <MODELS_URL>/<model>/<version>/<files> plus a SHA256SUMS file. A model directory
 that already holds files is left alone (a bind-mounted data/models wins); each
-fetched file is checked against SHA256SUMS before it is kept. For a laptop
+fetched file is checked against SHA256SUMS before it is kept. Each fetch records its
+version in ``<model>/.version``; a directory whose ``.version`` names another version is
+fetched again and swapped in only once complete (2026-11-22: a version pin has to reach the GPU
+host, whose /data/models outlives every deploy). A directory without ``.version`` is still left
+alone, so one fetched before this change must be removed once by hand. When a pinned version
+cannot be fetched but a complete earlier one is on disk, the earlier one is kept (and named on
+stderr) rather than stopping the worker. For a laptop
 without bucket access, scripts/fetch_models.sh still downloads the two public
 Fishial bundles.
 """
@@ -31,8 +37,11 @@ except ImportError:  # run from the repository rather than an image
 DEFAULT_VERSIONS = {
     "detector_v26": "n3",
     "classifier_v0_10_2": "v0.10.2",
-    "classifier_v2": "dgx-2026-10-24",
+    "classifier_v2": "dgx-2026-10-24-r1",
 }
+
+
+VERSION_FILE = ".version"
 
 
 def versions(spec: str | None = None) -> dict[str, str]:
@@ -46,19 +55,32 @@ def versions(spec: str | None = None) -> dict[str, str]:
     return out
 
 
+def held_version(target: Path) -> str | None:
+    """The version a complete fetch left in `target` (its .version), or None."""
+    marker = target / VERSION_FILE
+    return marker.read_text().strip() if marker.is_file() else None
+
+
 def fetch_model(models_url: str, dest: Path, model: str, version: str) -> int:
     """Copy <models_url>/<model>/<version>/* into <dest>/<model>, verified; the
     number of files written (0 when the directory already holds files)."""
     target = dest / model
     if target.is_dir() and any(p.is_file() for p in target.rglob("*")):
-        print(f"{model}: present in {target}, left alone")
-        return 0
+        held = held_version(target)
+        if held is None or held == version:
+            print(f"{model}: present in {target}, left alone")
+            return 0
+        print(f"{model}: {target} holds {held}; fetching {version}")
     # Whole or not at all: files land in <model>.partial/ and the directory is renamed into place at the
     # end, so a download interrupted by a deploy (the models volume persists on the GPU host) is redone,
     # never mistaken for a complete model by the next start.
     staging = dest / f"{model}.partial"
-    if staging.exists():
-        shutil.rmtree(staging)
+    for leftover in (
+        staging,
+        dest / f"{model}.old",
+    ):  # from a start that died mid-fetch or mid-swap
+        if leftover.exists():
+            shutil.rmtree(leftover)
     base = join(models_url, f"{model}/{version}")
     sums = open_read(join(base, "SHA256SUMS")).decode()
     written = 0
@@ -72,9 +94,16 @@ def fetch_model(models_url: str, dest: Path, model: str, version: str) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         written += 1
+    (staging / VERSION_FILE).write_text(version)
+    # The old directory (empty, or a complete fetch of another version) is renamed aside before
+    # the new one moves in, and only then deleted: whenever the process dies, <model> is either
+    # one whole version or absent (absent is fetched afresh next start), never half-deleted.
+    aside = dest / f"{model}.old"
     if target.exists():
-        shutil.rmtree(target)  # an empty or stale directory; a filled one returned above
+        target.rename(aside)
     staging.rename(target)
+    if aside.exists():
+        shutil.rmtree(aside)
     print(f"{model}@{version}: {written} file(s) into {target}")
     return written
 
@@ -103,6 +132,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             fetch_model(args.models_url, dest, model, version)
         except (FileNotFoundError, ValueError, OSError) as e:
+            held = held_version(dest / model)
+            if held is not None:
+                # A complete earlier version is on disk: run on it rather than stop the worker
+                # (and the stream it annotates); the next start tries the pin again.
+                print(f"{model}@{version}: not fetched: {e}; keeping {held}", file=sys.stderr)
+                continue
             failed += 1
             print(f"{model}@{version}: not fetched: {e}", file=sys.stderr)
     return 1 if failed else 0
