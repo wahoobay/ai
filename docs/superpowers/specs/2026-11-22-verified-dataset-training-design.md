@@ -22,7 +22,8 @@ water and weather matching, volunteer credit, public release) comes later.
 What there is to train on (staging, 2026-11-22): Roy's 1,255 answers on model boxes and 30 boxes he
 drew, on 188 frames. He completed 179 of those frames (every box answered, missed fish drawn); all
 30 drawn boxes are on completed frames. 1,209 of his labels are on frames with more than one fish;
-421 are "mark the rest" answers. 119 boxes wait for a second opinion that nobody can give (Roy
+421 are "mark the rest" answers; 30 are "no animal here" (on 25 frames; many are holes in the
+SeaHIVEs, Dan, 2026-11-22) and 93 "can't identify". 119 boxes wait for a second opinion that nobody can give (Roy
 cannot answer his own), so nearly every label counts on his answer alone ("single"). His frames
 are real SEAHIVECAM captures with their capture times (20 May to 3 November 2026, 34 camera-days,
 most from 26 October on), saved by the worker as "interesting" frames; none are the seed job's
@@ -31,8 +32,12 @@ synthetic rows (`model_version = 'sample'`, 320 events on staging).
 ## Goals
 
 - One command on AWS turns the labeling tool's answers into a dated, never-changing snapshot in S3:
-  classifier crops, complete frames with COCO boxes for the detector, a manifest, and a report of
-  everything held back and why.
+  classifier crops (species and "no animal"), complete frames with COCO boxes for the detector, a
+  manifest, and a report of everything held back and why.
+- Both models learn what is not a fish (Dan, 2026-11-22: "Not a fish" should be learned; many are
+  the holes in the SeaHIVEs, and the model must not call them a fish or anything else). The
+  detector learns them as background; the classifier gets a "no animal" class, so a hole the
+  detector still boxes is not named as a species.
 - A second command, run where training runs, assembles the classifier's training folder from the
   base crops (`s3://platform-wahoobay-models/datasets/fine_tune/dgx-2026-10-24/fine_tune.tar`) and a
   snapshot, in the layout and manifest format `train_baseline.py` already reads.
@@ -113,7 +118,7 @@ snapshot.json                    provenance: snapshot id, git sha, newest answer
 manifest.json                    one record per box, and counts
 report.txt                       every box and frame held back, with the reason
 classifier/<Accepted_name>/ev<event_id>.jpg | add<box_id>.jpg
-negatives/ev<event_id>.jpg       "no animal" answers
+classifier/no_animal/ev<event_id>.jpg   "no animal here" answers
 detector/images/<saved_frame_id>.jpg
 detector/annotations.coco.json   complete frames only
 ```
@@ -122,12 +127,16 @@ detector/annotations.coco.json   complete frames only
   clamped to the frame, not resized, JPEG, in a folder named after the WoRMS accepted name (spaces
   as underscores). The snapshot knows nothing of any model's class list (the jobs Lambda has none,
   and a later model may have other classes); the assembler maps names to training folders. "Can't
-  identify" answers make no crop. "No animal" answers are cropped into `negatives/` for the detector
-  project to use or ignore; they never become a classifier class.
+  identify" answers make no crop.
+- **"No animal" crops.** Cut the same way into `classifier/no_animal/`, a class of its own. The
+  name is the review tool's outcome (`no_animal`); it is lower case, so it cannot collide with a
+  WoRMS name (always capitalised) and sorts after every species folder; it does not start with `_`,
+  which the trainer skips.
 - **Detector frames.** A frame completed in the tool (`review_frames`) in which every model box
   (detection events with the frame's exact camera, `frame_id` and `ts`) has a counting answer and
   none is disputed or held back. Its annotations: every box whose outcome is a species or "can't
-  identify", plus its drawn boxes. "No animal" boxes are left out, so they count as background. A
+  identify", plus its drawn boxes. "No animal" boxes are left out, so they count as background and
+the detector learns not to box them. A
   frame that fails any of this is held back whole, with the reason.
 - **COCO.** Standard COCO: `images` (`id` = `saved_frame_id`, `file_name`, `width`, `height`,
   `date_captured`, `camera`); `annotations` (`bbox` as `[x, y, w, h]`, `area`, `iscrowd` 0,
@@ -159,10 +168,14 @@ It builds a fresh directory and never edits its inputs:
    `review:<camera>:<local date>`, `source_kind` = `review:video`, `frame_index` = seconds since
    local midnight. The `by_source` and `temporal_within_source` splits then treat each camera-day
    as one clip, unchanged.
-3. `_taxonomy.json` from the base, and `_review_merge.json` naming the snapshot and the counts.
+3. The snapshot's `no_animal` crops copied to `<out>/no_animal/` the same way. The base crops have
+   no such class, so it holds Roy's answers alone (30 today); the trainer's class-balanced sampler
+   already weights a small class up.
+4. `_taxonomy.json` from the base, and `_review_merge.json` naming the snapshot and the counts.
 
 A species with no base folder (none of Roy's 26 today) is reported and skipped, unless
-`--allow-new-classes` gives it a folder of its own. Negatives are never copied. The September spec's
+`--allow-new-classes` gives it a folder of its own; `no_animal` is not a new species and is always
+copied. The September spec's
 in-place merge and unmerge are replaced by building a new folder: the base tar never changes, so
 undoing is rebuilding without `--snapshot`.
 
@@ -170,6 +183,14 @@ undoing is rebuilding without `--snapshot`.
 
 The jobs Lambda gets `DATASET_URL` and `DATASET_ACCOUNTS`, and read and put (never delete) on
 `datasets/verified/<env>/*` in the models bucket, like the archive's grants.
+
+## Handed to the classifier project
+
+A classifier trained with `no_animal` has one class more than the live one, and today the worker
+stores whatever class wins as the detection's species. Before such a model ships, the worker must
+keep a box it calls `no_animal` out of the sightings (drop it, or store it hidden so reviewers can
+still check it), and the review catalogue and public lists must not show `no_animal` as a fish.
+That project decides which; this one only makes the class.
 
 ## Left to the builder
 
