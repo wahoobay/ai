@@ -12,6 +12,12 @@ under-resourced. The point of the run is to fix a numerical baseline —
 later experiment (pretrained backbone, more data, taxonomically-aware
 loss, …) has something to beat.
 
+From Meta's pretrained DINOv2 (--arch, --pretrained <model.safetensors>, --layer-decay; spec
+docs/superpowers/specs/2026-11-23-pretrained-dino-design.md): the backbone starts from Meta's
+weights (read from the file: the training machine has no network), the head is new, and with
+--layer-decay < 1 each layer learns at that fraction of the rate of the layer above, so the
+pretrained features are adjusted rather than overwritten.
+
 Fine-tuning (--init-checkpoint, --init-classes; spec
 docs/superpowers/specs/2026-11-23-training-machine-design.md): the run starts from a published
 bundle instead of random weights. The backbone loads whole and the head's rows are copied by class
@@ -64,6 +70,7 @@ from finetune_init import head_rows, is_review_crop, is_review_source, split_rev
 from PIL import Image
 from sklearn.metrics import classification_report, f1_score, top_k_accuracy_score
 from sklearn.model_selection import train_test_split
+from timm.optim import param_groups_layer_decay
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import transforms
 
@@ -104,6 +111,12 @@ class TrainConfig:
     # empty = the checkpoint's own "classes"). Empty init_checkpoint = random init, as before.
     init_checkpoint: str = ""
     init_classes: str = ""
+    # Meta's pretrained backbone for `arch` (a timm model.safetensors); empty = none. Exclusive with
+    # init_checkpoint.
+    pretrained: str = ""
+    # Layer-wise learning-rate decay (timm's param_groups_layer_decay): the head at lr, each layer
+    # below at layer_decay times the one above. 1.0 = one rate for every parameter, as before.
+    layer_decay: float = 1.0
 
 
 # ---------- dataset ----------
@@ -334,6 +347,17 @@ def build_model(cfg: TrainConfig) -> nn.Module:
     with no DINOv2 self-supervised weights loaded. The head is replaced
     with a fresh ``nn.Linear`` matching our class count.
     """
+    if cfg.pretrained:
+        # Meta's weights from a local file (no network on the training machine); timm resamples the
+        # position grid from the pretraining size (518) to img_size, and the head is new.
+        return timm.create_model(
+            cfg.arch,
+            pretrained=True,
+            pretrained_cfg_overlay={"file": cfg.pretrained},
+            num_classes=cfg.num_classes,
+            img_size=cfg.img_size,
+            drop_path_rate=cfg.drop_path,
+        )
     model = timm.create_model(
         cfg.arch,
         pretrained=False,
@@ -499,12 +523,22 @@ def train(cfg: TrainConfig) -> dict:
         pin_memory=True,
     )
 
+    if cfg.pretrained and cfg.init_checkpoint:
+        raise ValueError("start from a published bundle or from pretrained weights, not both")
     model = build_model(cfg)
     init = load_init(model, cfg, classes) if cfg.init_checkpoint else None
     model = model.to(cfg.device)
-    optim = torch.optim.AdamW(
-        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.999)
-    )
+    if cfg.layer_decay < 1.0:
+        # Groups carry their own weight decay (none for norms and biases) and an lr_scale the
+        # schedule below applies.
+        params = param_groups_layer_decay(
+            model, weight_decay=cfg.weight_decay, layer_decay=cfg.layer_decay
+        )
+        optim = torch.optim.AdamW(params, lr=cfg.lr, betas=(0.9, 0.999))
+    else:
+        optim = torch.optim.AdamW(
+            model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.999)
+        )
     amp_dtype = (
         torch.bfloat16
         if cfg.amp_dtype == "bf16" and torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -533,7 +567,7 @@ def train(cfg: TrainConfig) -> dict:
     t0 = time.monotonic()
     for epoch in range(cfg.epochs):
         for g in optim.param_groups:
-            g["lr"] = cosine_lr(epoch, cfg)
+            g["lr"] = cosine_lr(epoch, cfg) * g.get("lr_scale", 1.0)
         model.train()
         running_loss, running_n = 0.0, 0
         for x, y in train_loader:
@@ -557,7 +591,7 @@ def train(cfg: TrainConfig) -> dict:
             "epoch": epoch,
             "train_loss": round(train_loss, 4),
             **{k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
-            "lr": round(optim.param_groups[0]["lr"], 6),
+            "lr": round(max(g["lr"] for g in optim.param_groups), 6),  # the head's
             "elapsed_s": round(elapsed, 1),
         }
         history.append(row)
@@ -630,6 +664,11 @@ def main(argv: list[str] | None = None) -> dict:
     ap.add_argument(
         "--init-classes", default="", help="its classes.json (default: the checkpoint's own list)"
     )
+    ap.add_argument("--arch", default="vit_small_patch14_dinov2", help="the timm network")
+    ap.add_argument(
+        "--pretrained", default="", help="Meta's backbone weights for --arch (model.safetensors)"
+    )
+    ap.add_argument("--layer-decay", type=float, default=1.0, help="per-layer LR decay; 1 = off")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--img-size", type=int, default=224)
@@ -656,6 +695,9 @@ def main(argv: list[str] | None = None) -> dict:
         warmup_epochs=min(args.warmup_epochs, 1) if args.smoke else args.warmup_epochs,
         init_checkpoint=args.init_checkpoint,
         init_classes=args.init_classes,
+        arch=args.arch,
+        pretrained=args.pretrained,
+        layer_decay=args.layer_decay,
         batch_size=args.batch_size,
         lr=args.lr,
         img_size=args.img_size,
