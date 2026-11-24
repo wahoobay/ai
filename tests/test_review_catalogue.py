@@ -221,3 +221,13 @@ def test_common_names_for_the_new_names():
 
     assert common("Brachygenys chrysargyrea") == "Smallmouth Grunt"
     assert common("Kyphosus") == "Sea Chub"
+
+
+def test_the_no_animal_class_is_not_offered_as_a_species(tmp_path):
+    """A classifier trained on the verified dataset lists no_animal in classes.json (the dashboard
+    fetches that file at start); the catalogue must not turn it into a fish to label."""
+    info = write_review_assets(tmp_path)
+    info["classes"].write_text(json.dumps([*json.loads(info["classes"].read_text()), "no_animal"]))
+    cat = load_catalogue(catalogue_paths(info))
+    assert not any("no" in n.lower() and "animal" in n.lower() for n in cat.names())
+    assert cat.class_dir("Pomatomus saltatrix") == "Pomatomus_saltarix"  # the species still load
