@@ -223,3 +223,76 @@ def test_a_reviewers_day_with_few_frames_stays_in_training():
     two = [(100, 0), (200, 1)]
     assert split_review_source(two, 0.2) == ([0, 1], [])
     assert split_review_source([(1, 0), (2, 1), (3, 2)], 0.2) == ([0, 1], [2])
+
+
+# ---------- a run from Meta's pretrained weights (spec 2026-11-23-pretrained-dino-design.md) ----------
+
+
+def _pretrained_channels(root: Path) -> Path:
+    """base + snapshot as above, and a pretrained channel in place of init."""
+    channels = _channels(root)
+    for f in (channels / "init").iterdir():
+        f.unlink()
+    (channels / "init").rmdir()
+    pre = channels / "pretrained"
+    pre.mkdir()
+    (pre / "model.safetensors").write_bytes(b"meta weights")
+    (pre / "README.md").write_text("license: apache-2.0")
+    _sums(pre, ["model.safetensors", "README.md"])
+    return channels
+
+
+def test_a_pretrained_run_trains_from_metas_weights_with_layer_decay(tmp_path):
+    _pretrained_channels(tmp_path)
+    fakes = Fakes(tmp_path)
+    args = _args(tmp_path, "--arch", "vit_base_patch14_dinov2", "--layer-decay", "0.75")
+    run(args, assemble=fakes.assemble, train=fakes.train)
+    t = fakes.trained
+    channel = tmp_path / "channels" / "pretrained"
+    assert t[t.index("--pretrained") + 1] == str(channel / "model.safetensors")
+    assert t[t.index("--arch") + 1] == "vit_base_patch14_dinov2"
+    assert t[t.index("--layer-decay") + 1] == "0.75"
+    assert "--init-checkpoint" not in t
+    inputs = json.loads((tmp_path / "model" / "inputs.json").read_text())
+    assert set(inputs["pretrained"]) == {"model.safetensors", "README.md"}
+    assert "init" not in inputs
+
+
+def test_a_pretrained_channel_without_its_weights_stops_the_run(tmp_path):
+    from train_job import Refused
+
+    channels = _pretrained_channels(tmp_path)
+    (channels / "pretrained" / "model.safetensors").unlink()
+    _sums(channels / "pretrained", ["README.md"])
+    fakes = Fakes(tmp_path)
+    with pytest.raises(Refused, match="model.safetensors"):
+        run(
+            _args(tmp_path, "--arch", "vit_base_patch14_dinov2"),
+            assemble=fakes.assemble,
+            train=fakes.train,
+        )
+    assert fakes.trained == []
+
+
+def test_a_run_needs_exactly_one_starting_point(tmp_path):
+    """Both channels, or neither, is a launcher mistake: refuse rather than guess."""
+    from train_job import Refused
+
+    channels = _pretrained_channels(tmp_path)
+    init = channels / "init"
+    init.mkdir()
+    (init / "checkpoint_best.pt").write_bytes(b"weights")
+    (init / "classes.json").write_text("[]")
+    _sums(init, ["checkpoint_best.pt", "classes.json"])
+    fakes = Fakes(tmp_path)
+    with pytest.raises(Refused, match="exactly one"):
+        run(_args(tmp_path), assemble=fakes.assemble, train=fakes.train)
+    for f in (channels / "pretrained").iterdir():
+        f.unlink()
+    (channels / "pretrained").rmdir()
+    for f in init.iterdir():
+        f.unlink()
+    init.rmdir()
+    with pytest.raises(Refused, match="exactly one"):
+        run(_args(tmp_path), assemble=fakes.assemble, train=fakes.train)
+    assert fakes.trained == []

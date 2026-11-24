@@ -40,6 +40,7 @@ import torch.nn.functional as F
 from common.class_renames import class_names
 from ultralytics import YOLO
 
+from .bundle_spec import model_spec
 from .class_scores import no_animal_row, ranked
 from .pipeline_types import FishDetection
 
@@ -144,16 +145,19 @@ class ClassifierV2Pipeline:
         if num_classes < 2:
             raise RuntimeError(f"v2 classes.json has {num_classes} entries; expected >=2")
 
-        self.img_size = int(cfg.classifier_v2_input_size)
-        backbone = cfg.classifier_v2_arch
+        ckpt_path = Path(cfg.classifier_v2_checkpoint)
+        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        # The checkpoint names the network it was trained as (a ViT-B bundle builds a ViT-B);
+        # CLASSIFIER_V2_ARCH / CLASSIFIER_V2_INPUT_SIZE are the fallback for one that does not.
+        backbone, self.img_size = model_spec(
+            ckpt, cfg.classifier_v2_arch, int(cfg.classifier_v2_input_size)
+        )
         self.model = timm.create_model(
             backbone,
             pretrained=False,
             num_classes=num_classes,
             img_size=self.img_size,
         )
-        ckpt_path = Path(cfg.classifier_v2_checkpoint)
-        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         sd = ckpt.get("model", ckpt.get("state_dict", ckpt))
         sd = _strip_module_prefix(sd)
         missing, unexpected = self.model.load_state_dict(sd, strict=False)

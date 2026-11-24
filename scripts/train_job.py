@@ -9,9 +9,12 @@ SageMaker copies three input channels onto the machine (/opt/ml/input/data/<chan
   base      the base crops: fine_tune.tar and its SHA256SUMS (datasets/fine_tune/<version>/)
   snapshot  one verified snapshot (datasets/verified/<env>/<stamp>/)
   init      the starting weights: checkpoint_best.pt, classes.json, SHA256SUMS (classifier_v2/<version>/)
+  pretrained  or, in place of init, Meta's pretrained backbone: model.safetensors, its model card,
+            SHA256SUMS (pretrained/<timm tag>/; spec 2026-11-23-pretrained-dino-design.md)
 
-The run checks both SHA256SUMS files, assembles data/fine_tune from the base tar and the snapshot
-(scripts/assemble_training_set.py), fine-tunes from the init bundle (scripts/train_baseline.py),
+The run checks every SHA256SUMS file, assembles data/fine_tune from the base tar and the snapshot
+(scripts/assemble_training_set.py), fine-tunes from the init bundle or the pretrained backbone
+(scripts/train_baseline.py),
 and leaves the run's files in /opt/ml/model with inputs.json (what it trained on) and a new
 SHA256SUMS; SageMaker copies that folder to S3. A failure's reason goes to /opt/ml/output/failure,
 which SageMaker shows as the job's failure reason. SageMaker runs the image as `<entrypoint> train`;
@@ -61,6 +64,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
         choices=("stratified", "by_source", "temporal_within_source"),
         default="temporal_within_source",  # the live model's split: see the spec §1
     )
+    p.add_argument("--arch", default="vit_small_patch14_dinov2", help="the timm network")
+    p.add_argument("--layer-decay", type=float, default=1.0, help="per-layer LR decay; 1 = off")
     p.add_argument("--smoke", action="store_true", help="3 epochs, for a check of the machine")
     p.add_argument("--channels", type=Path, default=SM / "input" / "data")
     p.add_argument("--model-dir", type=Path, default=SM / "model")
@@ -93,6 +98,21 @@ def _init(init: Path) -> dict[str, str]:
     return sums
 
 
+def _pretrained(pretrained: Path) -> dict[str, str]:
+    sums = verify_sums(pretrained)
+    if "model.safetensors" not in sums:
+        raise Refused(f"the pretrained channel's {SUMS} does not list model.safetensors")
+    return sums
+
+
+def _start(channels: Path) -> tuple[str, Path]:
+    """The run's starting point: ("init", dir) or ("pretrained", dir), exactly one of them."""
+    found = [c for c in ("init", "pretrained") if (channels / c).is_dir()]
+    if len(found) != 1:
+        raise Refused(f"a run needs exactly one of the init and pretrained channels, found {found}")
+    return found[0], channels / found[0]
+
+
 def _assemble(argv: list[str]) -> int:
     from assemble_training_set import main
 
@@ -113,8 +133,18 @@ def run(
     base_tar, base_sha = _base_tar(args.channels / "base")
     snapshot_dir = args.channels / "snapshot"
     snap = _snapshot(snapshot_dir)
-    init_dir = args.channels / "init"
-    init_sums = _init(init_dir)
+    start, start_dir = _start(args.channels)
+    if start == "init":
+        start_sums = _init(start_dir)
+        start_args = [
+            "--init-checkpoint",
+            str(start_dir / "checkpoint_best.pt"),
+            "--init-classes",
+            str(start_dir / "classes.json"),
+        ]
+    else:
+        start_sums = _pretrained(start_dir)
+        start_args = ["--pretrained", str(start_dir / "model.safetensors")]
 
     data = args.repo_root / "data" / "fine_tune"
     code = assemble(["--base", str(base_tar), "--snapshot", str(snapshot_dir), "--out", str(data)])
@@ -138,10 +168,11 @@ def run(
         args.device,
         "--split-mode",
         args.split_mode,
-        "--init-checkpoint",
-        str(init_dir / "checkpoint_best.pt"),
-        "--init-classes",
-        str(init_dir / "classes.json"),
+        "--arch",
+        args.arch,
+        "--layer-decay",
+        str(args.layer_decay),
+        *start_args,
     ] + (["--smoke"] if args.smoke else [])
     metrics = train(train_argv)
 
@@ -160,7 +191,7 @@ def run(
         "git_sha": os.environ.get("GIT_SHA", "unknown"),
         "base": {"file": base_tar.name, "sha256": base_sha},
         "snapshot": {k: snap.get(k) for k in ("snapshot", "content_hash", "git_sha")},
-        "init": init_sums,
+        start: start_sums,
         "train_args": train_argv,
     }
     (out / "inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")

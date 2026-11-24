@@ -23,6 +23,14 @@ the same validation set) and `inputs.json` in S3. Start it from infra:
 `python -m scripts.train_classifier staging --wait` (README, "The training machine"). Nothing a
 run produces goes live by itself.
 
+A run can also start from **Meta's pretrained DINOv2** instead of a published bundle (spec
+`docs/superpowers/specs/2026-11-23-pretrained-dino-design.md`): a `pretrained` channel
+(`pretrained/<timm tag>/` in the models bucket: `model.safetensors`, its model card, SHA256SUMS)
+replaces `init`, and `train_baseline.py --arch <arch> --pretrained <file> --layer-decay 0.75`
+builds the backbone from Meta's weights with a new head and per-layer learning rates. Such a model
+has no DGX ancestry. The checkpoint records its arch, and the worker builds whatever network a
+bundle names, so a ViT-B ships like any other bundle.
+
 Shipping a run (first done 2026-11-23: `classifier_v2/aws-2026-11-23`, from job
 `ai-wahoobay-staging-clf-20261123T225038Z`):
 
