@@ -10,6 +10,12 @@ spelled the way the worker writes them (classes.json's underscores become spaces
 
 from __future__ import annotations
 
+# Not a species: the class a classifier trained on the verified dataset learns from the reviewers'
+# "no animal here" answers (holes in the SeaHIVEs, rock). classes.json spells it this way (lower
+# case, so it cannot collide with a binomial); the worker drops a box it wins and the review
+# catalogue never offers it as a fish.
+NO_ANIMAL = "no_animal"
+
 CLASS_RENAMES: dict[str, str] = {
     "Haemulon chrysargyreum": "Brachygenys chrysargyrea",
     "Kyphosus sectatrixbigibbus": "Kyphosus",

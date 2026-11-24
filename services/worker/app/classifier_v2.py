@@ -2,7 +2,8 @@
 
 Replaces the Fishial-vendored 866-class ArcFace + sub-centre + KNN
 classifier with a from-scratch DINOv2 ViT-S/14 trained on our
-volunteer-labelled crops + iNaturalist supplements (223 classes).
+volunteer-labelled crops + iNaturalist supplements (223 classes; the fine-tuned
+bundles add no_animal, whose boxes are dropped: class_scores.py).
 The detector is unchanged — same ultralytics YOLO v26 checkpoint —
 only the per-bbox species head is swapped.
 
@@ -39,7 +40,8 @@ import torch.nn.functional as F
 from common.class_renames import class_names
 from ultralytics import YOLO
 
-from .pipeline_types import FishDetection, Prediction
+from .class_scores import no_animal_row, ranked
+from .pipeline_types import FishDetection
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +138,8 @@ class ClassifierV2Pipeline:
         # system speaks binomials with spaces, and classes renamed on 2026-11-22 take their
         # current names even from an older bundle still on the volume. Convert once.
         self.class_names: list[str] = class_names(class_names_raw)
+        # A model trained on the verified dataset has a no_animal class: a box it wins is dropped.
+        self.no_animal: int | None = no_animal_row(class_names_raw)
         num_classes = len(self.class_names)
         if num_classes < 2:
             raise RuntimeError(f"v2 classes.json has {num_classes} entries; expected >=2")
@@ -196,11 +200,12 @@ class ClassifierV2Pipeline:
             log.info("v2: torch.compile disabled (CLASSIFIER_V2_COMPILE=0)")
 
         log.info(
-            "v2: classifier ready — arch=%s, classes=%d, img_size=%d, dtype=%s",
+            "v2: classifier ready — arch=%s, classes=%d, img_size=%d, dtype=%s, no_animal=%s",
             backbone,
             num_classes,
             self.img_size,
             self.autocast_dtype or "fp32",
+            "none" if self.no_animal is None else f"row {self.no_animal} (its boxes are dropped)",
         )
 
     def _autocast_dtype(self) -> torch.dtype | None:
@@ -271,30 +276,16 @@ class ClassifierV2Pipeline:
         topk_n = int(self.cfg.classifier_topk)
         min_acc = float(self.cfg.min_accept_accuracy)
         out: list[FishDetection] = []
+        dropped = 0
         for i, box in enumerate(boxes):
             x1, y1, x2, y2, conf, _cls = box.tolist()
-            topk: list[Prediction] = []
             p = probs_by_idx.get(i)
-            if p is not None:
-                # argsort descending; take top-k that clear min_accept_accuracy
-                order = np.argpartition(-p, min(topk_n, len(p) - 1))[:topk_n]
-                order = order[np.argsort(-p[order])]
-                for k in order:
-                    acc = float(p[k])
-                    if acc < min_acc:
-                        continue
-                    name = self.class_names[int(k)]
-                    topk.append(
-                        Prediction(
-                            name=name,
-                            # No external taxonomy ID source for v2 yet — use the
-                            # binomial as the species_id so detection_events
-                            # group/filter queries (best_species_id) stay sane.
-                            # Pre-cutover Fishial events keep their UUIDs.
-                            species_id=name,
-                            accuracy=acc,
-                        )
-                    )
+            # No external taxonomy ID source for v2 yet: a prediction's species_id is its binomial,
+            # so detection_events group/filter queries (best_species_id) stay sane.
+            topk = [] if p is None else ranked(p, self.class_names, topk_n, min_acc, self.no_animal)
+            if topk is None:  # the classifier says no animal: not a fish
+                dropped += 1
+                continue
             out.append(
                 FishDetection(
                     bbox=(int(x1), int(y1), int(x2), int(y2)),
@@ -304,9 +295,10 @@ class ClassifierV2Pipeline:
             )
 
         log.debug(
-            "v2 frame: %d fish (%d classified, det=%.1fms, cls=%.1fms)",
+            "v2 frame: %d fish (%d classified, %d dropped as no animal, det=%.1fms, cls=%.1fms)",
             len(out),
             len(keep_idx),
+            dropped,
             (t1 - t0) * 1000,
             (t2 - t1) * 1000,
         )

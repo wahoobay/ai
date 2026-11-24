@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from common.class_renames import NO_ANIMAL
+
 log = logging.getLogger("wahoobay.dashboard.review_catalogue")
 
 _NO_STAGE = {"", "unknown", "none", "n/a"}
@@ -249,6 +251,8 @@ def load_catalogue(paths: CataloguePaths) -> Catalogue:
         e.family = e.family or rec.get("family") or None
 
     for cls in _read_json(paths.classes_json, []):
+        if cls == NO_ANIMAL:  # a class of the model, not a fish to label
+            continue
         name = accepted_by_raw.get(normalize_raw(cls), normalize_raw(cls))
         targets = [e for e in entries.values() if e.name == name] or [entry_for(cls, None)]
         for e in targets:

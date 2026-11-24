@@ -3,7 +3,7 @@
 
     MODELS_URL      s3://platform-<location>-models/ (AWS) | file:///data/models | https://host/prefix
     MODELS_DIR      where the worker reads them (default /data/models)
-    MODEL_VERSIONS  "detector_v26=n3,classifier_v0_10_2=v0.10.2,classifier_v2=dgx-2026-10-24-r1"
+    MODEL_VERSIONS  "detector_v26=n3,classifier_v0_10_2=v0.10.2,classifier_v2=aws-2026-11-23"
 
 Layout, as published by the infra repository's scripts/publish_models.py:
 <MODELS_URL>/<model>/<version>/<files> plus a SHA256SUMS file. A model directory
@@ -37,7 +37,9 @@ except ImportError:  # run from the repository rather than an image
 DEFAULT_VERSIONS = {
     "detector_v26": "n3",
     "classifier_v0_10_2": "v0.10.2",
-    "classifier_v2": "dgx-2026-10-24-r1",
+    # 2026-11-23: r1 fine-tuned with the reviewers' verified labels on the AWS training machine (job
+    # ai-wahoobay-staging-clf-20261123T225038Z); it has a no_animal class. Revert: dgx-2026-10-24-r1.
+    "classifier_v2": "aws-2026-11-23",
 }
 
 

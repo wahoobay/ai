@@ -23,6 +23,22 @@ the same validation set) and `inputs.json` in S3. Start it from infra:
 `python -m scripts.train_classifier staging --wait` (README, "The training machine"). Nothing a
 run produces goes live by itself.
 
+Shipping a run (first done 2026-11-23: `classifier_v2/aws-2026-11-23`, from job
+`ai-wahoobay-staging-clf-20261123T225038Z`):
+
+1. Add the run to infra's `scripts/publish_models.py` `MODELS` as a `"run"` source and publish
+   that bundle alone: `python -m scripts.publish_models --bucket platform-wahoobay-models
+   --ai-repo ../ai --only classifier_v2 --version <version>`. The files are checked against the
+   run's SHA256SUMS and summed again for the bundle.
+2. Pin it: `DEFAULT_VERSIONS["classifier_v2"]` in `scripts/fetch_models.py` (or `MODEL_VERSIONS`).
+   The merge to `main` restarts the worker, which fetches the new bundle; the dashboard fetches its
+   `classes.json` for the review catalogue at start.
+3. Revert: pin the previous version (`dgx-2026-10-24-r1`, still in S3) the same way.
+
+A model with `no_animal` needs nothing else: the worker drops a box whose best answer is
+`no_animal` (`services/worker/app/class_scores.py`; no detection, sighting, saved frame or box on
+the live picture), and the review catalogue never offers `no_animal` as a fish.
+
 The sections below describe the original DGX pipeline that built the base crops.
 
 ---

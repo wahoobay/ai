@@ -98,10 +98,12 @@ def test_a_failed_fetch_of_a_new_version_keeps_the_old_one(tmp_path):
     assert (dest / "classifier_v2" / ".version").read_text() == "1"
 
 
-def test_the_classifier_default_is_the_renamed_bundle():
+def test_the_classifier_default_is_the_first_fine_tuned_bundle():
+    """2026-11-23: the live weights fine-tuned on the AWS training machine with the reviewers'
+    verified labels (job ai-wahoobay-staging-clf-20261123T225038Z); revert = dgx-2026-10-24-r1."""
     from fetch_models import versions
 
-    assert versions("")["classifier_v2"] == "dgx-2026-10-24-r1"
+    assert versions("")["classifier_v2"] == "aws-2026-11-23"
 
 
 def test_a_swap_leaves_no_old_directory_behind(tmp_path):
