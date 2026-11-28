@@ -107,8 +107,23 @@ class FrameOut:
     had_fish: bool
 
 
+class _Shutdown:
+    """The sentinel's type. The queue to the subprocess pickles every item, and a bare object()
+    arrived there as a copy, so `item is SHUTDOWN` failed and every stop logged an unhandled
+    "unexpected queue item" error. Pickled by reference instead: the subprocess unpickles the
+    name SHUTDOWN from this module and gets its own module's one instance."""
+
+    __slots__ = ()
+
+    def __reduce__(self) -> str:
+        return "SHUTDOWN"
+
+    def __repr__(self) -> str:
+        return "SHUTDOWN"
+
+
 # Sentinel sent by the parent to ask the subprocess to shut down cleanly.
-SHUTDOWN = object()
+SHUTDOWN = _Shutdown()
 
 
 def run_inference_worker(
